@@ -10,6 +10,15 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `daemon stop` and `daemon restart` kill only when `/status` on the configured
+  port reports the PID in `bridge.pid`. A stale file left by a crash or reboot is
+  deleted and nothing is killed, so a recycled PID no longer takes down an
+  unrelated process. `--force` keeps the old unconditional kill for a hung daemon.
+- `/status` reports the daemon's `pid`; `status` and `daemon status` print it
+  from there instead of reading `bridge.pid`.
+- Windows: the daemon no longer sets `SO_REUSEADDR`, so a second daemon on a busy
+  port fails with `WinError 10048` and exits 1 instead of binding silently and
+  overwriting `bridge.pid`.
 
 ## 2.5.0
 

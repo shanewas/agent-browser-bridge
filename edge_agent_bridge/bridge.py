@@ -350,6 +350,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {
                 "bridge_running": True,
                 "daemon_version": __version__,
+                "pid": os.getpid(),
                 "extension_version": ext_ver,
                 "extension_outdated": ext_outdated,
                 "extension_connected": ext_connected,
@@ -818,7 +819,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
 class BridgeServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # Windows SO_REUSEADDR lets a second daemon bind a port the first already listens on.
+    allow_reuse_address = sys.platform != "win32"
 
     def __init__(self, server_address, RequestHandlerClass, state: BridgeState):
         self.state = state

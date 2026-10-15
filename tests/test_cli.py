@@ -124,6 +124,32 @@ def test_cli_status_shows_real_pid(daemon, fake_ext):
     assert re.search(r"\(PID \d+\)", out)
 
 
+def test_cli_daemon_stop_leaves_stale_pid_process_alive(tmp_path):
+    # A crash leaves bridge.pid behind and the OS recycles the PID; stop killed whatever owned it (#5).
+    import subprocess
+    import sys
+    bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(free_port())}
+        code, out, err = run_cli(["daemon", "stop"], env=env)
+        assert code == 0, err
+        assert "stale" in out
+        assert not (tmp_path / "bridge.pid").exists()
+        assert bystander.poll() is None
+    finally:
+        bystander.kill()
+        bystander.wait(timeout=5)
+
+
+def test_cli_daemon_stop_kills_the_daemon_that_owns_the_pid(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["daemon", "stop"], env=env)
+    assert code == 0, err
+    assert "Stopped daemon" in out
+    daemon.proc.wait(timeout=10)
+
+
 def test_cli_status_session_line(daemon):
     def handler(action, params):
         tid = params.get("tabId", 7)

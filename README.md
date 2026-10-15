@@ -171,6 +171,7 @@ edge-bridge click e5 --session <uuid>   # session pin; --tab is a one-shot overr
 edge-bridge click e5 --no-fallback      # disable the ref→text→scan→coords ladder
 edge-bridge doctor                      # diagnose daemon, extension, token, pairing
 edge-bridge logs --tail 50              # daemon log (--follow streams)
+edge-bridge daemon stop                 # only if /status confirms bridge.pid; --force for a hung daemon
 ```
 
 `--json` prints the raw result as a single line and sets the exit code: 0 on success, 1 when the

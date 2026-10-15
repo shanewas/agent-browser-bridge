@@ -36,6 +36,13 @@ def _handle_daemon_cmd(args, port: int) -> int:
         if pid_p.exists():
             try:
                 pid = int(pid_p.read_text(encoding="utf-8").strip())
+                if not getattr(args, "force", False):
+                    with Edge(port=port, auto_start=False) as client:
+                        st = client.status()
+                    # A daemon older than /status "pid" keeps the file's PID: an answer on the port proves it runs.
+                    if (st.get("pid", pid) if st.get("bridge_running") else None) != pid:
+                        print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
+                        return 0
                 if sys.platform == "win32":
                     subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
@@ -66,15 +73,15 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     elif sub == "restart":
-        _handle_daemon_cmd(argparse.Namespace(daemon_action="stop"), port)
+        _handle_daemon_cmd(argparse.Namespace(daemon_action="stop", force=getattr(args, "force", False)), port)
         time.sleep(0.5)
         return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=False), port)
 
     elif sub == "status":
         with Edge(port=port, auto_start=False) as client:
-            st, pid = _status_data(client, port)
+            st = client.status()
         if st.get("bridge_running"):
-            print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
+            print(f"Daemon: running on 127.0.0.1:{port} (PID {st.get('pid', '?')})")
             print(f"Extension: {st.get('extension_version', 'none')} ({'connected' if st.get('websocket_active') else 'disconnected'})")
             return 0
         else:
@@ -82,19 +89,6 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     return 3
-
-
-def _status_data(edge: Edge, port: int):
-    """Fetch /status plus the pid-file pid. Both status verbs share this."""
-    res = edge.status()
-    pid = "?"
-    try:
-        pid_file = config.pid_path()
-        if pid_file.exists():
-            pid = pid_file.read_text(encoding="utf-8").strip()
-    except Exception:
-        pass
-    return res, pid
 
 
 def _is_elevated() -> bool:
@@ -484,6 +478,8 @@ def main(argv=None) -> int:
     p_daemon = add_cmd("daemon", help="Manage daemon process")
     p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status"])
     p_daemon.add_argument("--require-pairing", action="store_true", help="Require pairing token")
+    p_daemon.add_argument("--force", action="store_true",
+                          help="stop/restart: kill the PID in bridge.pid even if /status does not confirm it")
 
     # repl
     add_cmd("repl", help="Interactive REPL session")
@@ -757,7 +753,7 @@ def main(argv=None) -> int:
 
     # Route status
     if args.cmd == "status":
-        res, pid = _status_data(edge, port)
+        res = edge.status()
         sst = None
         if res.get("success") and opt_session:
             sst = edge._send_once("session_status", {})
@@ -767,7 +763,7 @@ def main(argv=None) -> int:
         else:
             if res.get("success"):
                 print(f"Edge Agent Bridge v{res.get('daemon_version') or __version__}")
-                print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
+                print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
                 if sst is not None:
                     if sst.get("success"):
