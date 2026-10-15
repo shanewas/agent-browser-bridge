@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import sysconfig
@@ -28,35 +29,76 @@ if sys.platform == "win32":
         pass
 
 
+def _probe_status(port: int) -> dict:
+    """/status with a short timeout and no auto-start, so stop never blocks on a hung daemon."""
+    with Edge(port=port, timeout=2, auto_start=False) as client:
+        return client.status()
+
+
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        # os.kill(pid, 0) terminates the process on Windows.
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace").stdout
+        return str(pid) in out.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _port_listening(port: int) -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
 def _handle_daemon_cmd(args, port: int) -> int:
     sub = args.daemon_action
     pid_p = config.pid_path()
 
     if sub == "stop":
-        if pid_p.exists():
-            try:
-                pid = int(pid_p.read_text(encoding="utf-8").strip())
-                if not getattr(args, "force", False):
-                    with Edge(port=port, auto_start=False) as client:
-                        st = client.status()
-                    # A daemon older than /status "pid" keeps the file's PID: an answer on the port proves it runs.
-                    if (st.get("pid", pid) if st.get("bridge_running") else None) != pid:
-                        print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
-                        return 0
-                if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    os.kill(pid, signal.SIGTERM)
-                print(f"Stopped daemon (PID {pid})")
-            except Exception as e:
-                print(f"Error stopping daemon: {e}")
-            finally:
-                try:
-                    pid_p.unlink(missing_ok=True)
-                except Exception:
-                    pass
-        else:
+        if not pid_p.exists():
             print("Daemon PID file not found")
+            return 0
+        try:
+            pid = int(pid_p.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError) as e:
+            print(f"Error stopping daemon: {e}")
+            pid_p.unlink(missing_ok=True)
+            return 0
+        if not getattr(args, "force", False):
+            st = _probe_status(port)
+            if st.get("bridge_running") and "pid" not in st:
+                # An answer proves a bridge runs on the port, not that bridge.pid names it.
+                print(f"The daemon on 127.0.0.1:{port} predates pid reporting, so PID {pid} cannot be confirmed. "
+                      "Run: edge-bridge daemon stop --force", file=sys.stderr)
+                return 1
+            if not st.get("bridge_running") and _pid_alive(pid) and _port_listening(port):
+                print(f"PID {pid} is alive and 127.0.0.1:{port} accepts connections but does not answer /status. "
+                      "If that is a hung daemon, run: edge-bridge daemon stop --force", file=sys.stderr)
+                return 1
+            if st.get("pid") != pid:
+                pid_p.unlink(missing_ok=True)
+                print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
+                return 0
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            print(f"Stopped daemon (PID {pid})")
+        except Exception as e:
+            print(f"Error stopping daemon: {e}")
+        finally:
+            try:
+                pid_p.unlink(missing_ok=True)
+            except Exception:
+                pass
         return 0
 
     elif sub == "start":
@@ -73,8 +115,15 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     elif sub == "restart":
-        _handle_daemon_cmd(argparse.Namespace(daemon_action="stop", force=getattr(args, "force", False)), port)
-        time.sleep(0.5)
+        rc = _handle_daemon_cmd(argparse.Namespace(daemon_action="stop", force=getattr(args, "force", False)), port)
+        if rc:
+            return rc
+        deadline = time.time() + 5
+        while (st := _probe_status(port)).get("bridge_running") and time.time() < deadline:
+            time.sleep(0.2)
+        if st.get("bridge_running"):
+            print(f"Daemon PID {st.get('pid', '?')} still answers on 127.0.0.1:{port}; not restarted", file=sys.stderr)
+            return 1
         return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=False), port)
 
     elif sub == "status":

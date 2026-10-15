@@ -1,7 +1,12 @@
 """Tests for edge_agent_bridge.cli."""
 import io
 import json
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
+import pytest
 from edge_agent_bridge import cli, config
 from edge_agent_bridge.client import Edge
 from tests.fake_extension import FakeExtension
@@ -124,22 +129,33 @@ def test_cli_status_shows_real_pid(daemon, fake_ext):
     assert re.search(r"\(PID \d+\)", out)
 
 
-def test_cli_daemon_stop_leaves_stale_pid_process_alive(tmp_path):
+def test_cli_daemon_status_prints_pid_from_status_not_file(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    pid = daemon.status()["pid"]
+    (daemon.home / "bridge.pid").write_text("1", encoding="utf-8")
+    code, out, err = run_cli(["daemon", "status"], env=env)
+    assert code == 0, err
+    assert f"(PID {pid})" in out
+
+
+@pytest.fixture
+def bystander():
+    """A live process that is not the daemon, standing in for a recycled PID or a hung daemon."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    yield proc
+    proc.kill()
+    proc.wait(timeout=5)
+
+
+def test_cli_daemon_stop_leaves_stale_pid_process_alive(tmp_path, bystander):
     # A crash leaves bridge.pid behind and the OS recycles the PID; stop killed whatever owned it (#5).
-    import subprocess
-    import sys
-    bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    try:
-        (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
-        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(free_port())}
-        code, out, err = run_cli(["daemon", "stop"], env=env)
-        assert code == 0, err
-        assert "stale" in out
-        assert not (tmp_path / "bridge.pid").exists()
-        assert bystander.poll() is None
-    finally:
-        bystander.kill()
-        bystander.wait(timeout=5)
+    (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+    env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(free_port())}
+    code, out, err = run_cli(["daemon", "stop"], env=env)
+    assert code == 0, err
+    assert "stale" in out
+    assert not (tmp_path / "bridge.pid").exists()
+    assert bystander.poll() is None
 
 
 def test_cli_daemon_stop_kills_the_daemon_that_owns_the_pid(daemon):
@@ -148,6 +164,69 @@ def test_cli_daemon_stop_kills_the_daemon_that_owns_the_pid(daemon):
     assert code == 0, err
     assert "Stopped daemon" in out
     daemon.proc.wait(timeout=10)
+
+
+def test_cli_daemon_stop_refuses_daemon_without_status_pid(tmp_path, bystander):
+    # A pre-fix daemon answers /status without "pid"; that proves a bridge runs, not that bridge.pid names it.
+    import http.server
+    import threading
+
+    class OldStatus(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"bridge_running": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), OldStatus)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(srv.server_address[1])}
+        code, out, err = run_cli(["daemon", "stop"], env=env)
+        assert code == 1
+        assert "--force" in err
+        assert (tmp_path / "bridge.pid").exists()
+        assert bystander.poll() is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_cli_daemon_stop_hung_daemon_needs_force(tmp_path, bystander):
+    # Alive PID plus a port that accepts but never answers: plain stop keeps bridge.pid so --force can still kill.
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    try:
+        (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(listener.getsockname()[1])}
+        started = time.time()
+        code, out, err = run_cli(["daemon", "stop"], env=env)
+        assert code == 1
+        assert "--force" in err
+        assert time.time() - started < 15
+        assert (tmp_path / "bridge.pid").exists()
+        assert bystander.poll() is None
+        code, out, err = run_cli(["daemon", "stop", "--force"], env=env)
+        assert code == 0, err
+        bystander.wait(timeout=10)
+        assert not (tmp_path / "bridge.pid").exists()
+    finally:
+        listener.close()
+
+
+def test_cli_daemon_restart_fails_while_another_daemon_answers(daemon, bystander):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    (daemon.home / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+    code, out, err = run_cli(["daemon", "restart"], env=env)
+    assert code == 1
+    assert f"PID {daemon.status()['pid']} still answers" in err
+    assert bystander.poll() is None
 
 
 def test_cli_status_session_line(daemon):
