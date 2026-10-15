@@ -212,7 +212,8 @@ class Edge:
                 self.tab_id = None
             if data.get("code") == "tab_not_found":
                 self.tab_id = None
-            tab_info = data.get("tab")
+            # A failure can name the tab it refused; pinning to that tab would strand every later call.
+            tab_info = data.get("tab") if data.get("success") else None
             if isinstance(tab_info, dict) and tab_info.get("id") is not None:
                 repin = action in REPIN_ACTIONS or "tabId" in (params or {})
                 if repin or self.tab_id is None:
@@ -222,7 +223,7 @@ class Edge:
         # explicit tabId on a non-repin action) don't count: the server pin
         # stays where it was, so the remembered tab must too.
         if (params or {}).get("tabId") is None or action in REPIN_ACTIONS:
-            tab_seen = data.get("tab")
+            tab_seen = data.get("tab") if data.get("success") else None
             if isinstance(tab_seen, dict) and tab_seen.get("id") is not None:
                 try:
                     self._last_tab_id = int(tab_seen["id"])

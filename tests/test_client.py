@@ -118,6 +118,30 @@ def test_pinning_and_pin_drop(daemon, monkeypatch):
     ext.close()
 
 
+def test_failed_result_does_not_pin(daemon, monkeypatch):
+    # A refusal names the tab it refused; pinning to it would send every later call there.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append(dict(params))
+        if action == "snapshot":
+            return {"success": False, "code": "tab_not_scriptable", "error": "Tab 9 shows edge://newtab/",
+                    "tab": {"id": 9, "title": "New tab", "url": "edge://newtab/"}}
+        return {"success": True, "tab": {"id": 7, "title": "T", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, pin=True, auto_start=False)
+    assert edge.send("snapshot")["code"] == "tab_not_scriptable"
+    assert edge.tab_id is None and edge._last_tab_id is None
+    edge.send("tab")
+    assert "tabId" not in seen[-1]
+    assert edge.tab_id == 7
+    edge.close()
+    ext.close()
+
+
 def test_ensure_bridge_running_waits_for_websocket_active(daemon):
     # Daemon is running, but no extension connected yet
     # ensure_bridge_running with wait_for_extension=True should wait until extension connects

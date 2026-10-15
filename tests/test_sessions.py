@@ -147,6 +147,24 @@ def test_batch_stops_on_error_with_shape(daemon):
     ext.close()
 
 
+def test_batch_rejects_nested_batch_step(daemon):
+    # The extension runs a nested batch's steps without its per-tab checks, so the daemon refuses it.
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [{"action": "batch", "steps": [{"action": "eval", "code": "1"}]}]
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=10)
+    assert code == 200 and body["success"] is False and body["code"] == "bad_params", body
+    assert body["stoppedAt"] == "batch"
+    assert "batch" not in seen
+    ext.close()
+
+
 def test_named_session_start_status(daemon):
     import re
     code, start = daemon.exec("session_start", {"name": "agent-a"})

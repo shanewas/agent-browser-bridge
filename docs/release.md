@@ -76,7 +76,7 @@ Everything the workflow does also runs by hand:
    version, a daemon newer than the installed extension answers new actions with
    `extension_outdated`.
 10. **Smoke.** On each OS you can reach: `pip install --upgrade edge-agent-bridge`,
-    `edge-bridge daemon restart`, `edge-bridge status`, `edge-bridge --json snapshot` on any page.
+    `edge-bridge daemon restart`, `edge-bridge status`, `edge-bridge --json snapshot` with an http(s) page focused.
 
 Listing text, screenshots and the product name still have to be edited in Partner Center. The API
 replaces the package and nothing else.

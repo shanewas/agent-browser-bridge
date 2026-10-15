@@ -23,6 +23,12 @@ function fail(code, error, extra = {}) {
   return { success: false, code, error, ...extra };
 }
 
+const UNSCRIPTABLE_PREFIXES = ["edge://", "chrome://", "chrome-extension://", "extension://", "view-source:"];
+
+function isScriptable(url) {
+  return Boolean(url) && !UNSCRIPTABLE_PREFIXES.some(p => url.startsWith(p));
+}
+
 export async function getTargetTab(tabId) {
   if (tabId !== undefined && tabId !== null && tabId !== "") {
     try {
@@ -31,18 +37,9 @@ export async function getTargetTab(tabId) {
       return null;
     }
   }
-  const isScriptable = (t) => t && t.url && !t.url.startsWith("edge://") && !t.url.startsWith("chrome://") && !t.url.includes("microsoftedge.microsoft.com/addons");
-
+  // Never fall back to another window's tab: that fallback once navigated a live call away.
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (isScriptable(tab)) return tab;
-
-  const activeTabs = await chrome.tabs.query({ active: true });
-  const scriptableActive = activeTabs.find(isScriptable);
-  if (scriptableActive) return scriptableActive;
-
-  const allTabs = await chrome.tabs.query({});
-  const scriptableAny = allTabs.find(isScriptable);
-  return scriptableAny || tab || activeTabs[0] || null;
+  return tab || null;
 }
 
 function tabInfo(tab) {
@@ -855,6 +852,8 @@ export async function execute(cmd) {
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
 const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab"]);
 const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete", "group_list", "group_move", "group_ungroup"]);
+// These never inject into the page (wait polls until a page it can read arrives), so any URL is fine.
+const TAB_LEVEL = new Set(["nav", "back", "forward", "reload", "tab", "get_active_tab", "wait", "wait_for", "dialog", "console"]);
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};
@@ -864,6 +863,10 @@ export async function dispatch(cmd) {
     return (p.tabId !== undefined && p.tabId !== null && p.tabId !== "")
       ? fail("tab_not_found", `Tab ${p.tabId} no longer exists`)
       : fail("no_active_tab", "No active tab");
+  }
+  const url = tab.pendingUrl || tab.url;
+  if (!TAB_LEVEL.has(cmd.action) && !isScriptable(url)) {
+    return fail("tab_not_scriptable", `Tab ${tab.id} shows ${url || "no page yet"}, which extensions can't script; switch to the tab you mean or navigate this one`, { tab: tabInfo(tab) });
   }
   cmd.params = { ...p, tabId: tab.id };
   const open = getOpenDialog(tab.id);
