@@ -83,7 +83,9 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `extension_offline` | Edge is closed or the extension is off | tell the user to open Edge and check the popup |
 | `extension_outdated` | the extension predates the daemon | tell the user to update it |
 | `dialog_open` | a native dialog is waiting | `edge_dialog` accept or dismiss |
-| `timeout` | the wait condition never held | report what `inflight` or `url` shows |
+| `timeout` | the wait condition never held, or the browser didn't answer in time | after `edge_wait`, report what `inflight` or `url` shows; after anything else, check the page before retrying, because the action may have run |
+| `daemon_unreachable` | nothing answers on the daemon port | `edge-bridge daemon start`, then retry |
+| `connection_lost` | the daemon got the command, then the connection dropped before an answer came back (daemon restart or crash) | check the page before retrying, because the action may have run; run `edge-bridge status` if it keeps happening |
 | `tab_busy` | another call holds the tab lock | backoff 250ms·2ⁿ+jitter ≤4×, then surface |
 | `tab_closed` | session pin points at a closed tab | `switch` or `new` to re-pin |
 | `stale_ref` | ref/frame no longer valid | ladder runs automatically; on `exhausted_fallback`, snapshot fresh |
@@ -160,4 +162,4 @@ Focus is asserted before every write (≤3 tries) and rechecked after the 1st ch
 
 Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the best match (exact, then case-insensitive, then substring text match), with at most 2 extra scans per call. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
 
-`tab_busy` means another writer holds your tab's lock (10s acquire). Back off 250ms·2ⁿ with jitter, ≤4 retries, then surface or use another tab.
+`tab_busy` means another writer holds your tab's lock (the daemon waits up to 10s for it, never past the call's own timeout). Back off 250ms·2ⁿ with jitter, ≤4 retries, then surface or use another tab.

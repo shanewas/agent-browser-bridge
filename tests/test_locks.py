@@ -91,3 +91,30 @@ def test_tab_busy_when_lock_held(tmp_path):
         ext.close()
     finally:
         handle.stop()
+
+
+def test_lock_wait_counts_against_the_call_timeout(patient_daemon):
+    # The call's timeout started only once the tab lock was free, so a call queued behind another
+    # could run long after its caller had stopped waiting.
+    release = threading.Event()
+
+    def handler(action, params):
+        if params.get("target") == "block":
+            assert release.wait(timeout=15)
+        return {"success": True}
+
+    ext = FakeExtension(patient_daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    t = threading.Thread(target=lambda: patient_daemon.exec("click", {"target": "block", "tabId": 5}, timeout=15))
+    t.start()
+    time.sleep(0.5)
+    start = time.monotonic()
+    try:
+        code, body = patient_daemon.exec("click", {"target": "b", "tabId": 5}, timeout=1)
+    finally:
+        elapsed = time.monotonic() - start
+        release.set()
+        t.join(timeout=15)
+        ext.close()
+    assert code == 200 and body["code"] == "tab_busy", body
+    assert elapsed < 3, elapsed

@@ -260,7 +260,7 @@ def _strip_session_token(obj) -> None:
 
 class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    timeout = 30
+    timeout = config.http_idle_seconds()
 
     def log_message(self, format, *args):
         logger.info("%s %s", self.address_string(), format % args)
@@ -579,11 +579,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if not isinstance(params, dict):
                 self._respond(400, {"success": False, "code": "bad_body", "error": "params must be an object"})
                 return
-            try:
-                timeout = float(req.get("timeout", 20))
-            except (TypeError, ValueError):
-                timeout = 20.0
-            timeout = max(1.0, min(timeout, 120.0))
+            timeout = config.call_timeout(req.get("timeout", 20))
             session_token = req.get("sessionToken")
 
             if action == "session_start":
@@ -655,7 +651,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
             _strip_session_token(params)
             forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped)
-            res, status_code = self._dispatch_guarded(state, action, params, timeout, tab_scoped, forward_tab)
+            res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
+                                                      tab_scoped, forward_tab)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
             if not self._respond(status_code, res):
                 self._best_effort_cancel(state, getattr(self, "_last_cmd_id", None))
@@ -684,28 +681,28 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return int(pin)
         return None
 
-    def _dispatch_guarded(self, state, action, params, timeout, tab_scoped, forward_tab):
+    def _dispatch_guarded(self, state, action, params, deadline, tab_scoped, forward_tab):
         tab_lock = None
         if forward_tab is not None:
             with state.lock:
                 tab_lock = state.tab_lock_locked(forward_tab)
-            if not tab_lock.acquire(timeout=state.lock_timeout_sec):
+            # Waiting for the lock counts against the deadline, so a queued call can't run after its caller gave up.
+            if not tab_lock.acquire(timeout=max(0.0, min(state.lock_timeout_sec, deadline - time.time()))):
                 return ({"success": False, "code": "tab_busy", "tabId": forward_tab,
                          "error": f"Tab {forward_tab} is busy; another call holds its lock"}, 200)
         try:
-            return self._dispatch_once(state, action, params, timeout, tab_scoped)
+            return self._dispatch_once(state, action, params, deadline, tab_scoped)
         finally:
             if tab_lock is not None:
                 tab_lock.release()
 
-    def _dispatch_once(self, state, action, params, timeout, tab_scoped):
+    def _dispatch_once(self, state, action, params, deadline, tab_scoped):
         fwd_params = dict(params)
         if tab_scoped:
             fwd_params["deadlineMs"] = int((time.time() + DISPATCH_BUDGET_SEC) * 1000)
         cmd_id = str(uuid.uuid4())
         self._last_cmd_id = cmd_id
         event = threading.Event()
-        deadline = time.time() + timeout
         cmd_payload = {"id": cmd_id, "action": action, "params": fwd_params}
         with state.lock:
             live = bool(state.ext and not state.ext.closed and state.ext_accepted)
@@ -773,16 +770,27 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         _strip_session_token(params)
         results = []
         top_tab = params.get("tabId")
-        per_step_timeout = max(1.0, timeout / max(1, len(steps)))
-        for step in steps:
+        deadline = time.time() + timeout
+        for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
             s_action = step.get("action")
+            pause = 0.0
             if s_action in ("sleep", "wait_ms"):
                 try:
-                    time.sleep(max(0.0, float(step.get("ms", 100)) / 1000.0))
+                    pause = max(0.0, float(step.get("ms", 100)) / 1000.0)
                 except (TypeError, ValueError):
                     pass
+            # The caller stops listening shortly after the deadline, so no step may start or sleep past it.
+            if time.time() + pause >= deadline:
+                err = (f"Step {i + 1} ({s_action}) doesn't fit in what is left of the batch's {timeout:g} s, "
+                       "so it and the steps after it did not run")
+                results.append({"success": False, "code": "timeout", "error": err})
+                self._respond(200, {"success": False, "code": "timeout", "error": err,
+                                    "stoppedAt": s_action, "results": results})
+                return
+            if s_action in ("sleep", "wait_ms"):
+                time.sleep(pause)
                 results.append({"action": "sleep", "success": True, "ms": step.get("ms", 100)})
                 continue
             if s_action == "batch":
@@ -797,7 +805,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 s_params["tabId"] = top_tab
             s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS
             forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped)
-            res, _ = self._dispatch_guarded(state, s_action, s_params, per_step_timeout, s_tab_scoped, forward_tab)
+            res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
             results.append(res)
             if res and res.get("success") is False and step.get("stopOnError", True) is not False:

@@ -165,6 +165,27 @@ def test_batch_rejects_nested_batch_step(daemon):
     ext.close()
 
 
+def test_batch_stops_when_its_time_runs_out(daemon):
+    # A batch had no overall deadline: its sleeps ran outside it, and later steps were still
+    # dispatched after the caller had stopped waiting.
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [{"action": "sleep", "ms": 3000}, {"action": "click", "target": "Save"}]
+    start = time.monotonic()
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=1)
+    elapsed = time.monotonic() - start
+    ext.close()
+    assert code == 200 and body["success"] is False and body["code"] == "timeout", body
+    assert body["stoppedAt"] == "sleep" and "did not run" in body["error"], body
+    assert "click" not in seen and elapsed < 2, (seen, elapsed)
+
+
 def test_named_session_start_status(daemon):
     import re
     code, start = daemon.exec("session_start", {"name": "agent-a"})

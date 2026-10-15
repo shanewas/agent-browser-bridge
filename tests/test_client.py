@@ -367,3 +367,145 @@ def test_remint_falls_back_to_active_tab_when_remembered_tab_gone(daemon, monkey
     edge.close()
     ext.close()
     ext2.close()
+
+
+def test_slow_wait_runs_once_and_returns_its_answer(patient_daemon, monkeypatch):
+    # The call timeout ignored the wait's own timeout, so the daemon gave up on a wait the
+    # extension was still running and the client sent the wait again.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(patient_daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        if action == "wait":
+            time.sleep(2.5)
+        return {"success": True, "waited": 2500, "tab": {"id": 1, "title": "T", "url": "http://t"}}
+
+    ext = FakeExtension(patient_daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=patient_daemon.port, auto_start=False, pin=False, timeout=2)
+    r = edge.send("wait", {"text": "Done", "timeout": 3000})
+    assert r.get("success") is True and r.get("waited") == 2500, r
+    assert seen.count("wait") == 1, seen
+    edge.close()
+    ext.close()
+
+
+@pytest.mark.parametrize("error, code", [
+    (TimeoutError("timed out"), "timeout"),
+    (ConnectionResetError(10054, "connection reset"), "connection_lost"),
+    (http.client.RemoteDisconnected("closed without response"), "connection_lost"),
+])
+def test_command_the_daemon_received_is_never_resent(daemon, monkeypatch, error, code):
+    # The daemon may already have run a command it received, so sending it again could click twice.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        return {"success": True}
+
+    def no_answer(self):
+        raise error
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    edge = Edge(port=daemon.port, auto_start=False, pin=False)
+    assert edge.send("ping").get("success") is True  # the click below goes out on a pooled connection
+    with monkeypatch.context() as m:
+        m.setattr(http.client.HTTPConnection, "getresponse", no_answer)
+        r = edge.send("click", {"target": "Save"})
+    deadline = time.time() + 5
+    while "click" not in seen and time.time() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.5)  # the client returns before the daemon dispatches; a resent copy would land right behind
+    assert r.get("success") is False and r.get("code") == code, r
+    assert "may have run" in r.get("error", ""), r
+    assert seen.count("click") == 1, seen
+    edge.close()
+    ext.close()
+
+
+def test_request_that_never_left_the_client_is_retried(daemon, fake_ext, monkeypatch):
+    # Ctrl+C during a call leaves the pooled connection unable to send. Nothing reached the daemon,
+    # so the next call has to reconnect instead of reporting the daemon unreachable.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    edge = Edge(port=daemon.port, auto_start=False, pin=False)
+    assert edge.send("ping").get("success") is True
+    edge._conn.putrequest("GET", "/status")
+    r = edge.send("ping")
+    assert r.get("success") is True, r
+    edge.close()
+
+
+def test_connection_the_daemon_closed_while_idle_is_replaced(tmp_path):
+    # A request written to a socket the daemon already closed is lost with no way to tell whether
+    # it ran, so the client has to notice the close and reconnect before sending.
+    handle = DaemonHandle(free_port(), tmp_path).start(extra_env={"EDGE_BRIDGE_HTTP_IDLE": "0.5"})
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        return {"success": True}
+
+    ext = FakeExtension(handle.port, handler=handler).connect().run()
+    try:
+        time.sleep(0.3)
+        with Edge(port=handle.port, auto_start=False, pin=False) as edge:
+            assert edge.send("ping").get("success") is True
+            time.sleep(1.5)  # past the daemon's 0.5 s idle limit
+            r = edge.send("click", {"target": "Save"})
+        assert r.get("success") is True, r
+        assert seen.count("click") == 1, seen
+    finally:
+        ext.close()
+        handle.stop()
+
+
+def test_odd_timeouts_are_read_the_way_the_daemon_reads_them(daemon, fake_ext, monkeypatch):
+    # The daemon reads an unusable timeout as 20 s and clamps to 1..120 s; the client used the raw
+    # value and raised instead of answering.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    with Edge(port=daemon.port, auto_start=False, pin=False, timeout=None) as edge:
+        assert edge.send("ping").get("success") is True
+        assert edge.send("ping", timeout=-20).get("success") is True
+        assert edge.send("ping", {"timeout": -20000}).get("success") is True
+
+
+@pytest.mark.parametrize("action, params", [
+    ("wait", {"text": "Done", "timeout": 300000}),
+    ("batch", {"steps": [{"action": "sleep", "ms": 200000}]}),
+])
+def test_wait_longer_than_one_call_allows_is_refused_before_sending(daemon, monkeypatch, action, params):
+    # The daemon ends a call at 120 s while the browser keeps waiting, so such a wait can't be honored.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    with Edge(port=daemon.port, auto_start=False, pin=False) as edge:
+        r = edge.send(action, params)
+    assert r.get("success") is False and r.get("code") == "bad_params", r
+    assert seen == [], seen
+    ext.close()
+
+
+def test_batch_call_timeout_covers_its_sleeps(daemon, fake_ext, monkeypatch):
+    # A batch went out with the client's default timeout however long its sleeps were.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    with Edge(port=daemon.port, auto_start=False, pin=False, timeout=1) as edge:
+        r = edge.batch([{"action": "sleep", "ms": 1500}, {"action": "ping"}])
+    assert r.get("success") is True, r
+
+
+def test_status_uses_the_client_timeout_after_a_long_call(daemon, fake_ext, monkeypatch):
+    # A long call left its socket timeout on the pooled connection, and status() inherited it.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    with Edge(port=daemon.port, auto_start=False, pin=False, timeout=7) as edge:
+        assert edge.send("ping", {"timeout": 60000}).get("success") is True
+        assert edge.status().get("success") is True
+        assert edge._conn.sock.gettimeout() == 7

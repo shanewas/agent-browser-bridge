@@ -7,6 +7,7 @@ import base64
 import http.client
 import json
 import os
+import selectors
 import subprocess
 import sys
 import time
@@ -22,6 +23,28 @@ LADDER_ACTIONS = frozenset({
 LADDER_RETRY_CODES = frozenset({"stale_ref", "stale_snapshot", "target_not_found"})
 WRITE_ACTIONS = frozenset({"fill", "type"})
 REPIN_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
+# The daemon's deadline outlasts the browser's own wait by this much, and the client's socket outlasts
+# the daemon's deadline by the same, so each layer's timeout answer arrives before the caller gives up.
+RESPONSE_MARGIN_SEC = 5
+
+
+def _browser_wait_ms(action: str, params: dict) -> float:
+    """How long a call asks the browser to wait or sleep: its `timeout`, or a batch's sleeps and step timeouts."""
+    steps = params.get("steps") if action == "batch" else [dict(params, action=action)]
+    total = 0.0
+    for step in steps if isinstance(steps, list) else ():
+        if isinstance(step, dict):
+            value = step.get("ms") if step.get("action") in ("sleep", "wait_ms") else step.get("timeout")
+            if isinstance(value, (int, float)):
+                total += max(0.0, value)
+    return total
+
+
+def _peer_closed(sock) -> bool:
+    """Whether the daemon closed this idle keep-alive socket: between calls it turns readable only then."""
+    with selectors.DefaultSelector() as sel:
+        sel.register(sock, selectors.EVENT_READ)
+        return bool(sel.select(0))
 
 
 def _wsl_to_windows(path_str: str) -> str:
@@ -128,9 +151,16 @@ class Edge:
         self._last_tab_id = None
         self._conn: http.client.HTTPConnection | None = None
 
-    def _get_connection(self) -> http.client.HTTPConnection:
+    def _get_connection(self, timeout: float) -> http.client.HTTPConnection:
+        # A request written to a socket the daemon already closed is lost after it leaves, and
+        # nothing tells whether it ran, so such a socket is replaced before anything is sent.
+        if self._conn is not None and self._conn.sock is not None and _peer_closed(self._conn.sock):
+            self.close()
         if self._conn is None:
-            self._conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=self.timeout)
+            self._conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        self._conn.timeout = timeout
+        if self._conn.sock is not None:
+            self._conn.sock.settimeout(timeout)
         return self._conn
 
     def _send_once(self, action: str, params: dict | None = None, timeout: int | None = None) -> dict:
@@ -161,7 +191,15 @@ class Edge:
         if not self.highlight and "highlight" not in p:
             p["highlight"] = False
 
-        t = timeout or self.timeout
+        asked_s = _browser_wait_ms(action, p) / 1000
+        if asked_s + RESPONSE_MARGIN_SEC > config.MAX_CALL_TIMEOUT_SEC:
+            return {
+                "success": False,
+                "code": "bad_params",
+                "error": f"{action} asks the browser to wait {asked_s:g} s, but one call can wait at most "
+                         f"{config.MAX_CALL_TIMEOUT_SEC - RESPONSE_MARGIN_SEC:g} s; split it into shorter calls",
+            }
+        t = max(config.call_timeout(timeout or self.timeout), asked_s + RESPONSE_MARGIN_SEC)
         body = {"action": action, "params": p, "timeout": t}
         if self.session_token is not None:
             body["sessionToken"] = self.session_token
@@ -173,38 +211,44 @@ class Edge:
             config.TOKEN_HEADER: token,
         }
 
-        data = None
+        wait_s = t + RESPONSE_MARGIN_SEC
         for attempt in range(2):
+            conn = self._get_connection(wait_s)
             try:
-                conn = self._get_connection()
                 conn.request("POST", "/exec", body=payload, headers=headers)
-                resp = conn.getresponse()
-                raw = resp.read().decode("utf-8")
-                try:
-                    data = json.loads(raw)
-                except Exception:
-                    data = {"success": False, "code": "bad_response", "error": raw}
                 break
-            except Exception as e:
-                if self._conn:
-                    try:
-                        self._conn.close()
-                    except Exception:
-                        pass
-                    self._conn = None
+            except (OSError, http.client.HTTPException) as e:
+                # The daemon never got the whole request, so a second try on a fresh connection can't run it twice.
+                self.close()
                 if attempt == 1:
                     return {
                         "success": False,
                         "code": "daemon_unreachable",
                         "error": f"Cannot reach bridge daemon on 127.0.0.1:{self.port}: {e}",
                     }
-
-        if data is None:
+        # The daemon may run the command from here on, so a failure is reported and never retried.
+        try:
+            raw = conn.getresponse().read().decode("utf-8", errors="replace")
+        except TimeoutError:
+            self.close()
             return {
                 "success": False,
-                "code": "daemon_unreachable",
-                "error": f"Cannot reach bridge daemon on 127.0.0.1:{self.port}",
+                "code": "timeout",
+                "error": f"No answer to {action} within {wait_s:g} s; it may have run in the browser",
             }
+        except (OSError, http.client.HTTPException) as e:
+            self.close()
+            return {
+                "success": False,
+                "code": "connection_lost",
+                "error": f"Lost the connection to the daemon after sending {action}; it may have run in the browser: {e}",
+            }
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            data = {"success": False, "code": "bad_response", "error": raw}
 
         # Session pinning maintenance
         if self.pin and self.session_token is None:
@@ -660,8 +704,7 @@ class Edge:
             p["idle"] = True
         if tab_id is not None:
             p["tabId"] = tab_id
-        call_timeout = (timeout // 1000) + 5 if timeout else None
-        return self.send("wait", p, timeout=call_timeout)
+        return self.send("wait", p)
 
     def text(self, target=None, ref=None, tab_id=None) -> dict:
         p = {}
@@ -720,32 +763,20 @@ class Edge:
         return self.send("batch", p)
 
     def status(self) -> dict:
-        for attempt in range(2):
+        for _ in range(2):
             try:
-                conn = self._get_connection()
+                conn = self._get_connection(config.call_timeout(self.timeout))
                 conn.request("GET", "/status")
-                resp = conn.getresponse()
-                raw = resp.read().decode("utf-8")
-                data = json.loads(raw)
+                data = json.loads(conn.getresponse().read().decode("utf-8"))
                 data["success"] = bool(data.get("bridge_running"))
                 return data
-            except Exception as e:
-                if self._conn:
-                    try:
-                        self._conn.close()
-                    except Exception:
-                        pass
-                    self._conn = None
-                if attempt == 1:
-                    return {
-                        "success": False,
-                        "code": "daemon_unreachable",
-                        "error": f"Cannot reach bridge daemon on 127.0.0.1:{self.port}: {e}",
-                    }
+            except (OSError, http.client.HTTPException, ValueError) as e:
+                self.close()
+                error = e
         return {
             "success": False,
             "code": "daemon_unreachable",
-            "error": f"Cannot reach bridge daemon on 127.0.0.1:{self.port}",
+            "error": f"Cannot reach bridge daemon on 127.0.0.1:{self.port}: {error}",
         }
 
     def close(self):
