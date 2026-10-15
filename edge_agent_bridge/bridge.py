@@ -15,6 +15,7 @@ import logging
 import logging.handlers
 import os
 import socket
+import socketserver
 import struct
 import sys
 import threading
@@ -822,6 +823,12 @@ class BridgeServer(http.server.ThreadingHTTPServer):
     def __init__(self, server_address, RequestHandlerClass, state: BridgeState):
         self.state = state
         super().__init__(server_address, RequestHandlerClass)
+
+    def server_bind(self):
+        # HTTPServer.server_bind calls socket.getfqdn(), which can block ~30 s on macOS hosts
+        # without a resolvable FQDN, before the socket listens. The name is never used.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> None:
