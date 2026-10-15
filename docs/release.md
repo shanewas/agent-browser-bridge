@@ -5,9 +5,10 @@ One source of truth for the version: `edge_agent_bridge/__init__.py`. `pyproject
 
 ## Automated path
 
-Pushing to `main` runs `.github/workflows/release.yml`. The `gate` job builds the extension zip,
-checks the manifest is in sync, runs the hermetic suite, and asks PyPI whether the current version
-already exists. Everything downstream is skipped when it does, so an ordinary push costs one test
+Pushing to `main` runs `.github/workflows/release.yml`. It first runs the whole `ci` workflow
+(hermetic suite on every OS, E2E on Windows); nothing publishes unless that passes. The `gate` job
+then builds the extension zip, checks the manifest is in sync, runs the hermetic suite, and asks
+PyPI whether the current version already exists. Everything downstream is skipped when it does, so an ordinary push costs one test
 run and nothing else.
 
 When the version is new, the workflow publishes to PyPI, cuts a GitHub release carrying the wheel,

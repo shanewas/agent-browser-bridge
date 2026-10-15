@@ -255,8 +255,8 @@ python scripts/build_extension.py  # syncs the manifest version, zips to dist/
 ```
 
 The hermetic suite runs a real daemon against a fake extension over a real WebSocket, so it covers
-the wire protocol without Edge installed, while CI runs both suites on Windows, Linux and
-macOS; releases are automated, see [`docs/release.md`](docs/release.md).
+the wire protocol without Edge installed. CI runs it on Windows, Linux and macOS and the E2E suite
+against a real Edge on Windows; releases are automated, see [`docs/release.md`](docs/release.md).
 
 ---
 
