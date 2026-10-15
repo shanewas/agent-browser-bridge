@@ -604,6 +604,8 @@ export async function pageResolve(query, opts) {
     rendered,
     x: c.x + info.x,
     y: c.y + info.y,
+    // Frame-local center for hit-testing inside the ref's own frame; x/y are top-level for CDP.
+    local: { x: c.x, y: c.y },
     width: Math.round(r.width),
     height: Math.round(r.height),
     tag: el.tagName.toLowerCase(),
