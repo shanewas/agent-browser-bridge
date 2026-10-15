@@ -864,12 +864,12 @@ export function pageReadback(mode) {
   }
   const tag = el.tagName || "";
   const type = (el.getAttribute && el.getAttribute("type") || "").toLowerCase();
-  if (el.isContentEditable) return { success: true, present: true, verifiable: true, value: el.innerText };
+  if (el.isContentEditable) return { success: true, present: true, verifiable: true, value: el.innerText, field: "contenteditable" };
   if (tag === "INPUT" && (type === "checkbox" || type === "radio")) {
     return { success: true, present: true, verifiable: true, value: el.checked };
   }
   if (tag === "SELECT" && !el.multiple) return { success: true, present: true, verifiable: true, value: el.value };
-  if ("value" in el) return { success: true, present: true, verifiable: true, value: el.value };
+  if ("value" in el) return { success: true, present: true, verifiable: true, value: el.value, field: tag.toLowerCase() };
   return { success: true, present: true, verifiable: false, value: null };
 }
 

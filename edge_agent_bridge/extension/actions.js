@@ -165,6 +165,13 @@ function normalizeReadValue(v) {
   return String(v);
 }
 
+// Rich editors pad innerText with a trailing newline and store typed spaces as U+00A0.
+function writeMatches(readback, written, field) {
+  if (field !== "contenteditable") return readback === written;
+  const norm = (s) => s.replace(/\u00a0/g, " ").replace(/\n$/, "");
+  return norm(readback) === norm(written);
+}
+
 // Pre-assert focus on mode ({x,y} or {active:true}) in frameId. Returns {ok} or {ok:false, result}.
 async function preAssertFocus(tabId, frameId, mode, uuid) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -681,7 +688,7 @@ export async function execute(cmd) {
           }
           const written = valueBefore === null ? text : valueBefore + text;
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: readback === written };
+          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: writeMatches(readback, written, rb.field), field: rb.field };
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
@@ -745,7 +752,7 @@ export async function execute(cmd) {
             return { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
           }
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native, written, readback, match: readback === written, ...targetInfo };
+          return { success: true, text, native, written, readback, match: writeMatches(readback, written, rb.field), field: rb.field, ...targetInfo };
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }

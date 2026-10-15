@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Verified writes no longer clear the field: `type` is never retried, the clearing
+  `fill` retry runs only for `input` and `textarea`, contenteditable readback ignores
+  one trailing newline and U+00A0, and an unreadable retry returns `match: "unknown"`
+  instead of `write_mismatch` (#6).
 - macOS: the daemon no longer blocks about 30 s in `socket.getfqdn()` before it
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the

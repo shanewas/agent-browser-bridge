@@ -4,6 +4,8 @@ import time
 
 import pytest
 
+from edge_agent_bridge.client import Edge
+
 pytestmark = pytest.mark.e2e
 
 
@@ -74,6 +76,17 @@ def test_type_sends_key_events_and_keeps_unicode(client):
     assert state[0] == payload, state
     assert int(state[1]) >= 6, state
 
+
+
+def test_type_into_rich_editor_keeps_markup(e2e_daemon, client, monkeypatch):
+    # Through the client: a type mismatch used to become a clearing fill that wiped the <b>.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(e2e_daemon.home))
+    with Edge(port=e2e_daemon.port, auto_start=False, pin=False) as edge:
+        r = edge.send("type", {"target": "#editor", "text": "!", "delay": 5, "highlight": False})
+    assert r["success"] and r["field"] == "contenteditable" and "retried" not in r, r
+    assert r["match"] is True, r
+    state = client("eval", {"code": "[document.querySelectorAll('#editor b').length, document.getElementById('editor').innerText]"})["result"]
+    assert state[0] == 1 and "!" in state[1], state
 
 def test_upload_by_ref_button_and_failure(client, tmp_path):
     f = tmp_path / "hello.txt"
