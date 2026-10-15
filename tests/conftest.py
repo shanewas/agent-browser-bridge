@@ -28,3 +28,12 @@ def fake_ext(daemon):
         raise RuntimeError("fake extension never registered with the daemon")
     yield ext
     ext.close()
+
+
+@pytest.fixture
+def patient_daemon(tmp_path):
+    """Daemon whose pong timeout outlasts a slow fake-extension handler: the fake answers pings
+    on the thread that runs the handler, so the 3 s default would drop it mid-command."""
+    handle = DaemonHandle(free_port(), tmp_path).start(extra_env={"EDGE_BRIDGE_PONG_TIMEOUT": "120"})
+    yield handle
+    handle.stop()

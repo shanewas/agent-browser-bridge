@@ -1,7 +1,8 @@
 """Paths, port and token shared by daemon and clients.
 
 Test-only knobs: EDGE_BRIDGE_PORT, EDGE_BRIDGE_HOME, EDGE_BRIDGE_HEARTBEAT (seconds),
-EDGE_BRIDGE_PONG_TIMEOUT (seconds), EDGE_BRIDGE_LOCK_TIMEOUT (seconds). The extension itself always talks to 18999.
+EDGE_BRIDGE_PONG_TIMEOUT (seconds), EDGE_BRIDGE_LOCK_TIMEOUT (seconds), EDGE_BRIDGE_HTTP_IDLE (seconds).
+The extension itself always talks to 18999.
 """
 import os
 import secrets
@@ -10,6 +11,7 @@ from pathlib import Path
 
 DEFAULT_PORT = 18999
 TOKEN_HEADER = "X-Bridge-Token"
+MAX_CALL_TIMEOUT_SEC = 120.0
 
 
 def home() -> Path:
@@ -49,6 +51,19 @@ def pong_timeout_seconds() -> float:
 
 def lock_timeout_seconds() -> float:
     return _float_env("EDGE_BRIDGE_LOCK_TIMEOUT", 10.0)
+
+
+def http_idle_seconds() -> float:
+    return _float_env("EDGE_BRIDGE_HTTP_IDLE", 30.0)
+
+
+def call_timeout(value) -> float:
+    """A call's timeout in seconds as the daemon reads it: 20 when unreadable, kept within 1..120."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = 20.0
+    return max(1.0, min(seconds, MAX_CALL_TIMEOUT_SEC))
 
 
 def extension_dir() -> Path:

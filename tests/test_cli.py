@@ -1,6 +1,9 @@
 """Tests for edge_agent_bridge.cli."""
+import io
 import json
 from pathlib import Path
+from edge_agent_bridge import cli, config
+from edge_agent_bridge.client import Edge
 from tests.fake_extension import FakeExtension
 from tests.support import free_port, run_cli
 
@@ -285,3 +288,28 @@ def test_cli_eval_missing_file_exits_3(daemon, tmp_path):
     code, out, err = run_cli(["--json", "eval", "--file", str(tmp_path / "nope.js")], env=env)
     assert code == 3
     assert _json.loads(out)["code"] == "file_not_found"
+
+
+def test_cli_wait_asks_the_daemon_for_its_whole_timeout(tmp_path, monkeypatch):
+    # The CLI sent wait with the client's 20 s default, so the daemon cut a longer --timeout short.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setenv("EDGE_BRIDGE_PORT", str(free_port()))
+    monkeypatch.delenv("EDGE_BRIDGE_SESSION", raising=False)
+    config.ensure_token()
+    bodies = []
+
+    class RecordingConnection:
+        sock = None
+
+        def request(self, method, url, body=None, headers=None):
+            bodies.append(json.loads(body))
+
+        def getresponse(self):
+            return io.BytesIO(b'{"success": true}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
+    assert cli.main(["--json", "wait", "--text", "X", "--timeout", "60000"]) == 0
+    assert bodies[0]["timeout"] == 65, bodies
