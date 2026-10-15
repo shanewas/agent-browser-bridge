@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- macOS: the daemon no longer blocks about 30 s in `socket.getfqdn()` before it
+  listens, which made auto-start time out and every hermetic macOS CI leg fail.
+- Releases publish only after the full `ci` workflow passes, including the
+  Windows E2E suite.
+
 ## 2.5.0
 
 - PATH-proof entry points: `py -m edge_agent_bridge` and `python -m edge_agent_bridge`
