@@ -40,6 +40,11 @@ Every result carries `tab: {id, title, url}`. If the user didn't name a page, co
 first snapshot that you are on the one they meant before you type into it. Your session pins
 to that tab afterwards, so a tab the user switches to will not receive your commands.
 
+Without a tab id or a session, a command goes to the active tab of the last focused Edge window
+that runs the extension. An InPrivate window or a window of another Edge profile doesn't count,
+so while the user works in one of those, that command lands in a different window. Pass the tab
+id or work inside a session there.
+
 ## Filling forms the user started
 
 Snapshots include current values (`value="..."`, `checked`, selected option). Fill only the
@@ -74,6 +79,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `stale_snapshot`, `stale_ref` | refs are from an old page state | snapshot again |
 | `target_not_found` | nothing matched within the timeout | snapshot, pick a ref |
 | `tab_not_found` | the pinned tab is gone | tokenless: the next call re-resolves the active tab; session: expect sticky `tab_closed` until `switch`/`new` |
+| `tab_not_scriptable` | the tab shows a browser page (`edge://`, `chrome://`, `view-source:`, an extension page) that extensions can't script | ask the user which tab they mean and `edge_tab_switch` to it, or `edge_navigate` this tab first |
 | `extension_offline` | Edge is closed or the extension is off | tell the user to open Edge and check the popup |
 | `extension_outdated` | the extension predates the daemon | tell the user to update it |
 | `dialog_open` | a native dialog is waiting | `edge_dialog` accept or dismiss |

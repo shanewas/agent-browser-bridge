@@ -785,6 +785,13 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     pass
                 results.append({"action": "sleep", "success": True, "ms": step.get("ms", 100)})
                 continue
+            if s_action == "batch":
+                # The extension runs a nested batch's steps without its per-tab checks.
+                err = "a batch step can't be another batch"
+                results.append({"success": False, "code": "bad_params", "error": err})
+                self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                    "stoppedAt": "batch", "results": results})
+                return
             s_params = {k: v for k, v in step.items() if k != "action"}
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
