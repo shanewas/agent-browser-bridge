@@ -10,6 +10,10 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Version drift detection: `status` reports CLI and daemon versions side-by-side
+  with remediation hints on mismatch; `doctor` checks version parity and flags
+  outdated extensions; daemon rewrites `unknown_action` from older extensions to
+  `extension_outdated`.
 
 ## 2.5.0
 

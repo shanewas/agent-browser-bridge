@@ -8,11 +8,14 @@ import threading
 import time
 
 
+from edge_agent_bridge import __version__
+
+
 class FakeExtension:
-    def __init__(self, port, version="2.0.0", token=None, send_hello=True, handler=None,
+    def __init__(self, port, version=None, token=None, send_hello=True, handler=None,
                  origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop"):
         self.port = port
-        self.version = version
+        self.version = version if version is not None else __version__
         self.token = token
         self.send_hello = send_hello
         self.handler = handler or self.default_handler

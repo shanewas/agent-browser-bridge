@@ -64,7 +64,8 @@ def test_status_fields(daemon, fake_ext):
     for k in ("bridge_running", "daemon_version", "extension_version", "extension_outdated",
               "extension_connected", "websocket_active", "last_seen_seconds_ago", "pending", "pairing_required"):
         assert k in st
-    assert st["extension_version"] == "2.0.0" and st["extension_outdated"] is False and st["websocket_active"] is True
+    from edge_agent_bridge import __version__
+    assert st["extension_version"] == __version__ and st["extension_outdated"] is False and st["websocket_active"] is True
 
 
 def test_poll_and_result_gone(daemon):
@@ -168,6 +169,19 @@ def test_extension_outdated_rewrite(daemon):
     time.sleep(1.2)
     code, body = daemon.exec("snapshot", timeout=3)
     assert code == 200 and body["code"] == "extension_outdated" and "2.0.0" in body["error"]
+    assert daemon.status()["extension_outdated"] is True
+    ext.close()
+
+
+def test_extension_outdated_rewrite_for_older_v2_extension(daemon):
+    def handler(action, params):
+        return {"success": False, "code": "unknown_action", "error": "Unknown action: future_cmd"}
+
+    ext = FakeExtension(daemon.port, version="2.4.0", handler=handler).connect().run()
+    time.sleep(1.2)
+    code, body = daemon.exec("future_cmd", timeout=3)
+    assert code == 200 and body["code"] == "extension_outdated"
+    assert "2.4.0" in body["error"]
     assert daemon.status()["extension_outdated"] is True
     ext.close()
 
