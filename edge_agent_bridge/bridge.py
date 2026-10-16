@@ -666,7 +666,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             _strip_session_token(params)
-            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped)
+            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped, action)
             res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
                                                       tab_scoped, forward_tab)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
@@ -680,7 +680,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         self._respond(404, {"success": False, "code": "not_found", "error": "Unknown path"})
 
-    def _resolve_forward_tab(self, state, session, params, tab_scoped):
+    def _resolve_forward_tab(self, state, session, params, tab_scoped, action=None):
         if not tab_scoped:
             return None
         explicit = params.get("tabId")
@@ -689,6 +689,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return int(explicit)
             except (TypeError, ValueError):
                 return None
+        if action in CLOSING_ACTIONS:
+            return None
         if session is not None:
             with state.lock:
                 pin = session["tabId"]
@@ -850,7 +852,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
             s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS
-            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped)
+            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
             results.append(res)

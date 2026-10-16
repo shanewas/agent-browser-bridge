@@ -107,6 +107,26 @@ def test_cli_pin_closed_until_switch_and_sessions_ignore_it(daemon):
     ext.close()
 
 
+def test_cli_pin_does_not_inject_into_tab_close(daemon):
+    # tab_close requires an explicit tabId; tokenless pin must not be auto-injected.
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action == "tab_close" and not params.get("tabId"):
+            return {"success": False, "code": "tab_required", "error": "tab_close requires an explicit tabId"}
+        return {"success": True, "tab": {"id": params.get("tabId", 5), "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    daemon.exec("tab_switch", {"tabId": 5})
+    assert daemon.status().get("pin") == 5
+    _, r = daemon.exec("tab_close", {})
+    assert r["success"] is False and r["code"] == "tab_required", r
+    assert "tabId" not in seen[-1][1], seen
+    ext.close()
+
+
 def test_tokenless_legacy_unchanged(daemon):
     seen = []
 
