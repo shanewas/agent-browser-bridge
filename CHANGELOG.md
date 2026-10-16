@@ -10,6 +10,8 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- The MCP server answers a JSON array or scalar line with `-32600 Invalid
+  Request` and keeps serving, instead of exiting.
 
 ## 2.5.0
 
