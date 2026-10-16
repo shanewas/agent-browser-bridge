@@ -134,3 +134,26 @@ def test_screenshot_of_background_tab_keeps_focus(client, pages):
         assert client("tab")["tab"]["id"] == second
     finally:
         client("tab_close", {"tabId": second})
+
+
+def test_scroll_ref_brings_element_into_view(client, pages):
+    assert client("nav", {"url": pages + "/scroll.html"})["success"]
+    snap = client("snapshot")["text"]
+    ref = ref_of(snap, "button", "Bottom button")
+    before = client("eval", {"code": "document.getElementById('bottomBtn').getBoundingClientRect().top"})["result"]
+    assert before > 900, before
+    r = client("scroll", {"ref": ref})
+    assert r["success"], r
+    time.sleep(0.3)
+    top = client("eval", {"code": "document.getElementById('bottomBtn').getBoundingClientRect().top"})["result"]
+    height = client("eval", {"code": "window.innerHeight"})["result"]
+    assert 0 <= top < height, (top, height)
+
+
+def test_scroll_x_only_scrolls_horizontally(client, pages):
+    assert client("nav", {"url": pages + "/scroll.html"})["success"]
+    r = client("scroll", {"x": 200, "y": 0})
+    assert r["success"], r
+    time.sleep(0.3)
+    pos = client("eval", {"code": "[window.scrollX, window.scrollY]"})["result"]
+    assert pos[0] > 0 and pos[1] == 0, pos

@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `scroll --ref/--target` resolves the element and scrolls it into view (or
+  wheels at its center when deltas are given) instead of scrolling at a
+  fixed viewport point, and `--y 0` no longer scrolls 300 px.
 
 ## 2.5.0
 

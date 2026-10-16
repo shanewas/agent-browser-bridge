@@ -766,12 +766,33 @@ export async function execute(cmd) {
       }
 
       case "scroll": {
+        const hasX = p.x !== undefined && p.x !== null;
+        const hasY = p.y !== undefined && p.y !== null;
+        const hasDeltas = hasX || hasY;
+        // Defaults apply only when both deltas are absent, so an explicit 0 stays 0.
+        const dx = hasX ? Number(p.x) : 0;
+        const dy = hasY ? Number(p.y) : (hasDeltas ? 0 : 300);
+        const target = p.ref || p.target || p.selector;
+        if (target) {
+          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+          if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
+          if (!hasDeltas) {
+            // pageResolve already scrolled the element into view.
+            return { success: true, scrolledIntoView: true, x: r.x, y: r.y };
+          }
+          const hasDbgT = await attach(tabId);
+          if (hasDbgT) {
+            await nativeScroll(tabId, r.x, r.y, dx, dy);
+            return { success: true, scrollX: dx, scrollY: dy, native: true };
+          }
+          return await execInTab(tabId, page.pageScroll, [dx, dy]);
+        }
         const hasDbg = await attach(tabId);
         if (hasDbg) {
-          await nativeScroll(tabId, 500, 300, Number(p.x || 0), Number(p.y || 300));
-          return { success: true, scrollX: p.x || 0, scrollY: p.y || 300, native: true };
+          await nativeScroll(tabId, 500, 300, dx, dy);
+          return { success: true, scrollX: dx, scrollY: dy, native: true };
         }
-        return await execInTab(tabId, page.pageScroll, [Number(p.x || 0), Number(p.y || 0)]);
+        return await execInTab(tabId, page.pageScroll, [dx, dy]);
       }
 
       case "snapshot": {
