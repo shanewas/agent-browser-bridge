@@ -817,9 +817,9 @@ export async function pageAssertFocus(mode, uuid, checkOnly) {
   if (!lib) return { success: false, code: "lib_missing" };
   let el = null;
   if (mode && mode.active) {
-    el = document.activeElement;
+    el = lib.deepActive();
   } else if (mode) {
-    el = document.elementFromPoint(mode.x, mode.y);
+    el = lib.deepFromPoint(mode.x, mode.y);
   }
   if (el && el.tagName === "LABEL") {
     if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
@@ -835,7 +835,8 @@ export async function pageAssertFocus(mode, uuid, checkOnly) {
     try { el.dataset.bridgeAssert = uuid; } catch (e) {}
   }
   const active = document.activeElement;
-  let focused = active === el || (!!active && !!active.dataset && active.dataset.bridgeAssert === uuid);
+  const deep = lib.deepActive();
+  let focused = active === el || deep === el || (!!deep && !!deep.dataset && deep.dataset.bridgeAssert === uuid) || (!!active && !!active.dataset && active.dataset.bridgeAssert === uuid);
   if (!focused && active && active !== document.body) {
     const owns = ((el.getAttribute && el.getAttribute("aria-owns") || "") + " " + (el.getAttribute && el.getAttribute("aria-controls") || "")).split(/\s+/);
     if (active.id && owns.indexOf(active.id) !== -1) focused = true;
@@ -853,9 +854,9 @@ export function pageReadback(mode) {
   if (!lib) return { success: false, code: "lib_missing" };
   let el = null;
   if (mode && mode.active) {
-    el = document.activeElement;
+    el = lib.deepActive();
   } else if (mode) {
-    el = document.elementFromPoint(mode.x, mode.y);
+    el = lib.deepFromPoint(mode.x, mode.y);
   }
   if (el && el.tagName === "LABEL") {
     if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;

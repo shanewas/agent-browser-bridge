@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `fill` and `type` work on inputs inside open shadow roots (including two
+  roots deep): focus assertion and readback step into shadow roots instead
+  of stopping at the host and failing with `focus_lost`.
 
 ## 2.5.0
 

@@ -202,8 +202,29 @@
     return list.indexOf(el);
   }
 
+  // Hit-testing and focus stop at shadow boundaries: elementFromPoint returns
+  // the host and document.activeElement is the host. Step into open shadow
+  // roots until the real element stops changing (issue #7).
+  function deepFromPoint(x, y) {
+    let el = document.elementFromPoint(x, y);
+    while (el && el.shadowRoot) {
+      let inner = null;
+      try { inner = el.shadowRoot.elementFromPoint(x, y); } catch (e) {}
+      if (!inner || inner === el) break;
+      el = inner;
+    }
+    return el;
+  }
+
+  function deepActive() {
+    let el = document.activeElement;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+    return el;
+  }
+
   window.__eabLib = {
     INTERACTIVE_ROLES, CONTAINER_TAGS, roleOf, nameOf, ownText, collapse, labelText, isVisible,
-    childElements, queryAllDeep, rectOf, center, highlight, frameInfo, iframeIndex
+    childElements, queryAllDeep, rectOf, center, highlight, frameInfo, iframeIndex,
+    deepFromPoint, deepActive
   };
 })();
