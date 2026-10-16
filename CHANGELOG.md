@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `batch` steps in the `{action, params}` shape forward their params (merged
+  under any flat keys) instead of sending a nested `params` key; the MCP
+  schema says both shapes are accepted.
 
 ## 2.5.0
 
