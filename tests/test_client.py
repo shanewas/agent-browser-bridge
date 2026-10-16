@@ -308,9 +308,11 @@ def test_session_remint_repins_remembered_tab(daemon, monkeypatch):
     assert r["success"] is True
     assert edge.session_token != old_token
     switches = [p for a, p in seen if a in ("tab_switch", "switch_tab")]
-    assert switches[-1].get("tabId") == 5
+    assert len(switches) == 1  # only the explicit switch; the re-pin sends none (issue #28)
     clicks = [p for a, p in seen if a == "click"]
     assert clicks[-1].get("tabId") == 5
+    st = edge._send_once("session_status", {})
+    assert st.get("tabId") == 5, st
     edge.close()
     ext.close()
     ext2.close()
@@ -342,10 +344,10 @@ def test_remint_falls_back_to_active_tab_when_remembered_tab_gone(daemon, monkey
 
     def handler(action, params):
         seen.append((action, dict(params)))
+        if action == "click" and params.get("tabId") == 5 and closed:
+            return {"success": False, "code": "tab_not_found", "error": "gone"}
         if action in ("tab_switch", "switch_tab"):
             tid = params.get("tabId", 7)
-            if tid == 5 and closed:
-                return {"success": False, "code": "tab_not_found", "error": "gone"}
             return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
         tid = params.get("tabId")
         return {"success": True, "tab": {"id": tid or 9, "title": "t", "url": "http://t"}}

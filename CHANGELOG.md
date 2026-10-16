@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- After a daemon restart, the session re-pin no longer sends `tab_switch`
+  (which activated the tab and pulled its window to the front); the retried
+  call carries the remembered `tabId` and the daemon pins from its result.
 
 ## 2.5.0
 
