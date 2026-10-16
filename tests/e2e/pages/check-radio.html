@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Check Radio Fixture</title>
+</head>
+<body>
+  <h1>Check Radio Test</h1>
+
+  <!-- Labelled input radio group -->
+  <fieldset id="status-group">
+    <legend>Status</legend>
+    <label><input type="radio" name="status" id="opt-pending" value="pending"> Pending</label>
+    <label><input type="radio" name="status" id="opt-completed" value="completed"> Completed</label>
+  </fieldset>
+
+  <!-- role="radio" group -->
+  <div role="radiogroup" aria-label="Role Radio Group" id="role-group">
+    <div role="radio" id="role-in-progress" tabindex="0" aria-checked="false">In Progress</div>
+    <div role="radio" id="role-completed" tabindex="-1" aria-checked="false">Completed</div>
+  </div>
+
+  <!-- Non-ASCII and slash label -->
+  <fieldset id="jp-group">
+    <legend>Progress</legend>
+    <label><input type="radio" name="jp" id="opt-jp" value="done"> 1.完了 / Completed</label>
+  </fieldset>
+
+  <!-- Value with quote and bracket -->
+  <fieldset id="special-group">
+    <legend>Special</legend>
+    <label><input type="radio" name="special" id="opt-special" value='val"foo]'> Complex value</label>
+  </fieldset>
+</body>
+</html>

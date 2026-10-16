@@ -246,12 +246,13 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "edge_check_radio",
-        "description": "Check a radio button or checkbox by selector, label text, or value attribute.",
+        "description": "Check a radio button or checkbox by ref, selector, label text, or value attribute.",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "ref": {"type": "string", "description": "Target ref (e.g. 'e1')."},
                 "selector": {"type": "string", "description": "CSS selector for the input element."},
-                "target": {"type": "string", "description": "Label text or selector shorthand."},
+                "target": {"type": "string", "description": "Label text, selector shorthand, or ref."},
                 "text": {"type": "string", "description": "Label text to match."},
                 "value": {"type": "string", "description": "Value attribute of the radio/checkbox."},
                 **COMMON_TOOL_PROPERTIES,
@@ -593,6 +594,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             )
         elif tool_name == "edge_check_radio":
             res = edge.check_radio(
+                ref=args.get("ref"),
                 selector=args.get("selector"),
                 target=args.get("target"),
                 text=args.get("text"),
