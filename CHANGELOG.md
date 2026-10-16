@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `text` returns the target element's own text (a container's full text,
+  a field's value, a `display:none` element's text) instead of the text of
+  whatever element sits at the target's center.
 
 ## 2.5.0
 
