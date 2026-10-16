@@ -222,6 +222,43 @@ def test_cli_run_steps_and_exit_codes(daemon, fake_ext, tmp_path):
     assert len(out.splitlines()) == 1
 
 
+def test_cli_stdin_read_as_utf8_bytes(daemon):
+    # Issue #25: stdin is read as UTF-8 bytes, not the console code page.
+    import os as _os, subprocess as _sp, sys as _sys
+    from pathlib import Path as _P
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "match": True, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {k: v for k, v in _os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update({"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)})
+    root = _P(__file__).resolve().parents[1]
+
+    def run_bytes(args, payload):
+        r = _sp.run([_sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args,
+                    cwd=root, env=env, input=payload, capture_output=True)
+        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+    text = "bullet \u2022 emoji \U0001F600"
+    steps = json.dumps([{"action": "fill", "params": {"target": "x", "text": text}}]).encode("utf-8")
+    code, out, err = run_bytes(["run", "-"], steps)
+    assert code == 0, (code, out, err)
+    fills = [prm for a, prm in seen if a == "fill"]
+    assert fills and fills[-1].get("text") == text, seen
+
+    code, out, err = run_bytes(["eval", "--file", "-"], "var s = \'\u2022\';".encode("utf-8"))
+    assert code == 0, (code, out, err)
+    evals = [prm for a, prm in seen if a == "eval"]
+    assert evals and "\u2022" in evals[-1].get("code", ""), seen
+
+    code, out, err = run_bytes(["run", "-"], b"\xff\xfe not utf-8")
+    assert code == 3, (code, out, err)
+    ext.close()
+
+
 def test_cli_run_usage_errors(daemon, tmp_path):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["run", str(tmp_path / "missing.json")], env=env)

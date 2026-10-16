@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Windows: `run -` and `eval --file -` read stdin as UTF-8 instead of the
+  console code page, and undecodable stdin is a usage error (exit 3) naming
+  stdin instead of a traceback or mojibake.
 
 ## 2.5.0
 

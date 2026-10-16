@@ -24,8 +24,17 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
+        sys.stdin.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+
+def _read_stdin_text() -> str:
+    """Read all of stdin as UTF-8, whatever the console code page says."""
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        return buffer.read().decode("utf-8")
+    return sys.stdin.read()
 
 
 def _handle_daemon_cmd(args, port: int) -> int:
@@ -280,9 +289,9 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
 
     src = args.steps_file
     try:
-        raw = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8")
-    except OSError as e:
-        return usage(f"Cannot read {src}: {e}")
+        raw = _read_stdin_text() if src == "-" else Path(src).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return usage(f"Cannot read {'stdin' if src == '-' else src}: {e}")
     if len(raw.encode("utf-8")) > 1024 * 1024:
         return usage("steps file over 1 MB; batches are not bulk transport")
     try:
@@ -930,7 +939,14 @@ def main(argv=None) -> int:
     elif action == "eval":
         if args.file:
             if args.file == "-":
-                params["code"] = sys.stdin.read()
+                try:
+                    params["code"] = _read_stdin_text()
+                except (OSError, UnicodeDecodeError) as e:
+                    if opt_json:
+                        print(json.dumps({"success": False, "code": "bad_params", "error": f"cannot read stdin: {e}"}))
+                    else:
+                        print(f"Error: cannot read stdin: {e}", file=sys.stderr)
+                    return 3
             else:
                 try:
                     params["code"] = Path(args.file).read_text(encoding="utf-8")
