@@ -137,6 +137,8 @@ class BridgeState:
         self.lock = threading.RLock()
         self.ext: WebSocketConnection | None = None
         self.ext_version: str | None = None
+        self.ext_instance: str | None = None
+        self.rejected_instance: str | None = None
         self.ext_accepted: bool = False
         self.extension_outdated: bool = False
 
@@ -161,7 +163,8 @@ class BridgeState:
     def is_active_locked(self, ws: WebSocketConnection) -> bool:
         return self.ext is ws and self.ext_accepted and not ws.closed
 
-    def accept_extension_locked(self, ws: WebSocketConnection, version: str | None):
+    def accept_extension_locked(self, ws: WebSocketConnection, version: str | None,
+                                instance: str | None = None):
         """Make ws the extension connection. Called only once ws has passed hello/pairing (or the
         pairing-off grace window), so a socket that never authenticates cannot displace the live one."""
         if ws.grace_timer:
@@ -178,6 +181,7 @@ class BridgeState:
             self.last_pong = now
             self.last_ping_sent = now
         self.ext_version = version
+        self.ext_instance = instance
         self.ext_accepted = True
         self.mark_seen()
         self._drain_held_locked()
@@ -198,6 +202,7 @@ class BridgeState:
             if self.ext is ws:
                 self.ext = None
                 self.ext_accepted = False
+                self.ext_instance = None
 
     def session_create_locked(self, name: str | None = None) -> str:
         token = str(uuid.uuid4())
@@ -342,6 +347,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 ext_connected = bool(state.ext and not state.ext.closed)
                 ws_active = bool(state.ext and not state.ext.closed and state.ext_accepted)
                 ext_ver = state.ext_version
+                ext_inst = state.ext_instance
+                rej_inst = state.rejected_instance
                 ext_outdated = state.extension_outdated
                 pending_count = len(state.pending) + len(state.held)
                 session_count = len(state.sessions)
@@ -351,6 +358,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "bridge_running": True,
                 "daemon_version": __version__,
                 "extension_version": ext_ver,
+                "instance": ext_inst,
+                "extension_instance": ext_inst,
+                "rejected_instance": rej_inst,
                 "extension_outdated": ext_outdated,
                 "extension_connected": ext_connected,
                 "websocket_active": ws_active,
@@ -507,8 +517,22 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     logger.warning("Pairing token mismatch from extension hello; closing 4001")
                     ws_conn.close_with_code(4001, "pairing_failed")
                     return
+            instance = hello.get("instance")
+            if not isinstance(instance, str):
+                instance = None
             with state.lock:
-                state.accept_extension_locked(ws_conn, version)
+                if (instance is not None
+                        and state.ext_instance is not None
+                        and state.ext and not state.ext.closed and state.ext_accepted
+                        and instance != state.ext_instance):
+                    logger.warning("Another browser instance connected (%s vs active %s); closing 4002",
+                                   instance, state.ext_instance)
+                    state.rejected_instance = instance
+                    ws_conn.close_with_code(4002, "another browser is connected")
+                    return
+                if state.rejected_instance == instance:
+                    state.rejected_instance = None
+                state.accept_extension_locked(ws_conn, version, instance)
 
         with state.lock:
             if not state.is_active_locked(ws_conn):

@@ -10,13 +10,15 @@ import time
 
 class FakeExtension:
     def __init__(self, port, version="2.0.0", token=None, send_hello=True, handler=None,
-                 origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop"):
+                 origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                 instance=None):
         self.port = port
         self.version = version
         self.token = token
         self.send_hello = send_hello
         self.handler = handler or self.default_handler
         self.origin = origin
+        self.instance = instance
         self.sock = None
         self.received = []
         self.closed_with = None
@@ -61,6 +63,8 @@ class FakeExtension:
             hello = {"version": self.version, "id": "fakeextensionid"}
             if self.token is not None:
                 hello["token"] = self.token
+            if self.instance is not None:
+                hello["instance"] = self.instance
             self.send_text(json.dumps({"hello": hello}))
         return self
 

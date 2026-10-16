@@ -252,3 +252,38 @@ def test_new_hello_replaces_stale_connection_without_pairing(daemon):
     assert code == 200 and body["version"] == "2.0.1"
     new.close()
     old.close()
+
+
+def test_different_instance_rejected_with_4002(daemon):
+    ext1 = FakeExtension(daemon.port, instance="inst-1").connect().run()
+    assert _wait_active(daemon)
+    st = daemon.status()
+    assert st.get("rejected_instance") is None
+
+    ext2 = FakeExtension(daemon.port, instance="inst-2").connect().run()
+    assert _wait_closed(ext2) == 4002
+    assert daemon.status()["websocket_active"] is True
+    st2 = daemon.status()
+    assert st2.get("rejected_instance") == "inst-2"
+
+    # First extension remains connected and functional
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True
+    ext1.close()
+    ext2.close()
+
+
+def test_same_instance_replaces_old_socket(daemon):
+    old = FakeExtension(daemon.port, version="2.0.0", instance="inst-1").connect().run()
+    assert _wait_active(daemon)
+    new = FakeExtension(daemon.port, version="2.0.1", instance="inst-1").connect().run()
+    deadline = time.time() + 3
+    while time.time() < deadline and daemon.status()["extension_version"] != "2.0.1":
+        time.sleep(0.05)
+    assert daemon.status()["extension_version"] == "2.0.1"
+    assert _wait_closed(old) is not None
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["version"] == "2.0.1"
+    new.close()
+    old.close()
+
