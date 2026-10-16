@@ -53,6 +53,26 @@ def test_fill_ref_in_cross_origin_frame(client, frames_page):
     assert notes and notes[-1] == "cross:hello frame", notes
 
 
+def test_fill_ref_in_same_origin_frame(client, frames_page):
+    t = client("snapshot")["text"]
+    ref = child_ref(t, "same-origin", "textbox", "Note")
+    r = client("fill", {"ref": ref, "text": "hello same"})
+    assert r["success"] and r["match"] is True, r
+    time.sleep(0.3)
+    notes = client("eval", {"code": "window.__notes"})["result"]
+    assert notes and notes[-1] == "same:hello same", notes
+
+
+def test_type_ref_in_cross_origin_frame(client, frames_page):
+    t = client("snapshot")["text"]
+    ref = child_ref(t, "cross-origin", "textbox", "Note")
+    r = client("type", {"ref": ref, "text": "typed", "delay": 5})
+    assert r["success"] and r["match"] is True, r
+    time.sleep(0.3)
+    notes = client("eval", {"code": "window.__notes"})["result"]
+    assert notes and notes[-1] == "cross:typed", notes
+
+
 def test_frames_false_skips_subframes(client, frames_page):
     t = client("snapshot", {"frames": False})["text"]
     assert re.search(r'^- iframe "same-origin"$', t, re.M), t
