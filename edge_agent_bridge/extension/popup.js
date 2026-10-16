@@ -51,6 +51,14 @@ async function updateUI() {
   show("outdated", Boolean(st && st.extension_outdated));
   show("pairing", Boolean(st && st.pairing_required));
   lastStatus = st;
+  try {
+    chrome.storage.local.get(["pairingRejected"], (data) => {
+      if (data && data.pairingRejected) {
+        show("pairing", true);
+        setText("pairMsg", "Pairing rejected: paste the daemon token and save.");
+      }
+    });
+  } catch (e) {}
 
   const pairInput = document.getElementById("pairToken");
   if (pairInput) {

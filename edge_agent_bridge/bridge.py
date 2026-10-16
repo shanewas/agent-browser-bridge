@@ -198,6 +198,12 @@ class BridgeState:
             if self.ext is ws:
                 self.ext = None
                 self.ext_accepted = False
+                # Commands already sent to this socket will never be answered;
+                # fail them now instead of letting callers wait out the timeout.
+                for cmd_id, event in list(self.pending.items()):
+                    self.results[cmd_id] = {"success": False, "code": "extension_offline",
+                                            "error": "Edge extension disconnected while the command was in flight."}
+                    event.set()
 
     def session_create_locked(self, name: str | None = None) -> str:
         token = str(uuid.uuid4())

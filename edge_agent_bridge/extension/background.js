@@ -6,6 +6,7 @@ const WS_URL = "ws://127.0.0.1:18999/ws";
 const MAX_BACKOFF_MS = 5000;
 
 let bridgeWs = null;
+let pairingBlocked = false;
 let wsReconnectTimer = null;
 let wsBackoffMs = 1000;
 let lastLog = "Initializing...";
@@ -30,6 +31,9 @@ async function pairToken() {
 }
 
 function connectWebSocket(force = false) {
+  if (pairingBlocked && !force) {
+    return;
+  }
   if (bridgeWs && (bridgeWs.readyState === WebSocket.CONNECTING || bridgeWs.readyState === WebSocket.OPEN)) {
     return;
   }
@@ -90,8 +94,17 @@ function connectWebSocket(force = false) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       bridgeWs = null;
+      if (event && event.code === 4001) {
+        // Pairing rejected: reconnecting only repeats the rejection every
+        // second. Stay down until a token is saved or Reconnect is clicked
+        // (both arrive as RECONNECT, which connects with force).
+        pairingBlocked = true;
+        try { chrome.storage.local.set({ pairingRejected: true }); } catch (e) {}
+        log("Pairing rejected by the daemon; not reconnecting until a token is saved or Reconnect is clicked");
+        return;
+      }
       scheduleWsReconnect();
     };
 
@@ -121,6 +134,8 @@ function wsConnected() {
 // connectWebSocket() is a no-op while the socket is open or a reconnect timer is pending.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "RECONNECT") {
+    pairingBlocked = false;
+    try { chrome.storage.local.set({ pairingRejected: false }); } catch (e) {}
     if (bridgeWs) {
       try { bridgeWs.close(); } catch (e) {}
     } else {

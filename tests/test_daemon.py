@@ -163,6 +163,31 @@ def test_inflight_timeout_and_late_result_dropped(daemon):
     ext.close()
 
 
+def test_pending_command_fails_fast_when_extension_drops(daemon):
+    # Issue #23: a dropped socket must fail in-flight commands at once.
+    import threading as _t
+
+    def handler(action, params):
+        time.sleep(5)
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    assert _wait_active(daemon)
+    outcome = {}
+
+    def call():
+        outcome["r"] = daemon.exec("click", {"target": "x"}, timeout=20)
+
+    th = _t.Thread(target=call)
+    th.start()
+    time.sleep(0.5)
+    ext.close()
+    th.join(timeout=8)
+    assert not th.is_alive(), "caller still waiting after the socket dropped"
+    code, body = outcome["r"]
+    assert body["code"] == "extension_offline", (code, body)
+
+
 def test_extension_outdated_rewrite(daemon):
     ext = FakeExtension(daemon.port, send_hello=False).connect().run()   # behaves like 1.x
     time.sleep(1.2)
