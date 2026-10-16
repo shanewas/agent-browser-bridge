@@ -222,6 +222,27 @@ def test_cli_run_steps_and_exit_codes(daemon, fake_ext, tmp_path):
     assert len(out.splitlines()) == 1
 
 
+def test_cli_run_tab_forwarded_to_steps(daemon, tmp_path):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "tab": {"id": 77, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    steps = tmp_path / "steps.json"
+    steps.write_text(json.dumps([
+        {"action": "snapshot", "params": {}},
+        {"action": "snapshot", "params": {"tabId": 9}},
+    ]), encoding="utf-8")
+    code, out, err = run_cli(["run", str(steps), "--tab", "77"], env=env)
+    assert code == 0, err
+    assert seen[0][1].get("tabId") == 77, seen
+    assert seen[1][1].get("tabId") == 9, seen
+    ext.close()
+
+
 def test_cli_run_usage_errors(daemon, tmp_path):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["run", str(tmp_path / "missing.json")], env=env)

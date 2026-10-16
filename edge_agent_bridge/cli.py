@@ -269,7 +269,7 @@ def _handle_logs(args, opt_json: bool) -> int:
     return 0
 
 
-def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
+def _handle_run(args, edge: Edge, opt_session, opt_json: bool, opt_tab=None) -> int:
     def usage(msg):
         err = {"success": False, "code": "bad_params", "error": msg}
         if opt_json:
@@ -300,7 +300,10 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
             if args.stop_on_error:
                 break
             continue
-        res = edge.send(step["action"], step.get("params") or {})
+        params = dict(step.get("params") or {})
+        if opt_tab is not None and "tabId" not in params:
+            params["tabId"] = opt_tab
+        res = edge.send(step["action"], params)
         out = {"step": i, "action": step["action"]}
         out.update(res if isinstance(res, dict) else {"success": False, "code": "bad_response"})
         print(json.dumps(out))
@@ -753,7 +756,7 @@ def main(argv=None) -> int:
         return _run_repl(edge)
 
     if args.cmd == "run":
-        return _handle_run(args, edge, opt_session, opt_json)
+        return _handle_run(args, edge, opt_session, opt_json, opt_tab)
 
     # Route status
     if args.cmd == "status":

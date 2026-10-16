@@ -10,6 +10,8 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `run --tab N` forwards `tabId: N` to every step that does not carry its
+  own, instead of running all steps on the focused tab.
 
 ## 2.5.0
 
