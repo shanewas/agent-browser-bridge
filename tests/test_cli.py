@@ -222,6 +222,12 @@ def test_cli_run_steps_and_exit_codes(daemon, fake_ext, tmp_path):
     assert len(out.splitlines()) == 1
 
 
+def test_cli_repl_is_removed():
+    # The repl subcommand is gone (issue #26): argparse rejects it with exit 2.
+    code, out, err = run_cli(["repl"])
+    assert code == 2 and "invalid choice" in err, (code, out, err)
+
+
 def test_cli_run_usage_errors(daemon, tmp_path):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["run", str(tmp_path / "missing.json")], env=env)

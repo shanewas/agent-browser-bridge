@@ -411,34 +411,6 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
     return 0 if res.get("success") else 1
 
 
-def _run_repl(edge: Edge) -> int:
-    print(f"Edge Agent Bridge REPL (port {edge.port}). Type 'help' or action commands, 'exit' to quit.")
-    while True:
-        try:
-            line = input("eab> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not line:
-            continue
-        if line in ("exit", "quit"):
-            break
-        if line == "help":
-            print("Actions: ping, status, tabs, tab, nav <url>, snapshot, click <target>, fill <target> <text>, eval <code>")
-            continue
-        parts = line.split(maxsplit=1)
-        action = parts[0]
-        params = {}
-        if len(parts) > 1:
-            try:
-                params = json.loads(parts[1])
-            except Exception:
-                params = {"target": parts[1]}
-        res = edge.send(action, params)
-        print(json.dumps(res, indent=2))
-    return 0
-
-
 def main(argv=None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output raw result as single JSON line")
@@ -485,8 +457,6 @@ def main(argv=None) -> int:
     p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status"])
     p_daemon.add_argument("--require-pairing", action="store_true", help="Require pairing token")
 
-    # repl
-    add_cmd("repl", help="Interactive REPL session")
 
     # tabs
     add_cmd("tabs", help="List open tabs")
@@ -749,8 +719,6 @@ def main(argv=None) -> int:
     if args.cmd == "session":
         return _handle_session_cmd(args, edge, opt_json)
 
-    if args.cmd == "repl":
-        return _run_repl(edge)
 
     if args.cmd == "run":
         return _handle_run(args, edge, opt_session, opt_json)

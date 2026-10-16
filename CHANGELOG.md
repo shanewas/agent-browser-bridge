@@ -11,6 +11,11 @@
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
 
+### Removed
+
+- `edge-bridge repl`: its line format matched no verb's arguments, and `run`,
+  MCP and the Python API cover the many-steps-in-one-process case.
+
 ## 2.5.0
 
 - PATH-proof entry points: `py -m edge_agent_bridge` and `python -m edge_agent_bridge`
