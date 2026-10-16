@@ -111,7 +111,7 @@ def test_cli_no_fallback_flag_accepted(daemon):
     ext.close()
 
 
-def test_cli_type_mismatch_warns_and_exits_0(daemon):
+def test_cli_type_mismatch_warns_and_exits_1(daemon):
     def handler(action, params):
         if action == "type":
             return {"success": True, "written": "56", "readback": "5", "match": False,
@@ -122,7 +122,7 @@ def test_cli_type_mismatch_warns_and_exits_0(daemon):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["type", "56"], env=env)
     ext.close()
-    assert code == 0, err
+    assert code == 1, err
     assert out.startswith("OK"), out
     assert "Warning (write_mismatch): wrote '56', read back '5'" in err, err
 

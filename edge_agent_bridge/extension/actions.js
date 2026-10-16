@@ -165,10 +165,10 @@ function normalizeReadValue(v) {
   return String(v);
 }
 
-// Rich editors pad innerText with a trailing newline and store typed spaces as U+00A0.
+// Rich editors pad innerText with newlines and store typed spaces as U+00A0.
 function writeMatches(readback, written, field) {
   if (field !== "contenteditable") return readback === written;
-  const norm = (s) => s.replace(/\u00a0/g, " ").replace(/\n$/, "");
+  const norm = (s) => s.replace(/\u00a0/g, " ").replace(/^\n+|\n+$/g, "");
   return norm(readback) === norm(written);
 }
 

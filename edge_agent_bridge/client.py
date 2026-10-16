@@ -428,8 +428,8 @@ class Edge:
                 data["notice"] = "extension predates verified writes; match unknown"
             return data
         # A clearing fill would wipe rich-editor markup, and type's expected value guesses the caret
-        # position, so only a plain input/textarea fill is retried.
-        if action == "type" or data.get("field") not in ("input", "textarea"):
+        # position, so neither is retried.
+        if action == "type" or data.get("field") == "contenteditable":
             return data
         expected = data.get("written")
         if expected is None:

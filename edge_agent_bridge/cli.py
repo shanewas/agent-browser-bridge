@@ -1051,7 +1051,8 @@ def main(argv=None) -> int:
 
     # Determine exit code
     if res.get("success"):
-        return 0
+        # A landed-but-wrong write must stop `&&` chains.
+        return 1 if action in ("type", "fill") and res.get("match") is False else 0
     code = res.get("code")
     if code in ("daemon_unreachable", "missing_token"):
         return 2

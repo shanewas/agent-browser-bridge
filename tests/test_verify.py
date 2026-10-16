@@ -12,7 +12,7 @@ def test_match_true_passthrough():
 
 def test_mismatch_retries_once_then_write_mismatch():
     e = ScriptedEdge([
-        ("fill", {"success": True, "written": "Hello", "readback": "Hell", "match": False, "field": "input"}),
+        ("fill", {"success": True, "written": "Hello", "readback": "Hell", "match": False}),
         ("fill", {"success": True, "written": "Hello", "readback": "Hell!", "match": False}),
     ])
     data = e.send("fill", {"target": "t", "text": "Hello"})
@@ -29,9 +29,17 @@ def test_contenteditable_fill_mismatch_is_not_retried():
     assert data["success"] is True and data["match"] is False and len(e.calls) == 1
 
 
+def test_select_fill_mismatch_still_retries():
+    e = ScriptedEdge([
+        ("fill", {"success": True, "written": "b", "readback": "a", "match": False, "field": "select"}),
+        ("fill", {"success": True, "written": "b", "readback": "b", "match": True}),
+    ])
+    data = e.send("fill", {"target": "t", "text": "b"})
+    assert data["success"] is True and data["retried"] is True
+
 def test_mismatch_retry_success_marks_retried():
     e = ScriptedEdge([
-        ("fill", {"success": True, "written": "ab", "readback": "a", "match": False, "field": "textarea"}),
+        ("fill", {"success": True, "written": "ab", "readback": "a", "match": False}),
         ("fill", {"success": True, "written": "ab", "readback": "ab", "match": True}),
     ])
     data = e.send("fill", {"target": "t", "text": "b", "append": True})
