@@ -447,6 +447,9 @@ class Edge:
     def tabs(self) -> dict:
         return self.send("tabs")
 
+    def ping(self) -> dict:
+        return self.send("ping")
+
     def tab_switch(self, tab_id=None) -> dict:
         p = {}
         if tab_id is not None:

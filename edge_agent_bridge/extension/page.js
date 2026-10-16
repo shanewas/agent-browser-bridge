@@ -663,8 +663,7 @@ export function pageSelect(ref, cx, cy, value, label) {
 }
 
 // Find the file input for an upload target and mark it so the worker can address it over CDP.
-// Pierces open shadow roots (Salesforce Lightning, custom elements); temp-reveals
-// hidden inputs since CDP setFileInputFiles rejects display:none ("Not allowed").
+// Pierces open shadow roots (Salesforce Lightning, custom elements); temp-reveals hidden inputs.
 export function pageMarkUpload(ref, cx, cy) {
   let el = null;
   if (ref && window.__eab && window.__eab.refs) el = window.__eab.refs.get(ref) || null;
