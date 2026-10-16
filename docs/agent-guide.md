@@ -160,6 +160,6 @@ Focus is asserted before every write (≤3 tries) and rechecked after the 1st ch
 
 ## The fallback ladder and `tab_busy`
 
-Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the best match (exact, then case-insensitive, then substring text match), with at most 2 extra scans per call. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
+Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the scan match (exact name, else case-insensitive name, and only when exactly one element matches; substring matches never click), with at most 2 extra scans per call. A scan success reports `ladder.matched: {name, ref}` for the element acted on. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
 
 `tab_busy` means another writer holds your tab's lock (the daemon waits up to 10s for it, never past the call's own timeout). Back off 250ms·2ⁿ with jitter, ≤4 retries, then surface or use another tab.

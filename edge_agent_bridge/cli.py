@@ -1038,7 +1038,14 @@ def main(argv=None) -> int:
             else:
                 tab_info = res.get("tab")
                 tab_str = f" (tab {tab_info['id']})" if isinstance(tab_info, dict) and "id" in tab_info else ""
-                print(f"OK{tab_str}")
+                ladder = res.get("ladder")
+                matched = ladder.get("matched") if isinstance(ladder, dict) else None
+                if isinstance(matched, dict):
+                    print(f'OK{tab_str} via fallback: {action} "{matched.get("name", "")}"')
+                elif isinstance(ladder, dict):
+                    print(f"OK{tab_str} via fallback ({ladder.get('rung')})")
+                else:
+                    print(f"OK{tab_str}")
         else:
             err_code = res.get("code", "error")
             err_msg = res.get("error", "Action failed")

@@ -114,9 +114,47 @@ def test_score_priority_and_dom_tiebreak():
     entries = [{"ref": "e0", "text": "save all"}, {"ref": "e1", "text": "Save"}, {"ref": "e2", "text": "save"}]
     assert score_element_match(entries, "Save")["ref"] == "e1"
     assert score_element_match(entries, "save")["ref"] == "e2"
-    assert score_element_match(entries, "sav")["ref"] == "e0"
+    assert score_element_match(entries, "sav") is None
     assert score_element_match(entries, "zzz") is None
-    assert score_element_match([{"ref": "a", "text": "x"}, {"ref": "b", "text": "x"}], "x")["ref"] == "a"
+    assert score_element_match([{"ref": "a", "text": "x"}, {"ref": "b", "text": "x"}], "x") is None
+
+
+def test_scan_substring_match_never_clicks():
+    # Issue #19 repro: "Delete" must not click "Delete account permanently".
+    e = ScriptedEdge([
+        ("click", {"success": False, "code": "target_not_found", "error": "nf"}),
+        ("click", {"success": False, "code": "target_not_found", "error": "nf"}),
+        ("elements", els("Undo", "Delete account permanently")),
+        ("elements", els("Undo", "Delete account permanently")),
+    ])
+    data = e.send("click", {"target": "Delete"})
+    assert data["success"] is False and data["code"] == "exhausted_fallback"
+    assert all("x" not in c[1] for c in e.calls), e.calls
+
+
+def test_scan_single_case_insensitive_match_reports_matched():
+    e = ScriptedEdge([
+        ("click", {"success": False, "code": "target_not_found", "error": "nf"}),
+        ("click", {"success": False, "code": "target_not_found", "error": "nf"}),
+        ("elements", els("Undo", "delete")),
+        ("click", {"success": True}),
+    ])
+    data = e.send("click", {"target": "Delete"})
+    assert data["success"] is True and data["ladder"]["rung"] == "coords"
+    assert data["ladder"]["matched"] == {"name": "delete", "ref": "e1"}
+    assert e.calls[3][1] == {"x": 10, "y": 20}
+
+
+def test_scan_duplicate_names_exhaust():
+    e = ScriptedEdge([
+        ("click", {"success": False, "code": "target_not_found", "error": "nf"}),
+        ("click", {"success": False, "code": "target_not_found", "error": "nf"}),
+        ("elements", els("Save", "Save")),
+        ("elements", els("Save", "Save")),
+    ])
+    data = e.send("click", {"target": "Save"})
+    assert data["success"] is False and data["code"] == "exhausted_fallback"
+    assert all("x" not in c[1] for c in e.calls), e.calls
 
 
 def test_non_ladder_action_and_code_pass_through():

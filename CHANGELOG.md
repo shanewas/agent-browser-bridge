@@ -10,6 +10,10 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Changed: the fallback ladder's scan rung no longer clicks substring
+  matches or one of several same-named elements; it accepts an exact or
+  case-insensitive name only when exactly one element matches, and reports
+  the element acted on as `ladder.matched`.
 
 ## 2.5.0
 
