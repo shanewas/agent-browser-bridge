@@ -742,7 +742,7 @@ def main(argv=None) -> int:
         port=port,
         highlight=not opt_no_highlight,
         pin=False,
-        auto_start=False,
+        auto_start=args.cmd != "status",
         session_token=opt_session,
     )
 

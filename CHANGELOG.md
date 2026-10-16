@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- CLI commands that talk to the browser start the daemon on first use, as
+  the README already said; `status`, `doctor`, `logs` and `daemon` commands
+  still never start it.
 
 ## 2.5.0
 
