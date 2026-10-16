@@ -15,6 +15,7 @@ def install():
             "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main' | sudo tee /etc/apt/sources.list.d/microsoft-edge.list",
             "sudo apt-get update -qq",
             "sudo apt-get install -y -qq microsoft-edge-stable",
+            "sudo chmod 4755 /opt/microsoft/msedge/msedge-sandbox 2>/dev/null || true",
         ]
         for c in cmds:
             subprocess.run(c, shell=True, check=True)
