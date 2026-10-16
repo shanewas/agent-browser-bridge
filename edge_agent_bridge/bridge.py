@@ -562,7 +562,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if not token_hdr:
                 self._respond(401, {"success": False, "code": "missing_token", "error": "X-Bridge-Token header required"})
                 return
-            if not hmac.compare_digest(token_hdr, state.token):
+            if not hmac.compare_digest(token_hdr.encode("utf-8", "replace"), state.token.encode("utf-8")):
                 self._respond(401, {"success": False, "code": "bad_token", "error": "Invalid token"})
                 return
 
@@ -572,7 +572,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             action = req.get("action")
-            if not action:
+            if not isinstance(action, str) or not action:
                 self._respond(400, {"success": False, "code": "bad_body", "error": "Missing action field"})
                 return
 
@@ -768,6 +768,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _exec_batch(self, state, session_token, session, params, timeout):
         steps = params.get("steps") or []
+        if not isinstance(steps, list):
+            self._respond(400, {"success": False, "code": "bad_body", "error": "steps must be a list"})
+            return
         _strip_session_token(params)
         results = []
         top_tab = params.get("tabId")
