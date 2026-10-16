@@ -10,6 +10,10 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Extension command deadlines: tab-scoped dispatches derive `deadlineMs` from
+  the request timeout rather than a fixed 12 s budget. `wait` and `nav`/`back`/`reload`
+  load waits stop at `deadlineMs` instead of keeping the tab busy, and the daemon
+  cleans up late results on timeout.
 
 ## 2.5.0
 

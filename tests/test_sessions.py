@@ -249,10 +249,16 @@ def test_status_reports_data_dir(daemon):
 def test_deadline_ms_forwarded_for_tab_scoped_only(daemon, fake_ext):
     import time as _t
     before = int(_t.time() * 1000)
-    daemon.exec("click", {"target": "b", "tabId": 3})
+    daemon.exec("click", {"target": "b", "tabId": 3}, timeout=5)
     daemon.exec("ping")
     fwd_click = [m for m in fake_ext.received if m.get("action") == "click"][-1]
     fwd_ping = [m for m in fake_ext.received if m.get("action") == "ping"][-1]
     assert "deadlineMs" in fwd_click["params"]
-    assert before + 9000 < fwd_click["params"]["deadlineMs"] < before + 15000
+    assert before + 3500 < fwd_click["params"]["deadlineMs"] < before + 5500
     assert "deadlineMs" not in fwd_ping["params"]
+
+    before10 = int(_t.time() * 1000)
+    daemon.exec("click", {"target": "b", "tabId": 3}, timeout=10)
+    fwd_click10 = [m for m in fake_ext.received if m.get("action") == "click"][-1]
+    assert "deadlineMs" in fwd_click10["params"]
+    assert before10 + 8500 < fwd_click10["params"]["deadlineMs"] < before10 + 10500
