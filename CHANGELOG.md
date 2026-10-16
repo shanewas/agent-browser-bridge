@@ -10,6 +10,9 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `Doppelhand` calls return `{success: false, code: "doppelhand_unreachable"}`
+  (or `doppelhand_http_<status>`) instead of raising `URLError`; the client
+  and recipe now state the server is Windows only.
 
 ## 2.5.0
 

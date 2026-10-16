@@ -1,11 +1,17 @@
 """Minimal client for a local doppelhand server (native mouse/keyboard/screen).
 
+Windows only: the doppelhand server runs on Windows. Like Edge, calls return
+the raw result dict and never raise on a failed call: connection failures
+return code "doppelhand_unreachable" and HTTP failures return
+"doppelhand_http_<status>".
+
 Doppelhand drives OS-level dialogs the bridge cannot reach (file choosers).
 All mutating calls use POST; the server rejects GET with "use POST".
 Coords are in doppelhand view space (see /screen "view").
 """
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -24,8 +30,15 @@ class Doppelhand:
             self.base_url + path, method=method,
             headers={TOKEN_HEADER: self.token} if self.token else {},
         )
-        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            return {"success": False, "code": f"doppelhand_http_{e.code}",
+                    "error": f"doppelhand server answered HTTP {e.code}"}
+        except (urllib.error.URLError, OSError) as e:
+            return {"success": False, "code": "doppelhand_unreachable",
+                    "error": f"doppelhand server unreachable at {self.base_url}: {e}"}
 
     def screen(self):
         """Display layout: monitors, view size, scale. Read-only."""
