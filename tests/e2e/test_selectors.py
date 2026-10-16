@@ -1,0 +1,46 @@
+import pytest
+
+pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(autouse=True)
+def _nav(client, pages):
+    assert client("nav", {"url": pages + "/selectors.html"})["success"]
+
+
+def _clicked(client, el_id):
+    return client("eval", {"code": f"document.getElementById('{el_id}').dataset.clicked"}).get("result")
+
+
+def test_explicit_selector_main_hits_main_not_button(client):
+    r = client("click", {"selector": "main"})
+    assert r["success"], r
+    assert _clicked(client, "m") == "true"
+    assert _clicked(client, "btnMain") is None
+
+
+def test_target_compound_selectors_resolve(client):
+    r = client("click", {"target": "h2.title"})
+    assert r["success"], r
+    assert _clicked(client, "h") == "true"
+    r = client("click", {"target": "input#email"})
+    assert r["success"], r
+    assert _clicked(client, "email") == "true"
+
+
+def test_target_bare_tag_after_name_matching(client):
+    # A button named "Main" beats the <main> element for target "main"...
+    r = client("click", {"target": "main"})
+    assert r["success"], r
+    assert _clicked(client, "btnMain") == "true"
+    assert _clicked(client, "m") is None
+
+
+def test_target_name_still_resolves(client):
+    r = client("click", {"target": "Save"})
+    assert r["success"], r
+    assert _clicked(client, "btnSave") == "true"
+    # ...and a name that looks like a compound selector falls back to name matching.
+    r = client("click", {"target": "spec.pdf"})
+    assert r["success"], r
+    assert _clicked(client, "pdf") == "true"

@@ -105,7 +105,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
   if (typeof target === "object" && target !== null && target.x !== undefined && target.y !== undefined) {
     return { found: true, x: Number(target.x), y: Number(target.y) };
   }
-  const resolveOpts = { highlight: opts.highlight !== false };
+  const resolveOpts = { highlight: opts.highlight !== false, kind: opts.kind || "target" };
   const frameId = frameOfRef(target);
   if (frameId !== undefined) {
     const live = await probeSubframeIds(tabId);
@@ -134,7 +134,8 @@ async function locate(tabId, p, verb) {
   if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
   const target = p.ref || p.target || p.selector || p.text;
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
-  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+  const kind = p.selector && !p.ref && !p.target ? "selector" : "target";
+  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind });
   if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
   if (frameOfRef(target) !== undefined && r.rendered !== false) {
     // pageResolve ran inside the subframe, blind to main-frame overlays. The top
