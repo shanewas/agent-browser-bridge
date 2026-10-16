@@ -10,6 +10,12 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Changed: tab-less CLI commands follow the tab picked by `switch` or `new`
+  (one shared daemon-side pin, also set by the first successful tab-bound
+  result while empty); when that tab closes outside the bridge they fail
+  with `tab_closed` instead of drifting to the focused tab. `/status`
+  reports it as `pin`. Side effect: a Python `Edge()` with no session now
+  receives the pinned tab instead of the focused one on its first call.
 
 ## 2.5.0
 

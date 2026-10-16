@@ -769,6 +769,8 @@ def main(argv=None) -> int:
                 print(f"Edge Agent Bridge v{res.get('daemon_version') or __version__}")
                 print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
+                if res.get("pin") is not None:
+                    print(f"Pinned tab: {res['pin']}")
                 if sst is not None:
                     if sst.get("success"):
                         if sst.get("tabClosed"):
