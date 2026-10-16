@@ -1015,11 +1015,17 @@ def main(argv=None) -> int:
                 for t in tabs:
                     act = "*" if t.get("active") else " "
                     print(f"  {act} [{t.get('id')}] {t.get('title', '')[:50]} - {t.get('url')}")
+            elif action == "eval":
+                if "result" in res:
+                    v = res["result"]
+                    print(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+            elif action == "text":
+                print(res.get("text", ""))
             elif action == "screenshot":
                 if res.get("path"):
                     print(f"Saved screenshot: {res['path']}")
                 else:
-                    print(f"Screenshot taken ({len(res.get('data', ''))} bytes base64)")
+                    print(f"Screenshot taken ({len(res.get('dataUrl', ''))} bytes base64)")
             elif action == "history_search":
                 items = res.get("items", [])
                 print(f"Found {len(items)} history item(s):")

@@ -10,6 +10,8 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `eval` and `text` print their result in human output instead of `OK`, and
+  a path-less `screenshot` reports the size of the returned `dataUrl`.
 
 ## 2.5.0
 

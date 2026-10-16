@@ -152,6 +152,7 @@ edge-bridge upload e3 C:/tmp/spec.pdf    # WSL /mnt/<drive>/... paths translate 
 edge-bridge wait --text Opened
 edge-bridge wait --idle                   # no in-flight requests; ignores WebSockets
 edge-bridge screenshot out.jpg --of e4
+edge-bridge eval "document.title"         # prints the returned value (here: the page title)
 edge-bridge console                       # console output, exceptions, dialogs
 edge-bridge nav https://example.com
 edge-bridge new https://example.com --group Agent
