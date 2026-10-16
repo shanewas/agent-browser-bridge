@@ -165,6 +165,44 @@ def test_registration_status_reads_json_configs(tmp_path):
         "vscode": "detected", "windsurf": "absent"}
 
 
+def test_registration_status_new_entry_and_stale_interpreter(tmp_path):
+    from edge_agent_bridge.setup import registration_status
+    good_cfg = tmp_path / "cursor-mcp.json"
+    good_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+                        encoding="utf-8")
+    stale_cfg = tmp_path / "windsurf-mcp.json"
+    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_python"), "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+                         encoding="utf-8")
+    detected = {
+        "cli": {},
+        "json": {
+            "cursor": {"path": good_cfg, "found": True},
+            "windsurf": {"path": stale_cfg, "found": True},
+        },
+    }
+    assert registration_status(detected) == {"cursor": "registered", "windsurf": "stale"}
+
+
+def test_doctor_mcp_check_fails_on_stale_registration(monkeypatch, tmp_path, capsys):
+    from edge_agent_bridge import cli
+    stale_cfg = tmp_path / "cursor-mcp.json"
+    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_venv" / "python"), "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+                         encoding="utf-8")
+    detected = {
+        "cli": {},
+        "json": {"cursor": {"path": stale_cfg, "found": True}},
+    }
+    monkeypatch.setattr("edge_agent_bridge.setup.registration_status", lambda: {"cursor": "stale"})
+    monkeypatch.setattr("edge_agent_bridge.cli._is_elevated", lambda: False)
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
+    assert rc == 1
+    assert by_name["mcp"]["ok"] is False
+    assert "cursor=stale" in by_name["mcp"]["detail"]
+    assert "run edge-bridge setup to re-register" in by_name["mcp"]["fix"]
+
+
+
 def test_doctor_launcher_stale_install(tmp_path):
     scripts = sysconfig.get_path("scripts")
     launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"

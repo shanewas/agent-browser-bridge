@@ -10,6 +10,10 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `edge-bridge setup` registers the absolute interpreter path
+  `[sys.executable, "-m", "edge_agent_bridge", "mcp"]` at user scope across
+  clients, runs npm CLI registrations via their resolved binary paths, and
+  flags missing or stale interpreter paths in `doctor`.
 
 ## 2.5.0
 

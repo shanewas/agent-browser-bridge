@@ -12,28 +12,44 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-SERVER_ENTRY = {"command": "edge-bridge", "args": ["mcp"]}
+def _server_entry() -> dict:
+    return {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}
+
+
+SERVER_ENTRY = _server_entry()
 
 # VS Code keys its mcp.json on "servers"; Cursor and Windsurf use "mcpServers".
 SERVER_KEY = {"cursor": "mcpServers", "windsurf": "mcpServers", "vscode": "servers"}
 
+
+def get_cli_command(client: str, binary_path: str | None = None) -> list[str]:
+    base = binary_path or client
+    if client == "claude":
+        return [base, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+    if client == "gemini":
+        return [base, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+    if client == "codex":
+        return [base, "mcp", "add", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+    return [base]
+
+
 # argv rather than a shell string: nothing here reaches a shell interpreter.
 CLI_COMMAND = {
-    "claude": ["claude", "mcp", "add", "edge", "--", "edge-bridge", "mcp"],
-    "gemini": ["gemini", "mcp", "add", "edge", "edge-bridge", "mcp"],
-    "codex": ["codex", "mcp", "add", "edge", "--", "edge-bridge", "mcp"],
+    "claude": ["claude", "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"],
+    "gemini": ["gemini", "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"],
+    "codex": ["codex", "mcp", "add", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"],
 }
 
 
 def _template(client: str) -> dict:
-    return {SERVER_KEY.get(client, "mcpServers"): {"edge": dict(SERVER_ENTRY)}}
+    return {SERVER_KEY.get(client, "mcpServers"): {"edge": _server_entry()}}
 
 
 def get_mcp_config(client: str) -> str:
     """Return the exact command line or JSON configuration snippet for a client."""
     client = client.lower().strip()
     if client in CLI_COMMAND:
-        return " ".join(CLI_COMMAND[client])
+        return " ".join(get_cli_command(client))
     if client in SERVER_KEY:
         return json.dumps(_template(client), indent=2)
     return f"# Unknown client '{client}'. Use one of: claude, gemini, codex, cursor, windsurf, vscode"
@@ -63,7 +79,7 @@ def merge_json_config(path: Path, client: str = "cursor") -> tuple[bool, str]:
         if key not in data or not isinstance(data[key], dict):
             data[key] = {}
 
-        data[key]["edge"] = dict(SERVER_ENTRY)
+        data[key]["edge"] = _server_entry()
         _write_atomic(p, json.dumps(data, indent=2) + "\n")
         return True, f"Updated {p} (backup saved to {bak_path.name})"
     else:
@@ -127,7 +143,8 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
     """Read-only check of which clients have the edge server registered.
 
     Returns per-client status: "registered" (JSON config contains the edge
-    entry), "detected" (client present, registration unknown), or "absent".
+    entry), "stale" (edge entry points to a missing interpreter),
+    "detected" (client present, registration unknown), or "absent".
     CLI clients can't be queried without their own tooling, so they never
     report "registered" here.
     """
@@ -146,8 +163,28 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
                 entry = sub.get("edge") if isinstance(sub, dict) else None
         except Exception:
             entry = None
-        if isinstance(entry, dict) and entry.get("command") == "edge-bridge":
-            out[name] = "registered"
+
+        is_edge = False
+        is_stale = False
+        if isinstance(entry, dict):
+            cmd = entry.get("command")
+            args = entry.get("args") or []
+            if cmd == "edge-bridge":
+                is_edge = True
+            elif isinstance(args, list) and len(args) >= 3 and args[:2] == ["-m", "edge_agent_bridge"] and args[2] == "mcp":
+                is_edge = True
+                if cmd:
+                    exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
+                    if not exists:
+                        is_stale = True
+            elif isinstance(cmd, str) and (cmd.endswith("edge-bridge") or cmd.endswith("edge-bridge.exe")):
+                is_edge = True
+                exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
+                if not exists:
+                    is_stale = True
+
+        if is_edge:
+            out[name] = "stale" if is_stale else "registered"
         elif info.get("found"):
             out[name] = "detected"
         else:
@@ -231,7 +268,7 @@ def setup_cli(yes: bool = False) -> int:
     targets_cli = []
     for name, path in detected["cli"].items():
         if path:
-            targets_cli.append(name)
+            targets_cli.append((name, path))
 
     targets_json = []
     for name, info in detected["json"].items():
@@ -246,8 +283,8 @@ def setup_cli(yes: bool = False) -> int:
         return 0
 
     print("\nDetected clients:")
-    for c in targets_cli:
-        print(f"  - CLI: {c} ({detected['cli'][c]})")
+    for c, path in targets_cli:
+        print(f"  - CLI: {c} ({path})")
     for name, path in targets_json:
         print(f"  - App: {name} ({path})")
 
@@ -262,10 +299,11 @@ def setup_cli(yes: bool = False) -> int:
             return 0
 
     # Configure CLI clients
-    for c in targets_cli:
+    for c, path in targets_cli:
         print(f"\nConfiguring {c}...")
         try:
-            subprocess.run(CLI_COMMAND[c], check=True)
+            cmd = get_cli_command(c, binary_path=path)
+            subprocess.run(cmd, check=True)
             print(f"  Successfully added edge MCP to {c}")
         except Exception as err:
             print(f"  Failed to configure {c}: {err}")
