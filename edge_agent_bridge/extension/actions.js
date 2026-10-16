@@ -1,6 +1,6 @@
 // Edge Agent Bridge - command router. dispatch() resolves the tab and serializes per tab;
 // execute() is the action switch and is re-entrant (batch calls it directly).
-import { ensureDebugger, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
+import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
 import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
 import * as page from "./page.js";
 import { frameOfRef, probeSubframeIds, snapshotTab as framesSnapshotTab } from "./frames.js";
@@ -407,9 +407,12 @@ export async function execute(cmd) {
         if (!mark || mark.success === false) return mark || fail("no_file_input", "No file input found");
         try {
           const hasDbg = await attach(tabId);
-          if (!hasDbg) return fail("debugger_unavailable", "upload needs the debugger permission");
+          if (!hasDbg) return fail("debugger_unavailable", getDebuggerError(tabId) || "upload needs the debugger permission");
           await setFileInputFiles(tabId, '[data-eab-upload="1"]', files);
         } catch (e) {
+          if (e.message && (e.message.includes("Debugger is not attached") || e.message.includes("not attached"))) {
+            return fail("debugger_unavailable", e.message);
+          }
           return fail("upload_failed", e.message);
         } finally {
           execInTab(tabId, page.pageUnmarkUpload, []).catch(() => {});
@@ -470,7 +473,12 @@ export async function execute(cmd) {
         if (prev && prev.id !== tab.id) {
           try { await chrome.tabs.update(prev.id, { active: true }); } catch (e) {}
         }
-        return { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
+        const out = { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
+        if (!hasDbg) {
+          out.native = false;
+          out.debuggerError = getDebuggerError(tabId);
+        }
+        return out;
       }
 
       case "click":
@@ -497,7 +505,8 @@ export async function execute(cmd) {
           return { success: true, x, y, native: true, ...info };
         }
         const fallback = action === "click" ? page.pageClickAt : (action === "dblclick" ? page.pageDblclickAt : page.pageRightClickAt);
-        return await execInTab(tabId, fallback, [x, y]);
+        const res = await execInTab(tabId, fallback, [x, y]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId), ...info } : res;
       }
 
       case "move":
@@ -514,7 +523,8 @@ export async function execute(cmd) {
           }
           return { success: true, x, y, native: true, ...info };
         }
-        return await execInTab(tabId, page.pageMoveAt, [x, y]);
+        const res = await execInTab(tabId, page.pageMoveAt, [x, y]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId), ...info } : res;
       }
 
       case "drag": {
@@ -533,7 +543,7 @@ export async function execute(cmd) {
           toY = rTo.y;
         }
         const hasDbg = await attach(tabId);
-        if (!hasDbg) return fail("debugger_unavailable", "Native drag requires debugger permission");
+        if (!hasDbg) return fail("debugger_unavailable", getDebuggerError(tabId) || "Native drag requires debugger permission");
         const onStep = p.highlight === false ? null : (cx, cy) => execInTab(tabId, page.pageCursor, [cx, cy, false]).catch(() => {});
         await nativeDrag(tabId, Number(fromX), Number(fromY), Number(toX), Number(toY), Number(p.steps || 12), onStep);
         return { success: true, fromX: Number(fromX), fromY: Number(fromY), toX: Number(toX), toY: Number(toY), native: true };
@@ -679,11 +689,15 @@ export async function execute(cmd) {
           await sleep(100);
           const rb = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           if (!rb || rb.success === false || rb.verifiable === false || rb.present === false) {
-            return { success: true, text, native: hasDbg, chars: chars.length, written: valueBefore === null ? text : valueBefore + text, readback: null, match: "unknown" };
+            const out = { success: true, text, native: hasDbg, chars: chars.length, written: valueBefore === null ? text : valueBefore + text, readback: null, match: "unknown" };
+            if (!hasDbg) out.debuggerError = getDebuggerError(tabId);
+            return out;
           }
           const written = valueBefore === null ? text : valueBefore + text;
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: readback === written };
+          const out = { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: readback === written };
+          if (!hasDbg) out.debuggerError = getDebuggerError(tabId);
+          return out;
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
@@ -722,6 +736,7 @@ export async function execute(cmd) {
           const asserted = await preAssertFocus(tabId, frameId, mode, uuid);
           if (!asserted.ok) return asserted.result;
           let native = false;
+          let fillDbgError = null;
           if (hasDbg && hasPoint) {
             try {
               await nativeClick(tabId, pt.x, pt.y, "left", 1);
@@ -733,6 +748,7 @@ export async function execute(cmd) {
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
+              fillDbgError = e.message;
             }
           }
           if (!native) {
@@ -746,10 +762,14 @@ export async function execute(cmd) {
           const rb = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           const written = shouldClear ? text : valueBefore + text;
           if (!rb || rb.success === false || rb.verifiable === false || rb.present === false) {
-            return { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
+            const out = { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
+            if (!native) out.debuggerError = getDebuggerError(tabId) || fillDbgError;
+            return out;
           }
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native, written, readback, match: readback === written, ...targetInfo };
+          const out = { success: true, text, native, written, readback, match: readback === written, ...targetInfo };
+          if (!native) out.debuggerError = getDebuggerError(tabId) || fillDbgError;
+          return out;
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
@@ -762,7 +782,8 @@ export async function execute(cmd) {
           await nativeKey(tabId, p.key);
           return { success: true, key: p.key, native: true };
         }
-        return await execInTab(tabId, page.pagePressKey, [p.key]);
+        const res = await execInTab(tabId, page.pagePressKey, [p.key]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId) } : res;
       }
 
       case "scroll": {
@@ -771,7 +792,8 @@ export async function execute(cmd) {
           await nativeScroll(tabId, 500, 300, Number(p.x || 0), Number(p.y || 300));
           return { success: true, scrollX: p.x || 0, scrollY: p.y || 300, native: true };
         }
-        return await execInTab(tabId, page.pageScroll, [Number(p.x || 0), Number(p.y || 0)]);
+        const res = await execInTab(tabId, page.pageScroll, [Number(p.x || 0), Number(p.y || 0)]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId) } : res;
       }
 
       case "snapshot": {
@@ -808,6 +830,7 @@ export async function execute(cmd) {
       case "eval": {
         if (p.code === undefined) return fail("bad_params", "eval requires code");
         const hasDbg = await ensureDebugger(tabId);
+        let cdpError = null;
         if (hasDbg) {
           try {
             const res = await cdpSend(tabId, "Runtime.evaluate", {
@@ -823,10 +846,17 @@ export async function execute(cmd) {
             }
             return { success: true, result: res.result ? res.result.value : undefined };
           } catch (cdpErr) {
+            cdpError = cdpErr.message;
             // CDP not available for this tab — fall through to execInTab
           }
+        } else {
+          cdpError = getDebuggerError(tabId);
         }
-        return await execInTab(tabId, page.pageEval, [p.code], "MAIN");
+        const r = await execInTab(tabId, page.pageEval, [p.code], "MAIN");
+        if (r && r.success === false && cdpError) {
+          r.debuggerError = cdpError;
+        }
+        return r;
       }
 
       case "check_radio":
@@ -849,7 +879,14 @@ export async function execute(cmd) {
     }
   } catch (err) {
     log(`Error in ${action}: ${err.message}`);
-    return fail("internal_error", err.message);
+    const msg = err.message || "";
+    if (msg.includes("No tab with given id")) {
+      return fail("tab_not_found", msg);
+    }
+    if (err.code === "debugger_unavailable" || msg.includes("Debugger is not attached") || msg.includes("not attached")) {
+      return fail("debugger_unavailable", msg);
+    }
+    return fail("internal_error", msg);
   }
 }
 

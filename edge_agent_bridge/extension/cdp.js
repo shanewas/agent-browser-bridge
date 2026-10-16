@@ -1,41 +1,31 @@
 // Edge Agent Bridge - chrome.debugger session cache, CDP input helpers, per-tab command queue.
 
 const attachedTabs = new Set();
+const debuggerErrors = new Map();
 
-function isDebuggerAttached(tabId) {
-  return new Promise((resolve) => {
-    try {
-      chrome.debugger.getTargets((targets) => {
-        if (chrome.runtime.lastError || !targets) return resolve(false);
-        const t = targets.find(target => target.tabId === Number(tabId));
-        resolve(Boolean(t && t.attached));
-      });
-    } catch (e) {
-      resolve(false);
-    }
-  });
+export function getDebuggerError(tabId) {
+  return debuggerErrors.get(tabId) || null;
 }
 
 export async function ensureDebugger(tabId) {
   if (attachedTabs.has(tabId)) return true;
-  const attached = await isDebuggerAttached(tabId);
-  if (attached) {
-    attachedTabs.add(tabId);
-    return true;
-  }
   return new Promise((resolve) => {
     chrome.debugger.attach({ tabId }, "1.3", () => {
       if (chrome.runtime.lastError) {
-        const msg = (chrome.runtime.lastError.message || "").toLowerCase();
-        if (msg.includes("already attached")) {
+        const msg = chrome.runtime.lastError.message || "";
+        const lower = msg.toLowerCase();
+        if (lower.includes("already attached")) {
           attachedTabs.add(tabId);
+          debuggerErrors.delete(tabId);
           return resolve(true);
         }
         attachedTabs.delete(tabId);
+        debuggerErrors.set(tabId, msg);
         console.log(`[Edge Bridge] CDP attach failed for tab ${tabId}: ${msg}`);
         return resolve(false);
       }
       attachedTabs.add(tabId);
+      debuggerErrors.delete(tabId);
       resolve(true);
     });
   });
@@ -44,6 +34,7 @@ export async function ensureDebugger(tabId) {
 chrome.debugger.onDetach.addListener((source, reason) => {
   if (source && source.tabId) {
     attachedTabs.delete(source.tabId);
+    debuggerErrors.delete(source.tabId);
     console.log(`[Edge Bridge] CDP detached from tab ${source.tabId}: ${reason}`);
   }
 });
@@ -60,7 +51,12 @@ export async function cdpSend(tabId, method, params = {}) {
   });
   try {
     if (!attachedTabs.has(tabId)) {
-      await ensureDebugger(tabId);
+      const ok = await ensureDebugger(tabId);
+      if (!ok) {
+        const err = new Error(debuggerErrors.get(tabId) || "Debugger attach failed");
+        err.code = "debugger_unavailable";
+        throw err;
+      }
     }
     return await sendOnce();
   } catch (err) {
@@ -93,6 +89,7 @@ export function runOnTab(tabId, fn) {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedTabs.delete(tabId);
+  debuggerErrors.delete(tabId);
   tabQueues.delete(tabId);
 });
 
