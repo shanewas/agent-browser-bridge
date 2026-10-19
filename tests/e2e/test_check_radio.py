@@ -23,7 +23,15 @@ def test_check_radio_by_label_text(client):
 def test_check_radio_on_role_radio_group(client):
     r = client("check_radio", {"selector": "#role-completed"})
     assert r["success"], r
+    assert r["checked"] is True, r
     assert _checked(client, "role-completed") is True
+    assert _checked(client, "role-in-progress") is False
+
+
+def test_check_radio_reports_a_role_radio_that_ignores_the_click(client):
+    r = client("check_radio", {"selector": "#role-dead"})
+    assert r.get("checked") is False, r
+    assert _checked(client, "role-dead") is False
 
 
 def test_check_radio_by_ref(client):

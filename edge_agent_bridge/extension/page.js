@@ -849,9 +849,7 @@ export function pageCheckRadio(target, value, isExplicitSelector) {
     inp.dispatchEvent(new Event("input", { bubbles: true }));
     inp.dispatchEvent(new Event("change", { bubbles: true }));
   } else {
-    if (el.getAttribute("role") === "radio" || el.getAttribute("role") === "checkbox") {
-      el.setAttribute("aria-checked", "true");
-    }
+    // Report the widget's own aria-checked; writing it here would fake the app's state.
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }

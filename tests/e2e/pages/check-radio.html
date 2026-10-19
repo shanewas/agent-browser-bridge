@@ -20,6 +20,11 @@
     <div role="radio" id="role-completed" tabindex="-1" aria-checked="false">Completed</div>
   </div>
 
+  <!-- role="radio" that ignores clicks -->
+  <div role="radiogroup" aria-label="Dead Group" id="dead-group">
+    <div role="radio" id="role-dead" tabindex="0" aria-checked="false">Frozen</div>
+  </div>
+
   <!-- Non-ASCII and slash label -->
   <fieldset id="jp-group">
     <legend>Progress</legend>
@@ -31,5 +36,13 @@
     <legend>Special</legend>
     <label><input type="radio" name="special" id="opt-special" value='val"foo]'> Complex value</label>
   </fieldset>
+  <script>
+    for (const r of document.querySelectorAll("#role-group [role=radio]")) {
+      r.addEventListener("click", () => {
+        for (const s of document.querySelectorAll("#role-group [role=radio]")) s.setAttribute("aria-checked", "false");
+        r.setAttribute("aria-checked", "true");
+      });
+    }
+  </script>
 </body>
 </html>
