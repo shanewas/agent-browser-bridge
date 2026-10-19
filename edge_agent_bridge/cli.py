@@ -275,9 +275,14 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
     try:
         reg = registration_status()
         detail = ", ".join(f"{k}={v}" for k, v in sorted(reg.items()))
+        has_stale = any(v == "stale" for v in reg.values())
+        if has_stale:
+            add("mcp", False, detail or "no clients found", "run edge-bridge setup to re-register")
+        else:
+            add("mcp", True, detail or "no clients found", "")
     except Exception as e:
         detail = f"check failed: {e}"
-    add("mcp", True, detail or "no clients found", "")
+        add("mcp", True, detail, "")
 
     if opt_json:
         print(json.dumps({"success": all(c["ok"] for c in checks), "checks": checks}))

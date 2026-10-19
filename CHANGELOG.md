@@ -63,6 +63,10 @@
   matches or one of several same-named elements; it accepts an exact or
   case-insensitive name only when exactly one element matches, and reports
   the element acted on as `ladder.matched`.
+- `edge-bridge setup` registers the absolute interpreter path
+  `[sys.executable, "-m", "edge_agent_bridge", "mcp"]` at user scope across
+  clients, runs npm CLI registrations via their resolved binary paths, and
+  flags missing or stale interpreter paths in `doctor`.
 
 ## 2.5.0
 
