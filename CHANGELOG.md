@@ -86,6 +86,9 @@
   non-ASCII or punctuation-heavy label strings.
 - The MCP server answers a JSON array or scalar line with `-32600 Invalid
   Request` and keeps serving, instead of exiting.
+- `Doppelhand` calls return `{success: false, code: "doppelhand_unreachable"}`
+  (or `doppelhand_http_<status>`) instead of raising `URLError`; the client
+  and recipe now state the server is Windows only.
 
 ## 2.5.0
 

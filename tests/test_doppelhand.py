@@ -73,6 +73,31 @@ def test_type_file_and_confirm_chains(server):
     assert len(Handler.calls) == 2
 
 
+def test_unreachable_server_returns_result_not_raise():
+    # Nothing listens on this port: calls return a failure dict (issue #31).
+    dh = Doppelhand(base_url="http://127.0.0.1:1", timeout=2)
+    r = dh.screen()
+    assert r["success"] is False and r["code"] == "doppelhand_unreachable", r
+
+
+def test_http_error_returns_result_not_raise():
+    class ErrHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(503)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), ErrHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        r = Doppelhand(base_url=f"http://127.0.0.1:{httpd.server_port}", timeout=2).screen()
+    finally:
+        httpd.shutdown()
+    assert r["success"] is False and r["code"] == "doppelhand_http_503", r
+
+
 def test_css_to_view_center():
     x, y = Doppelhand.css_to_view({"x": 100, "y": 50, "width": 200, "height": 100}, (1000, 500), (1280, 720))
     assert (x, y) == (256, 144)
