@@ -1093,6 +1093,11 @@ def main(argv=None) -> int:
                 tab_info = res.get("tab")
                 tab_str = f" (tab {tab_info['id']})" if isinstance(tab_info, dict) and "id" in tab_info else ""
                 print(f"OK{tab_str}")
+                if action in ("type", "fill") and res.get("match") is False:
+                    print(f"Warning (write_mismatch): wrote {res.get('written')!r}, read back {res.get('readback')!r}",
+                          file=sys.stderr)
+                elif action in ("type", "fill") and res.get("match") == "unknown":
+                    print("Warning: write not verified", file=sys.stderr)
         else:
             err_code = res.get("code", "error")
             err_msg = res.get("error", "Action failed")
@@ -1100,7 +1105,8 @@ def main(argv=None) -> int:
 
     # Determine exit code
     if res.get("success"):
-        return 0
+        # A landed-but-wrong write must stop `&&` chains.
+        return 1 if action in ("type", "fill") and res.get("match") is False else 0
     code = res.get("code")
     if code in ("daemon_unreachable", "missing_token"):
         return 2

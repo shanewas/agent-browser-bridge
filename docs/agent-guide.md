@@ -148,8 +148,9 @@ moves tabs into an existing group, or a new one when `groupId` is omitted;
 `edge_fill`/`edge_type` verify every write. Results carry `written` (expected full value), `readback` (value read back after 100ms), and `match`:
 
 - `match: true` — written value confirmed.
-- `match: false` — the client already retried once with fill semantics; a second mismatch returns `write_mismatch` with `{expected, readback, attempts: 2}`. Report both values and STOP; do not continue silently.
-- `match: "unknown"` — the extension predates readback (check `edge-bridge status`: old `extension_version` means expected degradation, new version means broken readback). The client warns once and continues unverified.
+- `match: false` — the readback differs from `written`. Results also carry `field` (`input`, `textarea`, `contenteditable`, ...). A `fill` is retried once as a clearing fill unless `field` is `contenteditable`; a second mismatch returns `write_mismatch` with `{expected, readback, attempts: 2}`. `type` and contenteditable fills are never retried: they return `match: false` with `written` and `readback` and leave the field alone, because `type` assumes the caret sat at the end and a clearing fill would wipe the editor's markup. The CLI prints `Warning (write_mismatch): wrote ..., read back ...` to stderr and exits 1, so `&&` chains stop. Compare the two values; if the text is wrong, report both and STOP.
+- Contenteditable comparisons ignore leading and trailing newlines and treat U+00A0 as a space.
+- `match: "unknown"` — the value could not be read back (element gone or not readable), or the extension predates readback (check `edge-bridge status`: old `extension_version` means expected degradation, new version means broken readback). A retry that comes back unknown is returned as unknown, not `write_mismatch`. The client warns once about an old extension and continues unverified; the CLI prints `Warning: write not verified` to stderr and exits 0.
 
 Focus is asserted before every write (≤3 tries) and rechecked after the 1st char and every 8 chars while typing:
 

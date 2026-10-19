@@ -427,6 +427,10 @@ class Edge:
                       file=sys.stderr)
                 data["notice"] = "extension predates verified writes; match unknown"
             return data
+        # A clearing fill would wipe rich-editor markup, and type's expected value guesses the caret
+        # position, so neither is retried.
+        if action == "type" or data.get("field") == "contenteditable":
+            return data
         expected = data.get("written")
         if expected is None:
             expected = params.get("text", "")
@@ -434,7 +438,7 @@ class Edge:
         retry_params["text"] = expected
         retry_params["clear"] = True
         retry = self._send_once("fill", retry_params, timeout)
-        if retry.get("success") and retry.get("match") is True:
+        if retry.get("success") and retry.get("match") in (True, "unknown"):
             retry["retried"] = True
             return retry
         return {"success": False, "code": "write_mismatch",

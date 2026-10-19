@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Verified writes no longer clear the field: `type` is never retried, the clearing
+  `fill` retry skips contenteditable targets, contenteditable readback ignores
+  leading and trailing newlines and U+00A0, and an unreadable retry returns
+  `match: "unknown"` instead of `write_mismatch`. The CLI warns on stderr when a
+  write is unverified and exits 1 on a mismatch (#6).
 - macOS: the daemon no longer blocks about 30 s in `socket.getfqdn()` before it
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
