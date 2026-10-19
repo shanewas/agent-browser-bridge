@@ -38,6 +38,9 @@
   own, instead of running all steps on the focused tab.
 - `eval` and `text` print their result in human output instead of `OK`, and
   a path-less `screenshot` reports the size of the returned `dataUrl`.
+- `fill` and `type` work on inputs inside open shadow roots (including two
+  roots deep): focus assertion and readback step into shadow roots instead
+  of stopping at the host and failing with `focus_lost`.
 
 ## 2.5.0
 
