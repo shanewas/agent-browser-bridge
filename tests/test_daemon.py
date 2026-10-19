@@ -27,6 +27,23 @@ def _wait_closed(ext, timeout=5):
 def test_status_reports_running(daemon):
     st = daemon.status()
     assert st["bridge_running"] is True
+    assert st["pid"] == int((daemon.home / "bridge.pid").read_text(encoding="utf-8"))
+
+
+def test_second_daemon_on_busy_port_exits_1(daemon):
+    # Windows SO_REUSEADDR let a second daemon bind the live port and overwrite bridge.pid (#5).
+    import os
+    import subprocess
+    import sys
+    from tests.support import ROOT
+    first_pid = (daemon.home / "bridge.pid").read_text(encoding="utf-8")
+    env = dict(os.environ, EDGE_BRIDGE_HOME=str(daemon.home), EDGE_BRIDGE_PORT=str(daemon.port))
+    res = subprocess.run([sys.executable, "-u", "-m", "edge_agent_bridge.bridge", "--port", str(daemon.port)],
+                         cwd=ROOT, env=env, capture_output=True, timeout=30)
+    assert res.returncode == 1
+    assert "Daemon crashed:" in (daemon.home / "bridge.log").read_text(encoding="utf-8")
+    assert (daemon.home / "bridge.pid").read_text(encoding="utf-8") == first_pid
+    assert daemon.status()["bridge_running"] is True
 
 
 def test_ping_roundtrip_via_fake_extension(daemon, fake_ext):

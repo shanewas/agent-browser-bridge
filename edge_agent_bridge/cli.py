@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import sysconfig
@@ -28,28 +29,76 @@ if sys.platform == "win32":
         pass
 
 
+def _probe_status(port: int) -> dict:
+    """/status with a short timeout and no auto-start, so stop never blocks on a hung daemon."""
+    with Edge(port=port, timeout=2, auto_start=False) as client:
+        return client.status()
+
+
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        # os.kill(pid, 0) terminates the process on Windows.
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace").stdout
+        return str(pid) in out.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _port_listening(port: int) -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
 def _handle_daemon_cmd(args, port: int) -> int:
     sub = args.daemon_action
     pid_p = config.pid_path()
 
     if sub == "stop":
-        if pid_p.exists():
-            try:
-                pid = int(pid_p.read_text(encoding="utf-8").strip())
-                if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    os.kill(pid, signal.SIGTERM)
-                print(f"Stopped daemon (PID {pid})")
-            except Exception as e:
-                print(f"Error stopping daemon: {e}")
-            finally:
-                try:
-                    pid_p.unlink(missing_ok=True)
-                except Exception:
-                    pass
-        else:
+        if not pid_p.exists():
             print("Daemon PID file not found")
+            return 0
+        try:
+            pid = int(pid_p.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError) as e:
+            print(f"Error stopping daemon: {e}")
+            pid_p.unlink(missing_ok=True)
+            return 0
+        if not getattr(args, "force", False):
+            st = _probe_status(port)
+            if st.get("bridge_running") and "pid" not in st:
+                # An answer proves a bridge runs on the port, not that bridge.pid names it.
+                print(f"The daemon on 127.0.0.1:{port} predates pid reporting, so PID {pid} cannot be confirmed. "
+                      "Run: edge-bridge daemon stop --force", file=sys.stderr)
+                return 1
+            if not st.get("bridge_running") and _pid_alive(pid) and _port_listening(port):
+                print(f"PID {pid} is alive and 127.0.0.1:{port} accepts connections but does not answer /status. "
+                      "If that is a hung daemon, run: edge-bridge daemon stop --force", file=sys.stderr)
+                return 1
+            if st.get("pid") != pid:
+                pid_p.unlink(missing_ok=True)
+                print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
+                return 0
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            print(f"Stopped daemon (PID {pid})")
+        except Exception as e:
+            print(f"Error stopping daemon: {e}")
+        finally:
+            try:
+                pid_p.unlink(missing_ok=True)
+            except Exception:
+                pass
         return 0
 
     elif sub == "start":
@@ -66,15 +115,22 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     elif sub == "restart":
-        _handle_daemon_cmd(argparse.Namespace(daemon_action="stop"), port)
-        time.sleep(0.5)
+        rc = _handle_daemon_cmd(argparse.Namespace(daemon_action="stop", force=getattr(args, "force", False)), port)
+        if rc:
+            return rc
+        deadline = time.time() + 5
+        while (st := _probe_status(port)).get("bridge_running") and time.time() < deadline:
+            time.sleep(0.2)
+        if st.get("bridge_running"):
+            print(f"Daemon PID {st.get('pid', '?')} still answers on 127.0.0.1:{port}; not restarted", file=sys.stderr)
+            return 1
         return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=False), port)
 
     elif sub == "status":
         with Edge(port=port, auto_start=False) as client:
-            st, pid = _status_data(client, port)
+            st = client.status()
         if st.get("bridge_running"):
-            print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
+            print(f"Daemon: running on 127.0.0.1:{port} (PID {st.get('pid', '?')})")
             print(f"Extension: {st.get('extension_version', 'none')} ({'connected' if st.get('websocket_active') else 'disconnected'})")
             return 0
         else:
@@ -82,19 +138,6 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     return 3
-
-
-def _status_data(edge: Edge, port: int):
-    """Fetch /status plus the pid-file pid. Both status verbs share this."""
-    res = edge.status()
-    pid = "?"
-    try:
-        pid_file = config.pid_path()
-        if pid_file.exists():
-            pid = pid_file.read_text(encoding="utf-8").strip()
-    except Exception:
-        pass
-    return res, pid
 
 
 def _is_elevated() -> bool:
@@ -484,6 +527,8 @@ def main(argv=None) -> int:
     p_daemon = add_cmd("daemon", help="Manage daemon process")
     p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status"])
     p_daemon.add_argument("--require-pairing", action="store_true", help="Require pairing token")
+    p_daemon.add_argument("--force", action="store_true",
+                          help="stop/restart: kill the PID in bridge.pid even if /status does not confirm it")
 
     # repl
     add_cmd("repl", help="Interactive REPL session")
@@ -757,7 +802,7 @@ def main(argv=None) -> int:
 
     # Route status
     if args.cmd == "status":
-        res, pid = _status_data(edge, port)
+        res = edge.status()
         sst = None
         if res.get("success") and opt_session:
             sst = edge._send_once("session_status", {})
@@ -767,7 +812,7 @@ def main(argv=None) -> int:
         else:
             if res.get("success"):
                 print(f"Edge Agent Bridge v{res.get('daemon_version') or __version__}")
-                print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
+                print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
                 if sst is not None:
                     if sst.get("success"):
