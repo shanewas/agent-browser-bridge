@@ -36,8 +36,8 @@ class EdgeProcess:
             "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
             "--window-size=1280,900", "about:blank",
         ]
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            args.append("--no-sandbox")
+        if sys.platform.startswith("linux") or (hasattr(os, "geteuid") and os.geteuid() == 0):
+            args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
         self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return self
 
