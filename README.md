@@ -132,7 +132,7 @@ with Edge() as browser:
 ```
 
 The daemon starts on first use. `Edge` pins itself to the tab of its first result, so a later call
-can't drift onto a different tab because you switched windows in the meantime. Methods return the
+can't drift onto a different tab because you switched windows in the meantime. Bare CLI commands share one daemon-side pin instead: `switch` and `new` set it, tab-less commands keep acting on that tab, and `--tab` stays a one-shot override; several agents at once still need one session each. Methods return the
 raw result dict and never raise on a failed action: check `success`, read `code` and `error`.
 
 ---

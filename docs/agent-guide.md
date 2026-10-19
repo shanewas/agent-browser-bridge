@@ -40,7 +40,7 @@ Every result carries `tab: {id, title, url}`. If the user didn't name a page, co
 first snapshot that you are on the one they meant before you type into it. Your session pins
 to that tab afterwards, so a tab the user switches to will not receive your commands.
 
-Without a tab id or a session, a command goes to the active tab of the last focused Edge window
+Without a tab id or a session, commands follow the daemon's one tokenless pin: `switch` and `new` set it, and while it is empty the first successful tab-bound result sets it. Once pinned, a tokenless command goes to the pinned tab, not the focused one; an explicit tab id is a one-shot override that leaves the pin alone. When the pinned tab closes outside the bridge, tokenless calls fail with `tab_closed` until the next `switch` or `new`; closing it through the bridge clears the pin. All tokenless clients share this one pin, so several agents still need one session each. Before any pin exists, a command goes to the active tab of the last focused Edge window
 that runs the extension. An InPrivate window or a window of another Edge profile doesn't count,
 so while the user works in one of those, that command lands in a different window. Pass the tab
 id or work inside a session there.
@@ -87,7 +87,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `daemon_unreachable` | nothing answers on the daemon port | `edge-bridge daemon start`, then retry |
 | `connection_lost` | the daemon got the command, then the connection dropped before an answer came back (daemon restart or crash) | check the page before retrying, because the action may have run; run `edge-bridge status` if it keeps happening |
 | `tab_busy` | another call holds the tab lock | backoff 250ms·2ⁿ+jitter ≤4×, then surface |
-| `tab_closed` | session pin points at a closed tab | `switch` or `new` to re-pin |
+| `tab_closed` | the session or tokenless pin points at a closed tab | `switch` or `new` to re-pin |
 | `stale_ref` | ref/frame no longer valid | ladder runs automatically; on `exhausted_fallback`, snapshot fresh |
 | `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once and re-pins your last tab; if repeated, `session start` |
 | `click_covered` | sticky overlay covers the target | dismiss it or scroll the target clear, then retry |

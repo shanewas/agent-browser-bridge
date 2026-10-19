@@ -844,6 +844,8 @@ def main(argv=None) -> int:
                     print(f"Fix: update extension from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
                 print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
+                if res.get("pin") is not None:
+                    print(f"Pinned tab: {res['pin']}")
                 if sst is not None:
                     if sst.get("success"):
                         if sst.get("tabClosed"):

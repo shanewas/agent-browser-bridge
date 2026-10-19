@@ -162,6 +162,10 @@ class BridgeState:
         self.results: dict[str, dict] = {}
         self.lock_timeout_sec = lock_timeout_sec
         self.sessions: dict[str, dict] = {}
+        # The one tokenless pin (#17): all session-less clients share it, a
+        # single-operator convenience that follows switch/new like a session.
+        self.cli_pin: int | None = None
+        self.cli_pin_closed: bool = False
         self.tab_locks: dict[int, list] = {}
 
         self.last_seen: float = 0.0
@@ -367,6 +371,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 ext_outdated = state.extension_outdated
                 pending_count = len(state.pending) + len(state.held)
                 session_count = len(state.sessions)
+                pin_tab = state.cli_pin
                 last_seen = state.last_seen
 
             self._respond(200, {
@@ -383,6 +388,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "last_seen_seconds_ago": round(time.time() - last_seen, 1) if last_seen > 0 else None,
                 "pending": pending_count,
                 "sessions": session_count,
+                "pin": pin_tab,
                 "pairing_required": state.pairing_required,
                 "data_dir": str(config.home()),
             })
@@ -677,12 +683,21 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         "error": "Session tab is closed. Use switch or new to re-pin."})
                     return
 
+            if session is None and tab_scoped and action not in PIN_MUTATING_ACTIONS \
+                    and params.get("tabId") is None:
+                with state.lock:
+                    pin_closed = state.cli_pin_closed
+                if pin_closed:
+                    self._respond(200, {"success": False, "code": "tab_closed",
+                                        "error": "Pinned tab is closed. Use switch or new to re-pin."})
+                    return
+
             if action == "batch":
                 self._exec_batch(state, session_token, session, params, timeout)
                 return
 
             _strip_session_token(params)
-            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped)
+            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped, action)
             res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
                                                       tab_scoped, forward_tab)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
@@ -696,7 +711,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         self._respond(404, {"success": False, "code": "not_found", "error": "Unknown path"})
 
-    def _resolve_forward_tab(self, state, session, params, tab_scoped):
+    def _resolve_forward_tab(self, state, session, params, tab_scoped, action=None):
         if not tab_scoped:
             return None
         explicit = params.get("tabId")
@@ -705,9 +720,17 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return int(explicit)
             except (TypeError, ValueError):
                 return None
+        if action in CLOSING_ACTIONS:
+            return None
         if session is not None:
             with state.lock:
                 pin = session["tabId"]
+            if pin is not None:
+                params["tabId"] = pin
+                return int(pin)
+        elif session is None:
+            with state.lock:
+                pin = state.cli_pin
             if pin is not None:
                 params["tabId"] = pin
                 return int(pin)
@@ -764,6 +787,30 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         or (action in CLOSING_ACTIONS and res.get("success"))):
             with state.lock:
                 state.tab_lock_evict_locked(forward_tab)
+        if session is None and session_token is None:
+            # Tokenless pin (#17), mirroring the session rules below: switch/new
+            # set it, the first successful tab-bound result sets it while empty,
+            # an explicit tabId is a one-shot override that leaves it alone.
+            tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
+            with state.lock:
+                if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
+                        and tab_info.get("id") is not None:
+                    state.cli_pin = int(tab_info["id"])
+                    state.cli_pin_closed = False
+                elif state.cli_pin is None and forward_tab is None and res.get("success") \
+                        and tab_info is not None and tab_info.get("id") is not None:
+                    state.cli_pin = int(tab_info["id"])
+                if forward_tab is not None and forward_tab == state.cli_pin:
+                    if res.get("code") == "tab_not_found":
+                        if not state.cli_pin_closed:
+                            logger.warning("Pinned tab %s closed; tokenless calls are now sticky tab_closed", forward_tab)
+                        state.cli_pin_closed = True
+                    elif action in CLOSING_ACTIONS and res.get("success"):
+                        # A close sent through the bridge is deliberate: clear
+                        # the pin so the next call re-resolves, as Edge does.
+                        state.cli_pin = None
+                        state.cli_pin_closed = False
+            return
         if session is None or session_token is None:
             return
         with state.lock:
@@ -841,7 +888,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
             s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS
-            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped)
+            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
             results.append(res)

@@ -75,6 +75,12 @@
   A different browser/profile attempting to connect while another is active is
   closed with code 4002 ("another browser is connected") rather than displacing
   the active browser, and `/status` and `doctor` report the rejected instance.
+- Changed: tab-less CLI commands follow the tab picked by `switch` or `new`
+  (one shared daemon-side pin, also set by the first successful tab-bound
+  result while empty); when that tab closes outside the bridge they fail
+  with `tab_closed` instead of drifting to the focused tab. `/status`
+  reports it as `pin`. Side effect: a Python `Edge()` with no session now
+  receives the pinned tab instead of the focused one on its first call.
 
 ## 2.5.0
 
