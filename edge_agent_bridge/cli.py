@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import __version__, config
 from .client import Edge, EdgeClient, send_cmd, ensure_bridge_running
+from .bridge import parse_version
 
 EDGE_STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
 
@@ -188,17 +189,17 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
             f"connected, version {st.get('extension_version')}" if connected else "not connected",
             "" if connected else "open Edge and check the popup shows Connected")
         ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
-        try:
-            ext_major = int(str(ext_v).split(".")[0]) if ext_v else None
-            dae_major = int(str(dae_v).split(".")[0]) if dae_v else None
-        except (TypeError, ValueError):
-            ext_major = dae_major = None
-        if ext_major is None:
+        if ext_v is None:
             add("versions", False, "extension version unknown",
                 "open Edge and check the popup shows Connected")
-        elif dae_major is not None and ext_major < dae_major:
+        elif dae_v is not None and dae_v != __version__:
+            add("versions", False, f"CLI {__version__} differs from daemon {dae_v}",
+                "edge-bridge daemon restart")
+        elif dae_v is not None and parse_version(ext_v) < parse_version(dae_v):
             add("versions", False, f"extension {ext_v} predates daemon {dae_v}",
                 f"update from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
+        elif dae_v is not None and parse_version(ext_v) > parse_version(dae_v):
+            add("versions", True, f"daemon {dae_v}, extension {ext_v} (extension newer than daemon)", "")
         else:
             add("versions", True, f"daemon {dae_v}, extension {ext_v}", "")
         with Edge(port=port, auto_start=False) as edge2:
@@ -831,7 +832,13 @@ def main(argv=None) -> int:
             print(json.dumps(res))
         else:
             if res.get("success"):
-                print(f"Edge Agent Bridge v{res.get('daemon_version') or __version__}")
+                dae_v = res.get("daemon_version") or __version__
+                ext_v = res.get("extension_version") or "none"
+                print(f"CLI {__version__}, daemon {dae_v}, extension {ext_v}")
+                if dae_v != __version__:
+                    print("Fix: edge-bridge daemon restart")
+                elif ext_v != "none" and parse_version(ext_v) < parse_version(dae_v):
+                    print(f"Fix: update extension from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
                 print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
                 if sst is not None:

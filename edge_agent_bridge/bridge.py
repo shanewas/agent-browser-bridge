@@ -56,6 +56,20 @@ def setup_logging(home_dir: Path):
     logger.addHandler(handler)
 
 
+def parse_version(v: str | None) -> tuple[int, ...]:
+    if not v:
+        return (0, 0, 0)
+    parts = []
+    for p in str(v).split("."):
+        try:
+            parts.append(int(p.split("-")[0]))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
 class WebSocketConnection:
     def __init__(self, sock: socket.socket):
         self.sock = sock
@@ -126,13 +140,14 @@ class HeldCommand:
 class BridgeState:
     def __init__(self, port: int, home: Path, token: str, pairing_required: bool = False,
                  heartbeat_sec: float = 20.0, pong_timeout_sec: float = 45.0,
-                 lock_timeout_sec: float = 10.0):
+                 lock_timeout_sec: float = 10.0, daemon_version: str | None = None):
         self.port = port
         self.home = home
         self.token = token
         self.pairing_required = pairing_required
         self.heartbeat_sec = heartbeat_sec
         self.pong_timeout_sec = pong_timeout_sec
+        self.daemon_version = daemon_version or os.environ.get("EDGE_BRIDGE_TEST_DAEMON_VERSION") or __version__
 
         self.lock = threading.RLock()
         self.ext: WebSocketConnection | None = None
@@ -349,7 +364,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
             self._respond(200, {
                 "bridge_running": True,
-                "daemon_version": __version__,
+                "daemon_version": state.daemon_version,
                 "pid": os.getpid(),
                 "extension_version": ext_ver,
                 "extension_outdated": ext_outdated,
@@ -524,24 +539,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             result = data["result"]
             with state.lock:
                 if cmd_id in state.pending and state.is_active_locked(ws_conn):
-                    is_v1 = False
-                    if state.ext_version is None:
-                        is_v1 = True
-                    else:
-                        try:
-                            major = int(state.ext_version.split(".")[0])
-                            if major < 2:
-                                is_v1 = True
-                        except (ValueError, IndexError):
-                            is_v1 = True
                     err = result.get("error") if isinstance(result, dict) else ""
                     code = result.get("code") if isinstance(result, dict) else ""
-                    if is_v1 and ((isinstance(err, str) and err.startswith("Unknown action")) or code == "unknown_action"):
+                    is_unknown = (isinstance(err, str) and err.startswith("Unknown action")) or code == "unknown_action"
+                    if is_unknown and (state.ext_version is None or parse_version(state.ext_version) < parse_version(state.daemon_version)):
                         state.extension_outdated = True
                         result = {
                             "success": False,
                             "code": "extension_outdated",
-                            "error": f"Extension {state.ext_version or 'older than 2.0.0'} is connected; daemon {__version__} needs extension 2.0.0 or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."
+                            "error": f"Extension {state.ext_version or 'older than 2.0.0'} is connected; daemon {state.daemon_version} needs extension {state.daemon_version} or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."
                         }
                     state.results[cmd_id] = result
                     ev = state.pending.pop(cmd_id)
@@ -853,6 +859,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
     token = config.ensure_token()
     setup_logging(home)
 
+    daemon_version = os.environ.get("EDGE_BRIDGE_TEST_DAEMON_VERSION") or __version__
     state = BridgeState(
         port=port,
         home=home,
@@ -861,6 +868,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
         heartbeat_sec=config.heartbeat_seconds(),
         pong_timeout_sec=config.pong_timeout_seconds(),
         lock_timeout_sec=config.lock_timeout_seconds(),
+        daemon_version=daemon_version,
     )
 
     stop_event = threading.Event()
@@ -873,7 +881,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     import atexit
     atexit.register(lambda: pid_file.unlink(missing_ok=True))
-    logger.info("Starting Edge Agent Bridge daemon v%s on %s:%d (pid %d)", __version__, host, port, os.getpid())
+    logger.info("Starting Edge Agent Bridge daemon v%s on %s:%d (pid %d)", state.daemon_version, host, port, os.getpid())
 
     try:
         server.serve_forever()

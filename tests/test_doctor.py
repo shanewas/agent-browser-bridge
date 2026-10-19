@@ -311,3 +311,43 @@ def test_doctor_elevation_not_applicable_off_windows(monkeypatch, tmp_path, caps
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert by_name["elevation"] == {"name": "elevation", "ok": True,
                                     "detail": "not applicable", "fix": ""}
+
+
+def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
+    from tests.support import DaemonHandle
+    from edge_agent_bridge import __version__
+    port = free_port()
+    daemon = DaemonHandle(port, tmp_path).start(extra_env={"EDGE_BRIDGE_TEST_DAEMON_VERSION": "2.4.0"})
+    ext = FakeExtension(port, version="2.5.0", handler=_tabs_handler).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+
+    # status check
+    code, out, err = run_cli(["status"], env=env)
+    assert code == 0
+    assert f"CLI {__version__}, daemon 2.4.0, extension 2.5.0" in out
+    assert "edge-bridge daemon restart" in out
+
+    # doctor --json check
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    assert code == 1
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["versions"]["ok"] is False
+    assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
+    assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+
+    ext.close()
+    daemon.stop()
+
+
+def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
+    ext = FakeExtension(daemon.port, version="2.9.9", handler=_tabs_handler).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    assert code == 0
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["versions"]["ok"] is True
+    assert "extension newer than daemon" in checks["versions"]["detail"]
+    ext.close()
+

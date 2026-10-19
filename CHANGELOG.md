@@ -67,6 +67,10 @@
   `[sys.executable, "-m", "edge_agent_bridge", "mcp"]` at user scope across
   clients, runs npm CLI registrations via their resolved binary paths, and
   flags missing or stale interpreter paths in `doctor`.
+- Version drift detection: `status` reports CLI and daemon versions side-by-side
+  with remediation hints on mismatch; `doctor` checks version parity and flags
+  outdated extensions; daemon rewrites `unknown_action` from older extensions to
+  `extension_outdated`.
 
 ## 2.5.0
 
