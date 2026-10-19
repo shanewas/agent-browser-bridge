@@ -291,7 +291,8 @@ class Edge:
                 if mint.get("success") and mint.get("sessionToken"):
                     self.session_token = mint["sessionToken"]
                     if self._last_tab_id is not None:
-                        repin = self._send_once("tab_switch", {"tabId": self._last_tab_id}, timeout)
+                        # Read-only "tab" pins the fresh session; tab_switch would pull the window to the front.
+                        repin = self._send_once("tab", {"tabId": self._last_tab_id}, timeout)
                         if not repin.get("success"):
                             # Tab is gone; stay unpinned so the retry resolves
                             # the active tab like a fresh session.

@@ -111,6 +111,9 @@
   `extension_offline` instead of waiting out their timeout; a pairing
   rejection (close 4001) stops the worker's reconnect loop until a token
   is saved or Reconnect is clicked, and the popup shows the pairing field.
+- After a daemon restart, the session re-pin no longer sends `tab_switch`
+  (which activated the tab and pulled its window to the front); the retried
+  call carries the remembered `tabId` and the daemon pins from its result.
 
 ## 2.5.0
 
