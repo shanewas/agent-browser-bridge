@@ -78,7 +78,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 |---|---|---|
 | `stale_snapshot`, `stale_ref` | refs are from an old page state | snapshot again |
 | `target_not_found` | nothing matched within the timeout | snapshot, pick a ref |
-| `tab_not_found` | the pinned tab is gone | tokenless: the next call re-resolves the active tab; session: expect sticky `tab_closed` until `switch`/`new` |
+| `tab_not_found` | the pinned tab is gone | tokenless and session: expect sticky `tab_closed` until `switch`/`new` |
 | `tab_not_scriptable` | the tab shows a browser page (`edge://`, `chrome://`, `view-source:`, an extension page) that extensions can't script | ask the user which tab they mean and `edge_tab_switch` to it, or `edge_navigate` this tab first |
 | `extension_offline` | Edge is closed or the extension is off | tell the user to open Edge and check the popup |
 | `extension_outdated` | the extension predates the daemon | tell the user to update it |

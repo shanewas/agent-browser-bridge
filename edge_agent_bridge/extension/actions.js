@@ -288,7 +288,7 @@ export async function execute(cmd) {
         if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
           return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
         }
-        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
         let tab = await getTargetTab(tabId);
         if (tab) await attach(tab.id);
         if (!tab) {
@@ -342,7 +342,7 @@ export async function execute(cmd) {
             group = { code: "group_unsupported", error: e.message };
           }
         }
-        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
         if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, loadTimeout, true);
         const t = await chrome.tabs.get(tab.id);
         return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
@@ -399,7 +399,7 @@ export async function execute(cmd) {
       case "back":
       case "forward":
       case "reload": {
-        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
         const pending = p.wait === "none" ? null : waitForTabLoad(tabId, loadTimeout);
         try {
           if (action === "reload") {

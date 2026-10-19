@@ -89,11 +89,6 @@
 - `Doppelhand` calls return `{success: false, code: "doppelhand_unreachable"}`
   (or `doppelhand_http_<status>`) instead of raising `URLError`; the client
   and recipe now state the server is Windows only.
-
-### Removed
-
-- `edge-bridge repl`: its line format matched no verb's arguments, and `run`,
-  MCP and the Python API cover the many-steps-in-one-process case.
 - Windows: `run -` and `eval --file -` read stdin as UTF-8 instead of the
   console code page, and undecodable stdin is a usage error (exit 3) naming
   stdin instead of a traceback or mojibake.
@@ -105,15 +100,27 @@
   connection.
 - Extension command deadlines: tab-scoped dispatches derive `deadlineMs` from
   the request timeout rather than a fixed 12 s budget. `wait` and `nav`/`back`/`reload`
-  load waits stop at `deadlineMs` instead of keeping the tab busy, and the daemon
-  cleans up late results on timeout.
+  load waits stop at `deadlineMs` (still capped at 15 s) instead of keeping the
+  tab busy, and the daemon cleans up late results on timeout. Changed: `back`,
+  `forward` and `reload` now return `nav_timeout` when the page doesn't finish
+  loading, where they used to report success.
 - When the extension socket drops, in-flight commands fail at once with
-  `extension_offline` instead of waiting out their timeout; a pairing
-  rejection (close 4001) stops the worker's reconnect loop until a token
-  is saved or Reconnect is clicked, and the popup shows the pairing field.
+  `extension_offline` instead of waiting out their timeout, and leave no entry
+  in `/status` `pending`. A rejected connection (close 4001 for pairing, 4002
+  for a second browser) stops the worker reconnecting, from the watchdog alarm
+  too, until a token is saved or Reconnect is clicked; after 4001 the popup
+  shows the pairing field.
 - After a daemon restart, the session re-pin no longer sends `tab_switch`
-  (which activated the tab and pulled its window to the front); the retried
-  call carries the remembered `tabId` and the daemon pins from its result.
+  (which activated the tab and pulled its window to the front); it uses the
+  read-only `tab` action, so the session stays pinned even when the first call
+  after the restart is a tab-less one such as `tabs`.
+- Changed: a session `close` without `--tab` returns `tab_required` instead of
+  closing the session's tab.
+
+### Removed
+
+- `edge-bridge repl`: its line format matched no verb's arguments, and `run`,
+  MCP and the Python API cover the many-steps-in-one-process case.
 
 ## 2.5.0
 
