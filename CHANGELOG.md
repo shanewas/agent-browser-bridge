@@ -25,6 +25,8 @@
 - Windows: the daemon no longer sets `SO_REUSEADDR`, so a second daemon on a busy
   port fails with `WinError 10048` and exits 1 instead of binding silently and
   overwriting `bridge.pid`.
+- `run --tab N` forwards `tabId: N` to every step that does not carry its
+  own, instead of running all steps on the focused tab.
 
 ## 2.5.0
 
