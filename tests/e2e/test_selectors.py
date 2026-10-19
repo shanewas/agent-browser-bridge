@@ -44,3 +44,20 @@ def test_target_name_still_resolves(client):
     r = client("click", {"target": "spec.pdf"})
     assert r["success"], r
     assert _clicked(client, "pdf") == "true"
+
+
+def test_explicit_selector_main_for_text_and_wait(client):
+    r = client("text", {"selector": "main"})
+    assert r["success"], r
+    assert "main content" in str(r.get("text")), r
+    r = client("wait", {"selector": "main", "timeout": 2000})
+    assert r["success"], r
+    assert r.get("tag") == "main", r
+
+
+def test_bad_selector_fails_fast(client):
+    import time
+    t0 = time.monotonic()
+    r = client("click", {"selector": "div[[", "timeout": 5000})
+    assert r.get("code") == "bad_selector", r
+    assert time.monotonic() - t0 < 3
