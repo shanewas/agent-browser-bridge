@@ -185,8 +185,11 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
 
     if up:
         connected = bool(st.get("websocket_active"))
-        add("extension", connected,
-            f"connected, version {st.get('extension_version')}" if connected else "not connected",
+        rej = st.get("rejected_instance")
+        ext_detail = f"connected, version {st.get('extension_version')}" if connected else "not connected"
+        if rej:
+            ext_detail += f" (another browser rejected: instance {rej})"
+        add("extension", connected, ext_detail,
             "" if connected else "open Edge and check the popup shows Connected")
         ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
         if ext_v is None:

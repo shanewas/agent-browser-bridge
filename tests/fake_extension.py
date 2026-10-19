@@ -14,7 +14,7 @@ from edge_agent_bridge import __version__
 class FakeExtension:
     def __init__(self, port, version=None, token=None, send_hello=True, handler=None,
                  origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-                 file_access=True):
+                 file_access=True, instance=None):
         self.port = port
         self.version = version if version is not None else __version__
         self.token = token
@@ -22,6 +22,7 @@ class FakeExtension:
         self.handler = handler or self.default_handler
         self.origin = origin
         self.file_access = file_access
+        self.instance = instance
         self.sock = None
         self.received = []
         self.closed_with = None
@@ -66,6 +67,8 @@ class FakeExtension:
             hello = {"version": self.version, "id": "fakeextensionid"}
             if self.token is not None:
                 hello["token"] = self.token
+            if self.instance is not None:
+                hello["instance"] = self.instance
             self.send_text(json.dumps({"hello": hello}))
         return self
 

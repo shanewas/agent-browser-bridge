@@ -351,3 +351,32 @@ def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
     assert "extension newer than daemon" in checks["versions"]["detail"]
     ext.close()
 
+
+def _wait_active(daemon, timeout=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if daemon.status().get("websocket_active"):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _wait_closed(ext, timeout=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline and ext.closed_with is None:
+        time.sleep(0.05)
+    return ext.closed_with
+
+
+def test_doctor_reports_rejected_instance(daemon, tmp_path):
+    ext1 = FakeExtension(daemon.port, instance="inst-1", handler=_tabs_handler).connect().run()
+    assert _wait_active(daemon)
+    ext2 = FakeExtension(daemon.port, instance="inst-2").connect().run()
+    assert _wait_closed(ext2) == 4002
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["doctor"], env=env)
+    assert code == 0, out
+    assert "another browser rejected: instance inst-2" in out
+    ext1.close()
+    ext2.close()
+

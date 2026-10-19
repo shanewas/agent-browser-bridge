@@ -29,6 +29,20 @@ async function pairToken() {
   }
 }
 
+async function getOrCreateInstanceId() {
+  try {
+    const data = await chrome.storage.local.get("instanceId");
+    if (data && data.instanceId) return data.instanceId;
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `inst-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    await chrome.storage.local.set({ instanceId: id });
+    return id;
+  } catch (e) {
+    return undefined;
+  }
+}
+
 function connectWebSocket(force = false) {
   if (bridgeWs && (bridgeWs.readyState === WebSocket.CONNECTING || bridgeWs.readyState === WebSocket.OPEN)) {
     return;
@@ -49,6 +63,8 @@ function connectWebSocket(force = false) {
       const hello = { version: chrome.runtime.getManifest().version, id: chrome.runtime.id };
       const token = await pairToken();
       if (token) hello.token = token;
+      const inst = await getOrCreateInstanceId();
+      if (inst) hello.instance = inst;
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ hello }));
       log("Connected to bridge daemon");
     };
@@ -90,8 +106,12 @@ function connectWebSocket(force = false) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       bridgeWs = null;
+      if (event && (event.code === 4001 || event.code === 4002)) {
+        log(`Bridge closed with ${event.code} (${event.reason || "connection rejected"}); reconnect suppressed until user clicks Reconnect`);
+        return;
+      }
       scheduleWsReconnect();
     };
 
