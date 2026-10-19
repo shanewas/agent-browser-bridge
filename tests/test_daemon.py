@@ -5,6 +5,7 @@ import threading
 import time
 import pytest
 from tests.fake_extension import FakeExtension
+from edge_agent_bridge import config
 from tests.support import DaemonHandle, free_port
 
 
@@ -62,6 +63,22 @@ def test_exec_rejects_browser_context(daemon, fake_ext):
     assert code == 403 and body["code"] == "browser_context"
     code, body = daemon.exec("ping", headers={"Sec-Fetch-Mode": "cors"})
     assert code == 403 and body["code"] == "browser_context"
+
+
+def test_exec_malformed_bodies_get_json_errors(daemon, fake_ext):
+    # Non-ASCII token header must answer 401, not drop the connection (issue #29).
+    code, body = daemon.exec("ping", token="t\u00f6k\u00e9n")
+    assert code == 401 and body["code"] == "bad_token", (code, body)
+    # A non-string action must answer 400 bad_body.
+    code, body = daemon._request("POST", "/exec", {"action": {}, "params": {}},
+                                 headers={config.TOKEN_HEADER: daemon.token})
+    assert code == 400 and body["code"] == "bad_body", (code, body)
+    # A batch whose steps is not a list must answer 400 bad_body.
+    code, body = daemon.exec("batch", {"steps": 5})
+    assert code == 400 and body["code"] == "bad_body", (code, body)
+    # The daemon still answers the next valid request.
+    code, body = daemon.exec("ping")
+    assert code == 200 and body["success"] is True, (code, body)
 
 
 def test_bad_host_rejected(daemon):

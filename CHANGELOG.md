@@ -100,6 +100,9 @@
 - CLI commands that talk to the browser start the daemon on first use, as
   the README already said; `status`, `doctor`, `logs` and `daemon` commands
   still never start it.
+- Malformed `/exec` requests (non-ASCII token header, non-string `action`,
+  non-list batch `steps`) get a JSON 400/401 answer instead of a dropped
+  connection.
 
 ## 2.5.0
 
