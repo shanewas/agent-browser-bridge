@@ -286,19 +286,14 @@ class Edge:
                 mint = self._send_once("session_start", {})
                 if mint.get("success") and mint.get("sessionToken"):
                     self.session_token = mint["sessionToken"]
-                    # Re-pin without activating anything: tab_switch would pull the
-                    # tab's window to the front. The daemon pins the fresh session
-                    # to the retried call's tab, so carrying tabId is enough.
-                    retry = p
-                    if self._last_tab_id is not None and "tabId" not in p:
-                        retry = dict(p)
-                        retry["tabId"] = self._last_tab_id
-                    data = self._send_once(action, retry, timeout)
-                    if retry is not p and not data.get("success") and data.get("code") in ("tab_not_found", "tab_closed"):
-                        # Tab is gone; stay unpinned so the retry resolves
-                        # the active tab like a fresh session.
-                        self._last_tab_id = None
-                        data = self._send_once(action, p, timeout)
+                    if self._last_tab_id is not None:
+                        # Read-only "tab" pins the fresh session; tab_switch would pull the window to the front.
+                        repin = self._send_once("tab", {"tabId": self._last_tab_id}, timeout)
+                        if not repin.get("success"):
+                            # Tab is gone; stay unpinned so the retry resolves
+                            # the active tab like a fresh session.
+                            self._last_tab_id = None
+                    data = self._send_once(action, p, timeout)
             finally:
                 self._reminting = False
         if action == "elements" and data.get("success"):

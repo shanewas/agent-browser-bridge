@@ -318,6 +318,35 @@ def test_session_remint_repins_remembered_tab(daemon, monkeypatch):
     ext2.close()
 
 
+def test_remint_on_tabless_call_keeps_the_pin(daemon, monkeypatch):
+    # Issue #28: a tab-less first call after a restart must still re-pin the session.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action == "tabs":
+            return {"success": True, "tabs": []}
+        tid = params.get("tabId")
+        return {"success": True, "tab": {"id": tid or 9, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, auto_start=False)
+    mint = edge.send("session_start", {})
+    edge.session_token = mint["sessionToken"]
+    edge.send("tab_switch", {"tabId": 5})
+
+    ext2 = _restart_with_ext(daemon, handler)
+    assert edge.send("tabs", {})["success"] is True
+    assert edge.send("click", {"target": "b"})["success"] is True
+    assert [p for a, p in seen if a == "click"][-1].get("tabId") == 5
+    assert len([a for a, _ in seen if a in ("tab_switch", "switch_tab")]) == 1
+    edge.close()
+    ext.close()
+    ext2.close()
+
+
 def test_one_shot_override_keeps_remembered_tab(daemon, monkeypatch):
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
 
@@ -344,7 +373,7 @@ def test_remint_falls_back_to_active_tab_when_remembered_tab_gone(daemon, monkey
 
     def handler(action, params):
         seen.append((action, dict(params)))
-        if action == "click" and params.get("tabId") == 5 and closed:
+        if action in ("tab", "click") and params.get("tabId") == 5 and closed:
             return {"success": False, "code": "tab_not_found", "error": "gone"}
         if action in ("tab_switch", "switch_tab"):
             tid = params.get("tabId", 7)
