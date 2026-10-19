@@ -38,7 +38,7 @@ LOCK_EXEMPT_ACTIONS = frozenset({
 })
 PIN_MUTATING_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
 CLOSING_ACTIONS = frozenset({"tab_close", "close_tab"})
-DISPATCH_BUDGET_SEC = 12.0
+DEADLINE_MARGIN_SEC = 0.5
 LOCK_IDLE_EVICT_SEC = 3600.0
 
 logger = logging.getLogger("edge_bridge")
@@ -701,8 +701,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
                                                       tab_scoped, forward_tab)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
-            if not self._respond(status_code, res):
-                self._best_effort_cancel(state, getattr(self, "_last_cmd_id", None))
+            self._respond(status_code, res)
             return
 
         if self.path.startswith("/poll") or self.path.startswith("/result"):
@@ -754,9 +753,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     def _dispatch_once(self, state, action, params, deadline, tab_scoped):
         fwd_params = dict(params)
         if tab_scoped:
-            fwd_params["deadlineMs"] = int((time.time() + DISPATCH_BUDGET_SEC) * 1000)
+            fwd_params["deadlineMs"] = int(max(time.time(), deadline - DEADLINE_MARGIN_SEC) * 1000)
         cmd_id = str(uuid.uuid4())
-        self._last_cmd_id = cmd_id
         event = threading.Event()
         cmd_payload = {"id": cmd_id, "action": action, "params": fwd_params}
         with state.lock:
@@ -777,6 +775,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 if res is not None:
                     return (res, 200)
             state.pending.pop(cmd_id, None)
+            state.results.pop(cmd_id, None)
             return ({"success": False, "code": "timeout",
                      "error": "Command timed out waiting for Edge extension response"}, 504)
 
@@ -833,16 +832,6 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                         sess["warned"].add("tab_closed")
                         logger.warning("Session tab %s closed; session is now sticky tab_closed", forward_tab)
 
-    def _best_effort_cancel(self, state, cmd_id):
-        if not cmd_id:
-            return
-        try:
-            with state.lock:
-                ws = state.ext
-            if ws and not ws.closed:
-                ws.send_text(json.dumps({"cancel": cmd_id}))
-        except Exception:
-            pass
 
     def _exec_batch(self, state, session_token, session, params, timeout):
         steps = params.get("steps") or []

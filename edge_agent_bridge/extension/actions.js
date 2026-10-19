@@ -288,16 +288,17 @@ export async function execute(cmd) {
         if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
           return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
         }
+        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
         let tab = await getTargetTab(tabId);
         if (tab) await attach(tab.id);
         if (!tab) {
           tab = await chrome.tabs.create({ url });
-          const loaded = await waitForTabLoad(tab.id, 15000, true);
+          const loaded = await waitForTabLoad(tab.id, loadTimeout, true);
           const created = await chrome.tabs.get(tab.id);
           if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: created.url, tab: tabInfo(created) });
           return { success: true, title: created.title, url: created.url, tab: tabInfo(created) };
         } else {
-          const pending = waitForTabLoad(tab.id);
+          const pending = waitForTabLoad(tab.id, loadTimeout);
           await chrome.tabs.update(tab.id, { url });
           if (p.wait === "none") {
             const t0 = await chrome.tabs.get(tab.id);
@@ -308,10 +309,6 @@ export async function execute(cmd) {
           if (!ok) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: t.url, tab: tabInfo(t) });
           return { success: true, title: t.title, url: t.url, tab: tabInfo(t) };
         }
-        const loaded = await waitForTabLoad(tab.id);
-        const updatedTab = await chrome.tabs.get(tab.id);
-        if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: updatedTab.url, tab: tabInfo(updatedTab) });
-        return { success: true, title: updatedTab.title, url: updatedTab.url, tab: tabInfo(updatedTab) };
       }
 
       case "tab_new": {
@@ -345,7 +342,8 @@ export async function execute(cmd) {
             group = { code: "group_unsupported", error: e.message };
           }
         }
-        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, 15000, true);
+        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, loadTimeout, true);
         const t = await chrome.tabs.get(tab.id);
         return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
       }
@@ -401,7 +399,8 @@ export async function execute(cmd) {
       case "back":
       case "forward":
       case "reload": {
-        const pending = p.wait === "none" ? null : waitForTabLoad(tabId);
+        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        const pending = p.wait === "none" ? null : waitForTabLoad(tabId, loadTimeout);
         try {
           if (action === "reload") {
             await chrome.tabs.reload(tabId);
@@ -424,7 +423,13 @@ export async function execute(cmd) {
         } catch (e) {
           return fail("no_history", e.message);
         }
-        if (pending) await pending;
+        if (pending) {
+          const ok = await pending;
+          if (!ok) {
+            const t = await chrome.tabs.get(tabId);
+            return fail("nav_timeout", `${action} timed out waiting for page load`, { url: t.url, tab: tabInfo(t) });
+          }
+        }
         const t = await chrome.tabs.get(tabId);
         return { success: true, url: t.url, title: t.title, tab: tabInfo(t) };
       }
@@ -606,7 +611,8 @@ export async function execute(cmd) {
 
       case "wait_for":
       case "wait": {
-        const timeout = Number(p.timeout || 5000);
+        let timeout = Number(p.timeout || 5000);
+        if (p.deadlineMs) timeout = Math.min(timeout, Math.max(0, p.deadlineMs - Date.now()));
         const start = Date.now();
         const waited = () => Date.now() - start;
         if (p.idle) {

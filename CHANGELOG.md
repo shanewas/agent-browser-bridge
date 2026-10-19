@@ -103,6 +103,10 @@
 - Malformed `/exec` requests (non-ASCII token header, non-string `action`,
   non-list batch `steps`) get a JSON 400/401 answer instead of a dropped
   connection.
+- Extension command deadlines: tab-scoped dispatches derive `deadlineMs` from
+  the request timeout rather than a fixed 12 s budget. `wait` and `nav`/`back`/`reload`
+  load waits stop at `deadlineMs` instead of keeping the tab busy, and the daemon
+  cleans up late results on timeout.
 
 ## 2.5.0
 
