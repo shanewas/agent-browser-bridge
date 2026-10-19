@@ -59,6 +59,10 @@
 - `scroll --ref/--target` resolves the element and scrolls it into view (or
   wheels at its center when deltas are given) instead of scrolling at a
   fixed viewport point, and `--y 0` no longer scrolls 300 px.
+- Changed: the fallback ladder's scan rung no longer clicks substring
+  matches or one of several same-named elements; it accepts an exact or
+  case-insensitive name only when exactly one element matches, and reports
+  the element acted on as `ladder.matched`.
 
 ## 2.5.0
 

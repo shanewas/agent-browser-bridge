@@ -61,19 +61,23 @@ def _wsl_to_windows(path_str: str) -> str:
 
 
 def score_element_match(entries, text):
+    """The scan rung's match: an exact name, else a case-insensitive name,
+    and only when exactly one element matches. Substring matches never
+    count: clicking a different element whose name merely contains the
+    target text is the failure the ladder exists to avoid (issue #19)."""
     def name(e):
         return e.get("text") or e.get("name") or ""
-    for e in entries or []:
-        if name(e) == text:
-            return e
+    entries = entries or []
+    exact = [e for e in entries if name(e) == text]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
     tl = (text or "").lower()
-    for e in entries or []:
-        if name(e).lower() == tl:
-            return e
-    for e in entries or []:
-        if tl and tl in name(e).lower():
-            return e
-    return None
+    if not tl:
+        return None
+    folded = [e for e in entries if name(e).lower() == tl]
+    return folded[0] if len(folded) == 1 else None
 
 
 def _probe_status(port: int) -> dict | None:
@@ -376,7 +380,9 @@ class Edge:
         final = self._send_once(action, rung4, timeout)
         tried.append({"step": "coords", "outcome": "ok" if final.get("success") else final.get("code")})
         if final.get("success"):
-            final["ladder"] = {"rung": "coords", "tried": tried}
+            final["ladder"] = {"rung": "coords", "tried": tried,
+                               "matched": {"name": match.get("text") or match.get("name") or "",
+                                           "ref": match.get("ref")}}
             return final
         return {"success": False, "code": "exhausted_fallback",
                 "error": f"{action} target could not be re-resolved", "tried": tried}
