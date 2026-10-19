@@ -748,6 +748,16 @@ def serve(stdin=None, stdout=None) -> None:
                 out_stream.flush()
                 continue
 
+            if not isinstance(msg, dict):
+                err_resp = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": "Invalid Request"},
+                }
+                out_stream.write(json.dumps(err_resp).encode("utf-8") + b"\n")
+                out_stream.flush()
+                continue
+
             try:
                 resp = handle(msg, edge)
             except Exception as e:

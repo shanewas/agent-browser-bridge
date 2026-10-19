@@ -84,6 +84,8 @@
 - `check_radio` resolves target by ref, explicit/candidate selector, label text,
   or value attribute, avoiding unhandled `bad_selector` syntax errors on
   non-ASCII or punctuation-heavy label strings.
+- The MCP server answers a JSON array or scalar line with `-32600 Invalid
+  Request` and keeps serving, instead of exiting.
 
 ## 2.5.0
 
