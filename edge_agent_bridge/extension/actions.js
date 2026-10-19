@@ -534,7 +534,7 @@ export async function execute(cmd) {
       case "rightclick": {
         const loc = await locate(tabId, p, action);
         if (!loc.ok) {
-          if (action !== "rightclick" && (p.selector || p.text)) {
+          if (action !== "rightclick" && (p.selector || p.text) && loc.result.code !== "bad_selector") {
             const fn = action === "click" ? page.pageClickElement : page.pageDblclickElement;
             return await execInTab(tabId, fn, [p.selector, p.text]);
           }
