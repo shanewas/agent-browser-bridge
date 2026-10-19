@@ -61,6 +61,14 @@ async function updateUI() {
     }
   }
   lastStatus = st;
+  try {
+    chrome.storage.local.get(["pairingRejected"], (data) => {
+      if (data && data.pairingRejected) {
+        show("pairing", true);
+        setText("pairMsg", "Pairing rejected: paste the daemon token and save.");
+      }
+    });
+  } catch (e) {}
 
   const pairInput = document.getElementById("pairToken");
   if (pairInput) {

@@ -222,6 +222,12 @@ class BridgeState:
                 self.ext = None
                 self.ext_accepted = False
                 self.ext_instance = None
+                # Commands already sent to this socket will never be answered;
+                # fail them now instead of letting callers wait out the timeout.
+                for cmd_id, event in list(self.pending.items()):
+                    self.results[cmd_id] = {"success": False, "code": "extension_offline",
+                                            "error": "Edge extension disconnected while the command was in flight."}
+                    event.set()
 
     def session_create_locked(self, name: str | None = None) -> str:
         token = str(uuid.uuid4())
@@ -770,11 +776,11 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         rem = max(0.01, deadline - time.time())
         finished = event.wait(timeout=rem)
         with state.lock:
+            state.pending.pop(cmd_id, None)
             if finished:
                 res = state.results.pop(cmd_id, None)
                 if res is not None:
                     return (res, 200)
-            state.pending.pop(cmd_id, None)
             state.results.pop(cmd_id, None)
             return ({"success": False, "code": "timeout",
                      "error": "Command timed out waiting for Edge extension response"}, 504)

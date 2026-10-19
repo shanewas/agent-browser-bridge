@@ -107,6 +107,10 @@
   the request timeout rather than a fixed 12 s budget. `wait` and `nav`/`back`/`reload`
   load waits stop at `deadlineMs` instead of keeping the tab busy, and the daemon
   cleans up late results on timeout.
+- When the extension socket drops, in-flight commands fail at once with
+  `extension_offline` instead of waiting out their timeout; a pairing
+  rejection (close 4001) stops the worker's reconnect loop until a token
+  is saved or Reconnect is clicked, and the popup shows the pairing field.
 
 ## 2.5.0
 

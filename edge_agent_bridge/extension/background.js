@@ -6,6 +6,7 @@ const WS_URL = "ws://127.0.0.1:18999/ws";
 const MAX_BACKOFF_MS = 5000;
 
 let bridgeWs = null;
+let pairingBlocked = false;
 let wsReconnectTimer = null;
 let wsBackoffMs = 1000;
 let lastLog = "Initializing...";
@@ -44,6 +45,9 @@ async function getOrCreateInstanceId() {
 }
 
 function connectWebSocket(force = false) {
+  if (pairingBlocked && !force) {
+    return;
+  }
   if (bridgeWs && (bridgeWs.readyState === WebSocket.CONNECTING || bridgeWs.readyState === WebSocket.OPEN)) {
     return;
   }
@@ -109,7 +113,14 @@ function connectWebSocket(force = false) {
     ws.onclose = (event) => {
       bridgeWs = null;
       if (event && (event.code === 4001 || event.code === 4002)) {
-        log(`Bridge closed with ${event.code} (${event.reason || "connection rejected"}); reconnect suppressed until user clicks Reconnect`);
+        // Rejected (4001 pairing, 4002 another browser holds the bridge): reconnecting only
+        // repeats the rejection, including from the watchdog alarm. Stay down until a token
+        // is saved or Reconnect is clicked (both arrive as RECONNECT, which connects with force).
+        pairingBlocked = true;
+        if (event.code === 4001) {
+          try { chrome.storage.local.set({ pairingRejected: true }); } catch (e) {}
+        }
+        log(`Bridge closed with ${event.code} (${event.reason || "connection rejected"}); not reconnecting until a token is saved or Reconnect is clicked`);
         return;
       }
       scheduleWsReconnect();
@@ -141,6 +152,8 @@ function wsConnected() {
 // connectWebSocket() is a no-op while the socket is open or a reconnect timer is pending.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "RECONNECT") {
+    pairingBlocked = false;
+    try { chrome.storage.local.set({ pairingRejected: false }); } catch (e) {}
     if (bridgeWs) {
       try { bridgeWs.close(); } catch (e) {}
     } else {
