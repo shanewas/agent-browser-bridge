@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.6.0
 
 - Verified writes no longer clear the field: `type` is never retried, the clearing
   `fill` retry skips contenteditable targets, contenteditable readback ignores
