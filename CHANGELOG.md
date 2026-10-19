@@ -56,6 +56,9 @@
 - `batch` steps in the `{action, params}` shape forward their params (merged
   under any flat keys) instead of sending a nested `params` key; the MCP
   schema says both shapes are accepted.
+- `scroll --ref/--target` resolves the element and scrolls it into view (or
+  wheels at its center when deltas are given) instead of scrolling at a
+  fixed viewport point, and `--y 0` no longer scrolls 300 px.
 
 ## 2.5.0
 
