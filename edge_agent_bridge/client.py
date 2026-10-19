@@ -598,10 +598,12 @@ class Edge:
             p["tabId"] = tab_id
         return self.send("key", p)
 
-    def check_radio(self, target=None, selector: str = None, text: str = None, value: str = None, tab_id=None, fallback=True) -> dict:
+    def check_radio(self, target=None, ref=None, selector: str = None, text: str = None, value: str = None, tab_id=None, fallback=True) -> dict:
         """Check a radio button or checkbox by selector, label text, or value attribute."""
         p = {}
-        if selector is not None:
+        if ref is not None:
+            p["ref"] = ref
+        elif selector is not None:
             p["selector"] = selector
         elif target is not None:
             p["target"] = target

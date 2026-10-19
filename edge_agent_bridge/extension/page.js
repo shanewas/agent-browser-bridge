@@ -785,29 +785,80 @@ export async function pageEval(code) {
   }
 }
 
-// check_radio: check a radio button or checkbox by selector, label text, or value.
-export function pageCheckRadio(selector, text, value) {
+// check_radio: check a radio button or checkbox by ref, selector, label text, or value.
+export function pageCheckRadio(target, value, isExplicitSelector) {
   let el = null;
-  if (selector) el = document.querySelector(selector);
-  if (!el && value !== undefined && value !== null) {
-    el = document.querySelector(`input[type="radio"][value="${value}"], input[type="checkbox"][value="${value}"]`);
+  // 1. Ref
+  if (target && window.__eab && window.__eab.refs) {
+    el = window.__eab.refs.get(target) || null;
   }
-  if (!el && text) {
-    const lower = text.toLowerCase().trim();
-    const labels = Array.from(document.querySelectorAll("label, [role='radio'], [role='checkbox']"));
-    const matched = labels.find(l => (l.innerText || "").trim().toLowerCase() === lower || (l.innerText || "").toLowerCase().includes(lower));
+
+  // 2. Explicit selector
+  if (!el && isExplicitSelector && target) {
+    let selErr = null;
+    try {
+      el = document.querySelector(target);
+    } catch (e) {
+      selErr = e;
+    }
+    if (selErr) {
+      return { success: false, code: "bad_selector", error: `Invalid selector: "${target}"` };
+    }
+    if (!el) {
+      return { success: false, code: "target_not_found", error: `Radio/checkbox not found for selector: "${target}"` };
+    }
+  }
+
+  // 3. Candidate selector (only if it parses without throwing)
+  if (!el && !isExplicitSelector && target) {
+    try {
+      el = document.querySelector(target);
+    } catch (e) {
+      // not valid selector syntax; fall through to label text
+    }
+  }
+
+  // 4. Label text or role radio/checkbox
+  if (!el && target) {
+    const lower = String(target).toLowerCase().trim();
+    const candidates = Array.from(document.querySelectorAll("label, [role='radio'], [role='checkbox'], input[type='radio'], input[type='checkbox']"));
+    const matchScore = (item) => {
+      const txt = (item.innerText || item.textContent || "").trim().toLowerCase();
+      const aria = (item.getAttribute && item.getAttribute("aria-label") || "").trim().toLowerCase();
+      if (txt === lower || aria === lower) return 2;
+      if (txt.includes(lower) || aria.includes(lower)) return 1;
+      return 0;
+    };
+    const exact = candidates.find(item => matchScore(item) === 2);
+    const matched = exact || candidates.find(item => matchScore(item) === 1);
     if (matched) {
       if (matched.htmlFor) el = document.getElementById(matched.htmlFor);
       if (!el) el = matched.querySelector("input[type='radio'], input[type='checkbox']");
       if (!el) el = matched;
     }
   }
-  if (!el) return { success: false, error: `Radio/checkbox not found: selector="${selector}", text="${text}", value="${value}"` };
+
+  // 5. Value
+  const val = (value !== undefined && value !== null) ? value : (!el && !isExplicitSelector ? target : null);
+  if (!el && val !== undefined && val !== null && val !== "") {
+    try {
+      const esc = CSS.escape(String(val));
+      el = document.querySelector(`input[type="radio"][value="${esc}"], input[type="checkbox"][value="${esc}"]`);
+    } catch (e) {}
+  }
+
+  if (!el) {
+    return {
+      success: false,
+      code: "target_not_found",
+      error: `Radio/checkbox not found: target="${target || ''}", value="${value ?? ''}"`
+    };
+  }
 
   try { el.scrollIntoView({ behavior: "instant", block: "center" }); } catch (e) {}
   try { el.focus(); } catch (e) {}
 
-  const label = el.closest("label") || (el.id ? document.querySelector(`label[for="${el.id}"]`) : null);
+  const label = el.closest("label") || (el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
   if (label && label !== el) {
     label.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
     label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
@@ -829,6 +880,7 @@ export function pageCheckRadio(selector, text, value) {
     inp.dispatchEvent(new Event("input", { bubbles: true }));
     inp.dispatchEvent(new Event("change", { bubbles: true }));
   } else {
+    // Report the widget's own aria-checked; writing it here would fake the app's state.
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -839,7 +891,7 @@ export function pageCheckRadio(selector, text, value) {
     id: el.id || (inp ? inp.id : ""),
     name: el.name || (inp ? inp.name : ""),
     value: (inp ? inp.value : el.value) || "",
-    checked: inp ? inp.checked : true,
+    checked: inp ? inp.checked : (el.getAttribute("aria-checked") === "true"),
   };
 }
 

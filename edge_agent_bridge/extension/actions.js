@@ -104,7 +104,7 @@ export async function execInTab(tabId, func, args = [], world = "ISOLATED", fram
   const cleanArgs = (args || []).map(a => (a === undefined ? null : a));
   const run = async () => {
     const results = await chrome.scripting.executeScript({ target, func, args: cleanArgs, world });
-    if (results && results[0]) return results[0].result;
+    if (results && results[0] && results[0].result !== undefined) return results[0].result;
     return fail("inject_failed", "Script injected but returned no result");
   };
   try {
@@ -113,6 +113,7 @@ export async function execInTab(tabId, func, args = [], world = "ISOLATED", fram
       await injectLib(tabId, frameId);
       result = await run();
     }
+    if (result === undefined) return fail("inject_failed", "Script injected but returned no result");
     return result;
   } catch (err) {
     return fail("inject_failed", err.message);
@@ -925,7 +926,9 @@ export async function execute(cmd) {
       case "check_radio":
       case "check":
       case "select_radio": {
-        return await execInTab(tabId, page.pageCheckRadio, [p.selector || p.target, p.text, p.value]);
+        const target = p.ref || p.target || p.selector || p.text;
+        const isExplicitSelector = Boolean(p.selector && !p.ref && !p.target);
+        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(p.ref));
       }
 
       case "get_text":

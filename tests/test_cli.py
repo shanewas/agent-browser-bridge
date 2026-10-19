@@ -476,3 +476,37 @@ def test_cli_wait_asks_the_daemon_for_its_whole_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
     assert cli.main(["--json", "wait", "--text", "X", "--timeout", "60000"]) == 0
     assert bodies[0]["timeout"] == 65, bodies
+
+
+def test_cli_check_radio_dispatches_ref_selector_target(tmp_path, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setenv("EDGE_BRIDGE_PORT", str(free_port()))
+    monkeypatch.delenv("EDGE_BRIDGE_SESSION", raising=False)
+    config.ensure_token()
+    calls = []
+
+    class RecordingConnection:
+        sock = None
+
+        def request(self, method, url, body=None, headers=None):
+            calls.append((url, json.loads(body)))
+
+        def getresponse(self):
+            return io.BytesIO(b'{"success": true}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
+
+    assert cli.main(["--json", "check-radio", "--ref", "e5"]) == 0
+    assert calls[-1][0] == "/exec"
+    assert calls[-1][1]["action"] == "check_radio"
+    assert calls[-1][1]["params"]["ref"] == "e5"
+
+    assert cli.main(["--json", "check-radio", "--selector", "#agree"]) == 0
+    assert calls[-1][1]["params"]["selector"] == "#agree"
+
+    assert cli.main(["--json", "check-radio", "Option A"]) == 0
+    assert calls[-1][1]["params"]["target"] == "Option A"
+

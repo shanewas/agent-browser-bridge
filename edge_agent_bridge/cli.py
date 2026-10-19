@@ -660,6 +660,7 @@ def main(argv=None) -> int:
     # check-radio
     p_chk = add_cmd("check-radio", help="Check a radio button or checkbox")
     p_chk.add_argument("target", nargs="?", default=None, help="Label text, selector, or value")
+    p_chk.add_argument("--ref", default=None)
     p_chk.add_argument("--selector", "-s", default=None)
     p_chk.add_argument("--text", default=None)
     p_chk.add_argument("--value", "-v", default=None)
@@ -965,7 +966,9 @@ def main(argv=None) -> int:
         params["key"] = args.key
     elif action == "check-radio":
         action = "check_radio"
-        if args.selector:
+        if args.ref:
+            params["ref"] = args.ref
+        elif args.selector:
             params["selector"] = args.selector
         elif args.target:
             params["target"] = args.target

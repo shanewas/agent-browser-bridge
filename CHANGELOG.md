@@ -81,6 +81,9 @@
   with `tab_closed` instead of drifting to the focused tab. `/status`
   reports it as `pin`. Side effect: a Python `Edge()` with no session now
   receives the pinned tab instead of the focused one on its first call.
+- `check_radio` resolves target by ref, explicit/candidate selector, label text,
+  or value attribute, avoiding unhandled `bad_selector` syntax errors on
+  non-ASCII or punctuation-heavy label strings.
 
 ## 2.5.0
 
