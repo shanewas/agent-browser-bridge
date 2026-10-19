@@ -169,7 +169,9 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
                 "open Edge and check the popup shows Connected")
         if ping_res.get("success") and ping_res.get("fileAccess"):
             add("file-access", True, "allowed", "")
-        elif ping_res.get("success") and not ping_res.get("fileAccess"):
+        elif ping_res.get("success") and "fileAccess" not in ping_res:
+            add("file-access", True, "unknown: the extension predates this check", "")
+        elif ping_res.get("success"):
             add("file-access", False,
                 "turned off: file:// navigation and uploads will fail",
                 "turn on 'Allow access to file URLs' in edge://extensions > Details")

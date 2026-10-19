@@ -97,6 +97,23 @@ def test_doctor_file_access(daemon, tmp_path):
     ext.close()
 
 
+def test_doctor_file_access_unknown_on_older_extension(daemon, tmp_path):
+    # A 2.5.0-or-older extension's ping has no fileAccess field; that is not a failure.
+    def old_ping(action, params):
+        if action == "tabs":
+            return {"success": True, "tabs": [{"id": 1, "title": "T", "url": "http://x/", "active": True}]}
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=old_ping).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["file-access"]["ok"] is True, checks["file-access"]
+    assert "unknown" in checks["file-access"]["detail"]
+    ext.close()
+
+
 def test_doctor_daemon_down(tmp_path):
     port = free_port()
     home = tmp_path / "empty_home"
