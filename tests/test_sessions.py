@@ -228,7 +228,8 @@ def test_batch_nested_params_match_flat(daemon):
     ]
     code, body = daemon.exec("batch", {"steps": steps}, timeout=10)
     assert code == 200 and body["success"] is True, body
-    forwarded = [{k: v for k, v in prm.items() if k != "deadlineMs"} for _, prm in seen]
+    # tabId comes from the tokenless pin after the first step (issue #17), not from the step.
+    forwarded = [{k: v for k, v in prm.items() if k not in ("deadlineMs", "tabId")} for _, prm in seen]
     assert forwarded[0] == forwarded[1] == {"ref": "e1"}, forwarded
     assert forwarded[2].get("ref") == "e2" and forwarded[2].get("text") == "inner", forwarded
     ext.close()
