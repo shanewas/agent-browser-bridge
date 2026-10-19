@@ -348,6 +348,28 @@ def test_cli_run_tab_forwarded_to_steps(daemon, tmp_path):
     ext.close()
 
 
+def test_cli_eval_text_screenshot_print_results(daemon):
+    def handler(action, params):
+        if action == "eval":
+            return {"success": True, "result": 42, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        if action == "text":
+            return {"success": True, "text": "hello world", "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        if action == "screenshot":
+            return {"success": True, "dataUrl": "data:image/jpeg;base64,AAAA",
+                    "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        return {"success": True, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["eval", "6*7"], env=env)
+    assert code == 0 and out.strip() == "42", (code, out, err)
+    code, out, err = run_cli(["text", "main"], env=env)
+    assert code == 0 and out.strip() == "hello world", (code, out, err)
+    code, out, err = run_cli(["screenshot"], env=env)
+    assert code == 0 and "27 bytes" in out, (code, out, err)
+    ext.close()
+
+
 def test_cli_run_usage_errors(daemon, tmp_path):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["run", str(tmp_path / "missing.json")], env=env)

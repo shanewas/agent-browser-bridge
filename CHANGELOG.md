@@ -27,6 +27,8 @@
   overwriting `bridge.pid`.
 - `run --tab N` forwards `tabId: N` to every step that does not carry its
   own, instead of running all steps on the focused tab.
+- `eval` and `text` print their result in human output instead of `OK`, and
+  a path-less `screenshot` reports the size of the returned `dataUrl`.
 
 ## 2.5.0
 
