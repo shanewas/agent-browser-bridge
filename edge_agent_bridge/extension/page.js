@@ -306,16 +306,6 @@ export function pageScroll(x, y) {
   return { success: true, scrollX: window.scrollX, scrollY: window.scrollY };
 }
 
-export function pageTextAt(cx, cy) {
-  let el = document.elementFromPoint(cx, cy);
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
-  const val = el ? (el.value || el.innerText || el.textContent || "") : "";
-  return { success: true, text: val.trim() };
-}
-
 // Ref snapshot (spec 7.4). Needs window.__eabLib (page-lib.js); returns code "lib_missing"
 // so the worker injects the lib and retries.
 export async function pageSnapshot(opts) {

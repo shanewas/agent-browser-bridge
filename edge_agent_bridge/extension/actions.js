@@ -942,7 +942,8 @@ export async function execute(cmd) {
         const target = p.ref || p.target || p.selector;
         const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p), wantText: true });
         if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: "${target}"`);
-        return { ...r, success: true, text: r.ownText !== null && r.ownText !== undefined ? r.ownText : "" };
+        const { ownText, ...rest } = r;
+        return { ...rest, success: true, text: ownText ?? "" };
       }
 
       default:
