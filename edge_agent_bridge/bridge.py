@@ -724,11 +724,11 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         rem = max(0.01, deadline - time.time())
         finished = event.wait(timeout=rem)
         with state.lock:
+            state.pending.pop(cmd_id, None)
             if finished:
                 res = state.results.pop(cmd_id, None)
                 if res is not None:
                     return (res, 200)
-            state.pending.pop(cmd_id, None)
             return ({"success": False, "code": "timeout",
                      "error": "Command timed out waiting for Edge extension response"}, 504)
 

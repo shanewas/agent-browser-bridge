@@ -186,6 +186,7 @@ def test_pending_command_fails_fast_when_extension_drops(daemon):
     assert not th.is_alive(), "caller still waiting after the socket dropped"
     code, body = outcome["r"]
     assert body["code"] == "extension_offline", (code, body)
+    assert daemon.status()["pending"] == 0
 
 
 def test_extension_outdated_rewrite(daemon):
