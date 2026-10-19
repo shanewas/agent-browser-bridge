@@ -435,7 +435,7 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "steps": {"type": "array", "description": "List of action objects: [{action, params}]"},
+                "steps": {"type": "array", "description": "List of action objects: [{action, params}] or flat [{action, ...params}]; a params object is merged under the flat keys"},
                 **COMMON_TOOL_PROPERTIES,
             },
             "required": ["steps"],

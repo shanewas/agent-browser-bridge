@@ -131,6 +131,44 @@ def test_batch_expanded_daemon_side_with_pin(daemon):
     ext.close()
 
 
+def test_batch_nested_params_match_flat(daemon):
+    # Issue #20: {action, params} steps must forward the same params as flat steps.
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "tab": {"id": 5, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [
+        {"action": "click", "params": {"ref": "e1"}},
+        {"action": "click", "ref": "e1"},
+        {"action": "click", "params": {"ref": "e9", "text": "inner"}, "ref": "e2"},
+    ]
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=10)
+    assert code == 200 and body["success"] is True, body
+    forwarded = [{k: v for k, v in prm.items() if k != "deadlineMs"} for _, prm in seen]
+    assert forwarded[0] == forwarded[1] == {"ref": "e1"}, forwarded
+    assert forwarded[2].get("ref") == "e2" and forwarded[2].get("text") == "inner", forwarded
+    ext.close()
+
+
+def test_batch_first_slow_step_keeps_remaining_budget(daemon):
+    # One deadline for the whole batch: a slow first step must not shrink the rest.
+    def handler(action, params):
+        if params.get("target") == "slow":
+            time.sleep(2)
+        return {"success": True, "tab": {"id": 5, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [{"action": "click", "target": "slow"}] + [{"action": "ping"}] * 3
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=6)
+    assert code == 200 and body["success"] is True and body["count"] == 4, body
+    ext.close()
+
+
 def test_batch_stops_on_error_with_shape(daemon):
     def handler(action, params):
         if params.get("target") == "boom":

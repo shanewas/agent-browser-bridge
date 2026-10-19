@@ -802,7 +802,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(200, {"success": False, "code": "bad_params", "error": err,
                                     "stoppedAt": "batch", "results": results})
                 return
-            s_params = {k: v for k, v in step.items() if k != "action"}
+            s_params = {k: v for k, v in step.items() if k not in ("action", "params")}
+            nested = step.get("params")
+            if isinstance(nested, dict):
+                merged = dict(nested)
+                merged.update(s_params)
+                s_params = merged
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
             s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS

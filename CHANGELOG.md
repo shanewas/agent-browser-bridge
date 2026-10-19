@@ -53,6 +53,9 @@
 - `text` returns the target element's own text (a container's full text,
   a field's value, a `display:none` element's text) instead of the text of
   whatever element sits at the target's center.
+- `batch` steps in the `{action, params}` shape forward their params (merged
+  under any flat keys) instead of sending a nested `params` key; the MCP
+  schema says both shapes are accepted.
 
 ## 2.5.0
 
