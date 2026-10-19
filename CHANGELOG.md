@@ -41,6 +41,11 @@
 - `fill` and `type` work on inputs inside open shadow roots (including two
   roots deep): focus assertion and readback step into shadow roots instead
   of stopping at the host and failing with `focus_lost`.
+- Targets that are CSS selectors resolve as selectors: an explicit
+  `selector` always goes to `querySelector` (never name matching, with
+  `bad_selector` for unparsable input), tag compounds like `h2.title` and
+  `input#email` try the selector before name matching, and a bare tag like
+  `main` tries it after, so a button named "Main" still wins.
 
 ## 2.5.0
 

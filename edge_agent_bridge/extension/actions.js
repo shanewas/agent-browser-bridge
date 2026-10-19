@@ -105,7 +105,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
   if (typeof target === "object" && target !== null && target.x !== undefined && target.y !== undefined) {
     return { found: true, x: Number(target.x), y: Number(target.y) };
   }
-  const resolveOpts = { highlight: opts.highlight !== false };
+  const resolveOpts = { highlight: opts.highlight !== false, kind: opts.kind || "target" };
   const frameId = frameOfRef(target);
   if (frameId !== undefined) {
     const live = await probeSubframeIds(tabId);
@@ -120,6 +120,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
     if (last && last.found) {
       return last;
     }
+    if (last && last.code === "bad_selector") return last;
     await new Promise(r => setTimeout(r, 100));
   }
   return { found: false, code: (last && last.code) || "target_not_found", error: (last && last.error) || `Target not found within ${timeoutMs}ms: "${target}"` };
@@ -129,12 +130,17 @@ function hasCoords(p) {
   return p.x !== undefined && p.y !== undefined && p.x !== null && p.y !== null;
 }
 
+// An explicit --selector is always CSS; ref, target and text go through name matching first.
+function targetKind(p) {
+  return p.selector && !p.ref && !p.target ? "selector" : "target";
+}
+
 // Resolve coordinates for an input action from x/y or a target expression.
 async function locate(tabId, p, verb) {
   if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
   const target = p.ref || p.target || p.selector || p.text;
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
-  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
   if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
   if (frameOfRef(target) !== undefined && r.rendered !== false) {
     // pageResolve ran inside the subframe, blind to main-frame overlays. The top
@@ -611,7 +617,7 @@ export async function execute(cmd) {
           }
           return fail("timeout", `page did not finish loading within ${timeout}ms`, { waited: waited() });
         }
-        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector || p.text, timeout, { highlight: false });
+        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector || p.text, timeout, { highlight: false, kind: targetKind(p) });
         if (r && r.found) return { success: true, waited: waited(), ...r };
         return fail(r ? r.code : "target_not_found", r ? r.error : "Target not found", { waited: waited() });
       }
@@ -725,7 +731,7 @@ export async function execute(cmd) {
         if (hasCoords(p) && !target) {
           mode = pt = { x: Number(p.x), y: Number(p.y) };
         } else if (target) {
-          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
           if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
           pt = { x: r.x, y: r.y };
           mode = r.local || pt;
@@ -875,7 +881,7 @@ export async function execute(cmd) {
       case "get_text":
       case "text": {
         const target = p.ref || p.target || p.selector;
-        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
         if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: "${target}"`);
         const textRes = await execInTab(tabId, page.pageTextAt, [r.x, r.y]);
         return { ...r, ...textRes };

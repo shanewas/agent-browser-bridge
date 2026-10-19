@@ -498,11 +498,26 @@ export async function pageResolve(query, opts) {
   }
 
   const looksLikeSelector = /^[#.\[:]/.test(q) || q.includes(">") || q.includes("[") || (/^[a-z][\w-]*(\s*[>+~]\s*|\s+)[a-z#.\[]/i.test(q) && !/["']/.test(q));
-  if (!el && looksLikeSelector) {
+  // A tag followed by # . [ or : is a compound selector (h2.title, input#email);
+  // a bare lowercase word may be a tag (main, table) but is tried only after
+  // name matching, so a button named "Main" still beats a <main> element.
+  const compoundSelector = /^[a-zA-Z][\w-]*[#.[\:]/.test(q);
+  const bareTag = /^[a-z][a-z0-9-]*$/.test(q);
+  const explicitSelector = o.kind === "selector";
+  if (!el && (explicitSelector || looksLikeSelector || compoundSelector)) {
+    let selEl = null;
+    let selErr = null;
     try {
-      el = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
+      selEl = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
     } catch (e) {
-      el = null;
+      selErr = e;
+    }
+    if (selEl) {
+      el = selEl;
+    } else if (explicitSelector) {
+      // An explicit selector never falls back to name matching.
+      if (selErr) return { found: false, code: "bad_selector", error: `Invalid selector: "${q}"` };
+      return { found: false, code: "target_not_found", error: `Target not found: "${q}"` };
     }
   }
 
@@ -540,6 +555,14 @@ export async function pageResolve(query, opts) {
     }
     if (!el) {
       el = smallest(cands.filter(x => L.nameOf(x.el, x.role).toLowerCase().includes(qLower)).map(x => x.el));
+    }
+  }
+
+  if (!el && bareTag && !explicitSelector) {
+    try {
+      el = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
+    } catch (e) {
+      el = null;
     }
   }
 
