@@ -180,19 +180,7 @@ action failed, 2 when the daemon is unreachable, 3 on a usage error. `--no-highl
 ring drawn around the element about to be acted on.
 
 Each CLI call pays roughly 600 ms of Python startup. For anything repetitive use MCP, the Python
-API, `run` (one process for a whole step file), or the REPL, which reuses one connection:
-
-```bash
-edge-bridge repl
-```
-
-```text
-Edge Agent Bridge REPL (port 18999). Type 'help' or action commands, 'exit' to quit.
-edge> tab
-[11.8ms] {"success": true, "tab": {"id": 1459, "title": "GitHub"}}
-edge> click "Pull requests"
-[14.2ms] {"success": true, "x": 380, "y": 96, "native": true}
-```
+API, or `run` (one process for a whole step file).
 
 ---
 

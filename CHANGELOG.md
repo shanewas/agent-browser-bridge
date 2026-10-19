@@ -90,6 +90,11 @@
   (or `doppelhand_http_<status>`) instead of raising `URLError`; the client
   and recipe now state the server is Windows only.
 
+### Removed
+
+- `edge-bridge repl`: its line format matched no verb's arguments, and `run`,
+  MCP and the Python API cover the many-steps-in-one-process case.
+
 ## 2.5.0
 
 - PATH-proof entry points: `py -m edge_agent_bridge` and `python -m edge_agent_bridge`
