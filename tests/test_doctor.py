@@ -42,6 +42,8 @@ def _doctor_json_in_process(monkeypatch, tmp_path, capsys):
 def _tabs_handler(action, params):
     if action == "tabs":
         return {"success": True, "tabs": [{"id": 1, "title": "T", "url": "http://x/", "active": True}]}
+    if action == "ping":
+        return {"success": True, "fileAccess": True}
     return {"success": True}
 
 
@@ -52,7 +54,7 @@ def test_doctor_healthy_tree(daemon, tmp_path):
     code, out, err = run_cli(["doctor"], env=env)
     assert code == 0, out
     assert "FAIL" not in out
-    for name in ("daemon", "token", "extension", "versions", "tabs", "pairing", "pid",
+    for name in ("daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "pid",
                  "launcher", "path", "elevation", "mcp"):
         assert f"[ok  ] {name}:" in out
     ext.close()
@@ -67,10 +69,48 @@ def test_doctor_json_shape_hides_token(daemon, tmp_path):
     body = json.loads(out)
     assert body["success"] is True
     assert [c["name"] for c in body["checks"]] == [
-        "daemon", "token", "extension", "versions", "tabs", "pairing", "pid",
+        "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "pid",
         "launcher", "path", "elevation", "mcp"]
     token = (daemon.home / "token").read_text(encoding="utf-8").strip()
     assert token not in out
+    ext.close()
+
+
+def test_doctor_file_access(daemon, tmp_path):
+    def no_file_access(action, params):
+        if action == "tabs":
+            return {"success": True, "tabs": [{"id": 1, "title": "T", "url": "http://x/", "active": True}]}
+        if action == "ping":
+            return {"success": True, "fileAccess": False}
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=no_file_access).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    assert code == 1
+    body = json.loads(out)
+    checks = {c["name"]: c for c in body["checks"]}
+    assert checks["file-access"]["ok"] is False
+    assert "turned off" in checks["file-access"]["detail"]
+    assert "Allow access to file URLs" in checks["file-access"]["fix"]
+    ext.close()
+
+
+def test_doctor_file_access_unknown_on_older_extension(daemon, tmp_path):
+    # A 2.5.0-or-older extension's ping has no fileAccess field; that is not a failure.
+    def old_ping(action, params):
+        if action == "tabs":
+            return {"success": True, "tabs": [{"id": 1, "title": "T", "url": "http://x/", "active": True}]}
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=old_ping).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["file-access"]["ok"] is True, checks["file-access"]
+    assert "unknown" in checks["file-access"]["detail"]
     ext.close()
 
 

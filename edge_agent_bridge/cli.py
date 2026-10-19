@@ -203,12 +203,24 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
             add("versions", True, f"daemon {dae_v}, extension {ext_v}", "")
         with Edge(port=port, auto_start=False) as edge2:
             tabs_res = edge2.tabs()
+            ping_res = edge2.ping() if connected else {}
         if tabs_res.get("success"):
             tabs = tabs_res.get("tabs", [])
             add("tabs", True, f"{len(tabs)} tab(s) reachable", "")
         else:
             add("tabs", False, f"{tabs_res.get('code')}: {tabs_res.get('error')}",
                 "open Edge and check the popup shows Connected")
+        if ping_res.get("success") and ping_res.get("fileAccess"):
+            add("file-access", True, "allowed", "")
+        elif ping_res.get("success") and "fileAccess" not in ping_res:
+            add("file-access", True, "unknown: the extension predates this check", "")
+        elif ping_res.get("success"):
+            add("file-access", False,
+                "turned off: file:// navigation and uploads will fail",
+                "turn on 'Allow access to file URLs' in edge://extensions > Details")
+        else:
+            detail = f"{ping_res.get('code')}: {ping_res.get('error')}" if ping_res.get("code") else "extension not connected"
+            add("file-access", False, detail, "open Edge and check the popup shows Connected")
         if st.get("pairing_required"):
             if connected:
                 add("pairing", True, "required and paired", "")
@@ -219,7 +231,7 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         else:
             add("pairing", True, "not required", "")
     else:
-        for name in ("extension", "versions", "tabs", "pairing"):
+        for name in ("extension", "versions", "tabs", "file-access", "pairing"):
             add(name, False, "skipped: daemon not running", "edge-bridge daemon start")
 
     pid_p = config.pid_path()

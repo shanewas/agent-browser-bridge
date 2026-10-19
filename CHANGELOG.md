@@ -11,6 +11,10 @@
   already attached, removing the premature `getTargets` shortcut. Failed
   attaches report `native: false` with `debuggerError` instead of silent
   synthetic event fallback, and commands map missing tabs to `tab_not_found`.
+- Detect missing "Allow access to file URLs" toggle in the extension: upload and
+  `file://` navigation fail with `file_access_required` instead of Chromium's
+  internal `Not allowed` error. `doctor` adds a `file-access` check, and the
+  extension popup warns when file access is off.
 - macOS: the daemon no longer blocks about 30 s in `socket.getfqdn()` before it
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
@@ -70,8 +74,10 @@
 - `upload` pierces open shadow roots and temp-reveals hidden file inputs: the
   page marks the input through shadow trees, the worker resolves it with a
   pierced CDP lookup, and styles are restored after. Fixes `no_file_input` on
-  Salesforce Lightning forms and `upload_failed (-32000)` on `display:none`
-  inputs. New e2e page `shadow-upload.html` covers both plus style restore.
+  Salesforce Lightning forms (the `upload_failed (-32000)` note was a
+  misdiagnosis: Chromium returns `Not allowed` when file URL access is disabled
+  in the extension, not for `display:none` inputs). New e2e page
+  `shadow-upload.html` covers both plus style restore.
 - `eval --file PATH` (`-` for stdin) runs JS from a file instead of a
   shell-quoted argument.
 - New `edge_agent_bridge.doppelhand` companion client for OS-level file

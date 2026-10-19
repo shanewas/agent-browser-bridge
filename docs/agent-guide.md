@@ -92,6 +92,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once and re-pins your last tab; if repeated, `session start` |
 | `click_covered` | sticky overlay covers the target | dismiss it or scroll the target clear, then retry |
 | `file_not_found` | upload path missing | check the path; the error names both the given and translated form |
+| `file_access_required` | extension lacks file URL access | tell the user to turn on "Allow access to file URLs" for Edge Agent Bridge in edge://extensions > Details |
 | `bad_name` | session name outside `[A-Za-z0-9_-]{1,40}` | pick a conforming name |
 | `no_log` | daemon never started here | `edge-bridge daemon start` |
 | `focus_lost` | target never took focus | snapshot, check overlays, coords click |

@@ -29,6 +29,26 @@ function isScriptable(url) {
   return Boolean(url) && !UNSCRIPTABLE_PREFIXES.some(p => url.startsWith(p));
 }
 
+async function checkFileAccess() {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.extension?.isAllowedFileSchemeAccess) {
+      return await new Promise((resolve) => {
+        try {
+          const res = chrome.extension.isAllowedFileSchemeAccess((val) => resolve(Boolean(val)));
+          if (res && typeof res.then === "function") {
+            res.then((val) => resolve(Boolean(val))).catch(() => resolve(false));
+          }
+        } catch {
+          resolve(false);
+        }
+      });
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 export async function getTargetTab(tabId) {
   if (tabId !== undefined && tabId !== null && tabId !== "") {
     try {
@@ -209,7 +229,7 @@ export async function execute(cmd) {
   try {
     switch (action) {
       case "ping":
-        return { success: true, message: "pong", version: chrome.runtime.getManifest().version };
+        return { success: true, message: "pong", version: chrome.runtime.getManifest().version, fileAccess: await checkFileAccess() };
 
       case "reload_extension":
         setTimeout(() => { chrome.runtime.reload(); }, 100);
@@ -264,6 +284,9 @@ export async function execute(cmd) {
       case "nav": {
         const url = p.url;
         if (!url) return fail("bad_params", "nav requires url");
+        if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+        }
         let tab = await getTargetTab(tabId);
         if (tab) await attach(tab.id);
         if (!tab) {
@@ -292,6 +315,9 @@ export async function execute(cmd) {
 
       case "tab_new": {
         const url = p.url || "about:blank";
+        if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+        }
         const active = p.active !== false;
         let tab;
         if (p.window) {
@@ -414,6 +440,9 @@ export async function execute(cmd) {
         if (!files.length) return fail("bad_params", "upload requires files: [absolute paths]");
         const relative = files.filter(f => !/^([a-zA-Z]:[\\/]|\/|\\\\)/.test(f));
         if (relative.length) return fail("bad_params", `upload needs absolute paths, got: ${relative.join(", ")}`);
+        if (!await checkFileAccess()) {
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+        }
         const loc = await locate(tabId, p, "upload");
         if (!loc.ok) return loc.result;
         const mark = await execInTab(tabId, page.pageMarkUpload, [p.ref || null, loc.x, loc.y]);
