@@ -105,7 +105,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
   if (typeof target === "object" && target !== null && target.x !== undefined && target.y !== undefined) {
     return { found: true, x: Number(target.x), y: Number(target.y) };
   }
-  const resolveOpts = { highlight: opts.highlight !== false, kind: opts.kind || "target" };
+  const resolveOpts = { highlight: opts.highlight !== false, kind: opts.kind || "target", wantText: Boolean(opts.wantText) };
   const frameId = frameOfRef(target);
   if (frameId !== undefined) {
     const live = await probeSubframeIds(tabId);
@@ -881,10 +881,9 @@ export async function execute(cmd) {
       case "get_text":
       case "text": {
         const target = p.ref || p.target || p.selector;
-        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
+        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p), wantText: true });
         if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: "${target}"`);
-        const textRes = await execInTab(tabId, page.pageTextAt, [r.x, r.y]);
-        return { ...r, ...textRes };
+        return { ...r, success: true, text: r.ownText !== null && r.ownText !== undefined ? r.ownText : "" };
       }
 
       default:

@@ -46,6 +46,9 @@
   `bad_selector` for unparsable input), tag compounds like `h2.title` and
   `input#email` try the selector before name matching, and a bare tag like
   `main` tries it after, so a button named "Main" still wins.
+- `text` returns the target element's own text (a container's full text,
+  a field's value, a `display:none` element's text) instead of the text of
+  whatever element sits at the target's center.
 
 ## 2.5.0
 
