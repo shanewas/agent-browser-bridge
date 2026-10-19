@@ -97,6 +97,9 @@
 - Windows: `run -` and `eval --file -` read stdin as UTF-8 instead of the
   console code page, and undecodable stdin is a usage error (exit 3) naming
   stdin instead of a traceback or mojibake.
+- CLI commands that talk to the browser start the daemon on first use, as
+  the README already said; `status`, `doctor`, `logs` and `daemon` commands
+  still never start it.
 
 ## 2.5.0
 
