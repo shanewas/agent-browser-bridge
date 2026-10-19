@@ -94,6 +94,9 @@
 
 - `edge-bridge repl`: its line format matched no verb's arguments, and `run`,
   MCP and the Python API cover the many-steps-in-one-process case.
+- Windows: `run -` and `eval --file -` read stdin as UTF-8 instead of the
+  console code page, and undecodable stdin is a usage error (exit 3) naming
+  stdin instead of a traceback or mojibake.
 
 ## 2.5.0
 
