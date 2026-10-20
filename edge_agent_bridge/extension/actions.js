@@ -168,13 +168,20 @@ async function locate(tabId, p, verb) {
   let r;
   if (NATIVE_VERBS.has(verb)) {
     // Attach before measuring: the attach itself moves the page (see settleViewport). The
-    // viewport can still shift during a load, so only trust a point measured while it held still.
+    // viewport can still shift during a load, so only trust a point measured while it held
+    // still. A point near the bottom edge is pushed out by even a late shift, so for those
+    // wait until the viewport is quiet and confirm it didn't move.
     await attach(tabId);
     const height = () => execInTab(tabId, () => window.innerHeight, []).catch(() => null);
     for (let i = 0; i < 3; i++) {
       const before = await height();
       r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, opts);
-      if (!r || !r.found || before === await height()) break;
+      if (!r || !r.found) break;
+      const after = await height();
+      if (before !== after) continue;
+      if (typeof after !== "number" || r.y < after - 64) break;
+      await execInTab(tabId, page.pageAwaitStill, [150, 600]).catch(() => {});
+      if (await height() === after) break;
     }
   } else {
     r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, opts);
