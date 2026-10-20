@@ -385,7 +385,6 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "daemon_version": state.daemon_version,
                 "pid": os.getpid(),
                 "extension_version": ext_ver,
-                "instance": ext_inst,
                 "extension_instance": ext_inst,
                 "rejected_instance": rej_inst,
                 "extension_outdated": ext_outdated,
