@@ -6,12 +6,14 @@ import base64
 import functools
 import hashlib
 import http.server
+import json
 import os
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -38,8 +40,32 @@ class EdgeProcess:
         ]
         if sys.platform.startswith("linux") or (hasattr(os, "geteuid") and os.geteuid() == 0):
             args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
-        self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # A file, not a pipe: Edge on Linux logs dbus errors nonstop, and an undrained pipe
+        # fills and blocks the browser mid-run.
+        self.log = open(self.profile / "edge-stderr.log", "wb")
+        self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=self.log)
         return self
+
+    def diagnostics(self):
+        """Edge version, live DevTools targets and the stderr tail, for a failed start."""
+        out = []
+        try:
+            out.append(subprocess.run([self.binary, "--version"], capture_output=True, text=True,
+                                      timeout=10).stdout.strip())
+        except Exception as e:
+            out.append(f"version: {e}")
+        try:
+            port = (self.profile / "DevToolsActivePort").read_text().split()[0]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=5) as r:
+                out += [f"{t['type']} {t['url']}" for t in json.load(r)]
+        except Exception as e:
+            out.append(f"targets: {e}")
+        self.stop()
+        try:
+            out.append((self.profile / "edge-stderr.log").read_bytes()[-3000:].decode(errors="replace"))
+        except OSError as e:
+            out.append(f"stderr: {e}")
+        return "\n".join(out)
 
     def stop(self):
         if not self.proc:
@@ -53,6 +79,7 @@ class EdgeProcess:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
+        self.log.close()
 
 
 @pytest.fixture(scope="session")
@@ -88,9 +115,7 @@ def edge(tmp_path_factory, e2e_daemon, staged_extension):
             break
         time.sleep(0.25)
     else:
-        err = proc.proc.stderr.read().decode(errors="replace")[-1500:] if proc.proc.poll() is not None else ""
-        proc.stop()
-        pytest.fail("extension never connected to the test daemon: " + err)
+        pytest.fail("extension never connected to the test daemon:\n" + proc.diagnostics())
     yield proc
     proc.stop()
 

@@ -32,6 +32,8 @@ jobs:
             required: true
           - os: ubuntu-latest
             required: false
+          - os: macos-latest
+            required: false
     runs-on: ${{ matrix.os }}
     # Only the Windows E2E job has been run against a real Edge. Whether the Linux runner
     # loads an unpacked extension headless is unverified, so it reports without failing
