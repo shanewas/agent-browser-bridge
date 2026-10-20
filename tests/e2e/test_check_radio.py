@@ -44,6 +44,13 @@ def test_check_radio_by_ref(client):
     assert _checked(client, "opt-pending") is True
 
 
+def test_check_radio_label_that_is_a_tag_name(client):
+    for target, el_id in (("Option", "opt-word"), ("Button", "opt-button")):
+        r = client("check_radio", {"target": target})
+        assert r["success"] and r["checked"] is True, (target, r)
+        assert _checked(client, el_id) is True, target
+
+
 def test_check_radio_with_slash_and_non_ascii_label(client):
     r = client("check_radio", {"target": "1.完了 / Completed"})
     assert r["success"], r

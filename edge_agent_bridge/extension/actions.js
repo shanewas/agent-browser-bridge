@@ -437,7 +437,10 @@ export async function execute(cmd) {
       case "select": {
         const loc = await locate(tabId, p, "select");
         if (!loc.ok) return loc.result;
-        const res = await execInTab(tabId, page.pageSelect, [p.ref || null, loc.x, loc.y, p.value, p.label], "ISOLATED", frameOfRef(p.ref));
+        const target = p.ref || p.target || p.selector || p.text || null;
+        const frameId = hasCoords(p) ? undefined : frameOfRef(target);
+        const at = frameId !== undefined ? loc.info.local : loc;
+        const res = await execInTab(tabId, page.pageSelect, [target, at.x, at.y, p.value, p.label], "ISOLATED", frameId);
         return res && res.success ? { ...res, ...loc.info, x: loc.x, y: loc.y } : res;
       }
 
@@ -935,7 +938,7 @@ export async function execute(cmd) {
       case "select_radio": {
         const target = p.ref || p.target || p.selector || p.text;
         const isExplicitSelector = Boolean(p.selector && !p.ref && !p.target);
-        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(p.ref));
+        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(target));
       }
 
       case "get_text":

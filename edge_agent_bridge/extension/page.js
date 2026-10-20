@@ -815,13 +815,15 @@ export function pageCheckRadio(target, value, isExplicitSelector) {
     }
   }
 
-  // 3. Candidate selector (only if it parses without throwing)
-  if (!el && !isExplicitSelector && target) {
+  // 3. Candidate selector: only when it parses and hits a radio, checkbox or label. A bare
+  // word is label text, not a tag name: "Option" or "Button" must not match <option>/<button>.
+  if (!el && !isExplicitSelector && target && !/^[A-Za-z][\w-]*$/.test(target)) {
     try {
       el = document.querySelector(target);
     } catch (e) {
       // not valid selector syntax; fall through to label text
     }
+    if (el && !el.matches("input[type='radio'], input[type='checkbox'], [role='radio'], [role='checkbox'], label")) el = null;
   }
 
   // 4. Label text or role radio/checkbox
