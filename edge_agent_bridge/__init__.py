@@ -3,7 +3,7 @@ Edge Agent Bridge
 Real-time AI agent control for Microsoft Edge using active browser sessions,
 CDP hardware events, and WebSockets.
 """
-__version__ = "2.6.0"
+__version__ = "2.6.1"
 
 from .client import Edge, EdgeClient, send_cmd, ensure_bridge_running
 from .doppelhand import Doppelhand

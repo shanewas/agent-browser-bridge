@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.6.1
 
 - `click`, `hover`, `type` and `drag` no longer miss a target near the bottom of the
   viewport on the first native action in a tab. Attaching the debugger makes Edge show

@@ -16,7 +16,7 @@ function updateUI(st) {
   const outdatedPanel = document.getElementById("outdatedPanel");
   const instructionsPanel = document.getElementById("instructionsPanel");
 
-  const extVersion = chrome.runtime.getManifest ? chrome.runtime.getManifest().version : "2.6.0";
+  const extVersion = chrome.runtime.getManifest ? chrome.runtime.getManifest().version : "2.6.1";
 
   if (st && st.extension_connected) {
     badge.className = "badge connected";

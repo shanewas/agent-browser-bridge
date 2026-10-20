@@ -654,6 +654,18 @@ export async function pageResolve(query, opts) {
 
 // Main-frame hit-test for a subframe target: at main-frame coords the top element must
 // be an iframe (possibly behind one shadow host), not a main-frame overlay.
+// Resolves once the viewport has gone `quiet` ms without a resize, or after `max` ms.
+export function pageAwaitStill(quiet, max) {
+  return new Promise((resolve) => {
+    let t;
+    const done = () => { removeEventListener("resize", bump); clearTimeout(t); clearTimeout(cap); resolve(true); };
+    const bump = () => { clearTimeout(t); t = setTimeout(done, quiet); };
+    const cap = setTimeout(done, max);
+    addEventListener("resize", bump);
+    bump();
+  });
+}
+
 export function pageCoverCheck(cx, cy) {
   let top = null;
   try { top = document.elementFromPoint(cx, cy); } catch (e) {}
