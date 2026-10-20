@@ -45,7 +45,8 @@ def _attach_second_cdp(profile, url_substring):
 
 def test_actions_with_second_cdp_client_attached(client, edge, pages):
     csp_url = f"{pages}/csp.html"
-    nav_res = client("tab_new", {"url": csp_url})
+    # Inactive, so a captureVisibleTab fallback would have to activate it and say so.
+    nav_res = client("tab_new", {"url": csp_url, "active": False})
     assert nav_res["success"], nav_res
     tid = nav_res["tab"]["id"]
 
@@ -69,7 +70,7 @@ def test_actions_with_second_cdp_client_attached(client, edge, pages):
             # 3. screenshot succeeds via CDP without activating/switching tabs
             shot_res = client("screenshot", {"tabId": tid})
             assert shot_res["success"] is True, shot_res
-            assert shot_res.get("activated") is not True, shot_res
+            assert shot_res.get("activated") is not True and "native" not in shot_res, shot_res
         finally:
             second_client.close()
     finally:

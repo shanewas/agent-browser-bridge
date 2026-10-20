@@ -1,6 +1,6 @@
 // Edge Agent Bridge - command router. dispatch() resolves the tab and serializes per tab;
 // execute() is the action switch and is re-entrant (batch calls it directly).
-import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
+import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles, isDetachError } from "./cdp.js";
 import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
 import * as page from "./page.js";
 import { frameOfRef, probeSubframeIds, snapshotTab as framesSnapshotTab } from "./frames.js";
@@ -462,7 +462,7 @@ export async function execute(cmd) {
           if (!hasDbg) return fail("debugger_unavailable", getDebuggerError(tabId) || "upload needs the debugger permission");
           await setFileInputFiles(tabId, '[data-eab-upload="1"]', files);
         } catch (e) {
-          if (e.message && (e.message.includes("Debugger is not attached") || e.message.includes("not attached"))) {
+          if (isDetachError(e.message)) {
             return fail("debugger_unavailable", e.message);
           }
           return fail("upload_failed", e.message);
@@ -507,11 +507,13 @@ export async function execute(cmd) {
           clip = { x: r.x - r.width / 2, y: r.y - r.height / 2, width: r.width, height: r.height };
         }
         const hasDbg = await attach(tabId);
+        let cdpError = null;
         if (hasDbg) {
           try {
             const dataUrl = await captureScreenshot(tabId, { format, quality: p.quality, clip });
             return { success: true, dataUrl, format, clip, tabId: tab.id, title: tab.title, url: tab.url };
           } catch (e) {
+            cdpError = e.message;
             log(`Page.captureScreenshot failed (${e.message}); activating tab for captureVisibleTab`);
           }
         }
@@ -526,9 +528,9 @@ export async function execute(cmd) {
           try { await chrome.tabs.update(prev.id, { active: true }); } catch (e) {}
         }
         const out = { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
-        if (!hasDbg) {
+        if (!hasDbg || cdpError) {
           out.native = false;
-          out.debuggerError = getDebuggerError(tabId);
+          out.debuggerError = cdpError || getDebuggerError(tabId);
         }
         return out;
       }
@@ -960,7 +962,7 @@ export async function execute(cmd) {
     if (msg.includes("No tab with given id")) {
       return fail("tab_not_found", msg);
     }
-    if (err.code === "debugger_unavailable" || msg.includes("Debugger is not attached") || msg.includes("not attached")) {
+    if (err.code === "debugger_unavailable" || isDetachError(msg)) {
       return fail("debugger_unavailable", msg);
     }
     return fail("internal_error", msg);
