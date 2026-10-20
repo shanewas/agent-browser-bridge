@@ -510,6 +510,8 @@ export async function pageResolve(query, opts) {
   const compoundSelector = /^[a-zA-Z][\w-]*[#.[\:]/.test(q);
   const bareTag = /^[a-z][a-z0-9-]*$/.test(q);
   const explicitSelector = o.kind === "selector";
+  // The client's fallback ladder asks for exact names only: a substring could be another element.
+  const exactOnly = o.kind === "exact";
   if (!el && (explicitSelector || looksLikeSelector || compoundSelector)) {
     let selEl = null;
     let selErr = null;
@@ -551,7 +553,7 @@ export async function pageResolve(query, opts) {
     if (!el) {
       const labels = L.queryAllDeep(document, "label");
       const matched = labels.filter(l => L.collapse(l.innerText || l.textContent).toLowerCase() === qLower)
-        .concat(labels.filter(l => L.collapse(l.innerText || l.textContent).toLowerCase().includes(qLower)));
+        .concat(exactOnly ? [] : labels.filter(l => L.collapse(l.innerText || l.textContent).toLowerCase().includes(qLower)));
       for (const lab of matched) {
         const root = lab.getRootNode();
         let target = lab.htmlFor ? ((root.getElementById && root.getElementById(lab.htmlFor)) || document.getElementById(lab.htmlFor)) : null;
@@ -559,7 +561,7 @@ export async function pageResolve(query, opts) {
         if (target) { el = target; break; }
       }
     }
-    if (!el) {
+    if (!el && !exactOnly) {
       el = smallest(cands.filter(x => L.nameOf(x.el, x.role).toLowerCase().includes(qLower)).map(x => x.el));
     }
   }

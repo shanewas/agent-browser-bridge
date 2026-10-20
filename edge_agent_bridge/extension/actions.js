@@ -153,7 +153,8 @@ function hasCoords(p) {
 
 // An explicit --selector is always CSS; ref, target and text go through name matching first.
 function targetKind(p) {
-  return p.selector && !p.ref && !p.target ? "selector" : "target";
+  if (p.selector && !p.ref && !p.target) return "selector";
+  return p.exact ? "exact" : "target";
 }
 
 // Resolve coordinates for an input action from x/y or a target expression.
