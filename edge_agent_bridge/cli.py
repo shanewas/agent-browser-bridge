@@ -60,11 +60,11 @@ def _port_listening(port: int) -> bool:
 
 
 def _read_stdin_text() -> str:
-    """Read all of stdin as UTF-8, whatever the console code page says."""
+    """Read all of stdin as UTF-8, whatever the console code page says, without a leading BOM."""
     buffer = getattr(sys.stdin, "buffer", None)
     if buffer is not None:
-        return buffer.read().decode("utf-8")
-    return sys.stdin.read()
+        return buffer.read().decode("utf-8-sig")
+    return sys.stdin.read().removeprefix(chr(0xFEFF))
 
 
 def _handle_daemon_cmd(args, port: int) -> int:
@@ -357,7 +357,7 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool, opt_tab=None) -> 
 
     src = args.steps_file
     try:
-        raw = _read_stdin_text() if src == "-" else Path(src).read_text(encoding="utf-8")
+        raw = _read_stdin_text() if src == "-" else Path(src).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
         return usage(f"Cannot read {'stdin' if src == '-' else src}: {e}")
     if len(raw.encode("utf-8")) > 1024 * 1024:
@@ -1002,10 +1002,11 @@ def main(argv=None) -> int:
                     return 3
             else:
                 try:
-                    params["code"] = Path(args.file).read_text(encoding="utf-8")
-                except OSError as e:
+                    params["code"] = Path(args.file).read_text(encoding="utf-8-sig")
+                except (OSError, UnicodeDecodeError) as e:
+                    code = "bad_params" if isinstance(e, UnicodeDecodeError) else "file_not_found"
                     if opt_json:
-                        print(json.dumps({"success": False, "code": "file_not_found", "error": str(e)}))
+                        print(json.dumps({"success": False, "code": code, "error": str(e)}))
                     else:
                         print(f"Error: cannot read --file: {e}", file=sys.stderr)
                     return 3

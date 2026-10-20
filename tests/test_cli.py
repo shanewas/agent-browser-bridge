@@ -446,6 +446,21 @@ def test_cli_stdin_read_as_utf8_bytes(daemon):
 
     code, out, err = run_bytes(["run", "-"], b"\xff\xfe not utf-8")
     assert code == 3, (code, out, err)
+
+    # PowerShell 5 pipes and Notepad files start with a BOM.
+    code, out, err = run_bytes(["run", "-"], b"\xef\xbb\xbf" + steps)
+    assert code == 0, (code, out, err)
+
+    script = daemon.home / "bom.js"
+    script.write_bytes(b"\xef\xbb\xbf1 + 1")
+    code, out, err = run_bytes(["eval", "--file", str(script)], b"")
+    assert code == 0, (code, out, err)
+    assert [prm for a, prm in seen if a == "eval"][-1]["code"] == "1 + 1"
+
+    script.write_bytes(b"var s = '\x95';")
+    code, out, err = run_bytes(["--json", "eval", "--file", str(script)], b"")
+    assert code == 3, (code, out, err)
+    assert json.loads(out)["code"] == "bad_params"
     ext.close()
 
 
