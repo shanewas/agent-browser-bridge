@@ -64,8 +64,11 @@ def test_highlight_ring_appears_and_fades(client):
     r = client("hover", {"ref": ref, "highlight": True})
     assert r["success"], r
     assert client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is True
-    time.sleep(0.6)
-    assert client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is False
+    # The ring is removed by a 350 ms timer; a loaded runner can fire it late, so poll.
+    deadline = time.time() + 3
+    while client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is not False:
+        assert time.time() < deadline, "highlight ring still present after 3 s"
+        time.sleep(0.1)
 
 
 def test_below_fold_target_reached(client, pages):

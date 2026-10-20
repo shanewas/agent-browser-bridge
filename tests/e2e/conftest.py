@@ -38,6 +38,10 @@ class EdgeProcess:
             "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
             "--window-size=1280,900", "about:blank",
         ]
+        if sys.platform != "win32":
+            # Skip the OS keyring: on the Linux runner Edge waits about 25 s on it before
+            # DevTools comes up, past the connect deadline. macOS starts faster too.
+            args += ["--password-store=basic", "--use-mock-keychain"]
         if sys.platform.startswith("linux") or (hasattr(os, "geteuid") and os.geteuid() == 0):
             args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
         # A file, not a pipe: Edge on Linux logs dbus errors nonstop, and an undrained pipe
