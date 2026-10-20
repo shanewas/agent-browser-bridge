@@ -7,6 +7,12 @@ export function getDebuggerError(tabId) {
   return debuggerErrors.get(tabId) || null;
 }
 
+// Chromium's own wording when the session is gone; a page error that merely says
+// "not attached" must not be mistaken for it.
+export function isDetachError(msg) {
+  return /Debugger is not attached|Detached while handling command/.test(msg || "");
+}
+
 export async function ensureDebugger(tabId) {
   if (attachedTabs.has(tabId)) return true;
   return new Promise((resolve) => {
@@ -60,7 +66,7 @@ export async function cdpSend(tabId, method, params = {}) {
     }
     return await sendOnce();
   } catch (err) {
-    if (err.message && err.message.includes("not attached")) {
+    if (isDetachError(err.message)) {
       attachedTabs.delete(tabId);
       const reattached = await ensureDebugger(tabId);
       if (reattached) {

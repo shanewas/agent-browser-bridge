@@ -34,7 +34,7 @@ def test_rung2_uses_call_target_after_stale_ref():
     ])
     data = e.send("click", {"ref": "e1", "target": "Save"})
     assert data["success"] is True and data["ladder"]["rung"] == "text"
-    assert e.calls[1][1] == {"target": "Save"}
+    assert e.calls[1][1] == {"target": "Save", "exact": True}
     assert data["ladder"]["tried"][0] == {"step": "ref", "outcome": "stale_ref"}
 
 
@@ -47,7 +47,7 @@ def test_rung2_uses_cached_ref_text():
     e.send("elements")
     data = e.send("click", {"ref": "e1"})
     assert data["success"] is True
-    assert e.calls[2][1] == {"target": "Save"}
+    assert e.calls[2][1] == {"target": "Save", "exact": True}
 
 
 def test_rung3_scan_match_and_rung4_coords():
@@ -98,6 +98,7 @@ def test_drag_ladder_resolves_both_ends_via_scan():
     assert data["success"] is True and data["ladder"]["rung"] == "coords"
     assert e.calls[3][1] == {"steps": 10, "fromX": 0, "fromY": 20, "toX": 10, "toY": 20}
     assert [t["step"] for t in data["ladder"]["tried"]] == ["target", "text", "scan", "scan", "coords"]
+    assert data["ladder"]["matched"]["name"] == "FileA -> FolderB", data["ladder"]
 
 
 def test_opt_out_and_coords_bypass():
@@ -173,4 +174,4 @@ def test_fill_preserves_content_across_rungs():
     ])
     data = e.send("fill", {"ref": "e1", "target": "Name", "text": "hi", "clear": True})
     assert data["success"] is True
-    assert e.calls[1][1] == {"target": "Name", "text": "hi", "clear": True}
+    assert e.calls[1][1] == {"target": "Name", "text": "hi", "clear": True, "exact": True}

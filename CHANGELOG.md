@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## 2.6.0
+
+- `daemon stop` and `daemon restart` work when `bridge.pid` is missing but a
+  daemon answers: the PID comes from its `/status`.
+- `session list`, `status`, `stop` and `prune` no longer start a daemon just to
+  report that it has no sessions; only `session start` auto-starts.
+- `run -` and `eval --file` accept input that starts with a UTF-8 BOM, and an
+  `eval --file` that isn't UTF-8 exits 3 with `bad_params` instead of a traceback.
+- `doctor` offers `daemon restart` for a daemon older than the CLI even while
+  the extension is disconnected.
+- `/status` drops `instance`, which duplicated `extension_instance`.
+- `Doppelhand` returns `doppelhand_bad_response` for a body that isn't JSON,
+  `doppelhand_timeout` for a server that doesn't answer in time, and keeps the
+  server's own error message on an HTTP error.
+- `fill` replaces a pre-filled input two or more shadow roots deep instead of
+  appending to it, and a `<label for>` inside a shadow root resolves to its input.
+- `check-radio` treats a bare word such as `Option` or `Button` as label text, not
+  a tag name. `check-radio` and `select` run a framed ref given as `--target` in
+  its frame.
+- The fallback ladder's text rung matches exact names only, and a drag that
+  succeeds through the ladder reports `ladder.matched`.
+- Without the debugger, `scroll` with deltas and a target scrolls the element
+  under the target, not the window.
+- A screenshot that falls back to `captureVisibleTab` after `Page.captureScreenshot`
+  fails reports `native: false` and the error. Only Chromium's detach messages
+  count as `debugger_unavailable`.
+- A rejected pairing stays blocked across service worker restarts, and the popup's
+  rejection notice clears once the daemon accepts the extension.
+- `text` results no longer carry a duplicate `ownText` field.
 
 - Verified writes no longer clear the field: `type` is never retried, the clearing
   `fill` retry skips contenteditable targets, contenteditable readback ignores

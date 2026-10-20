@@ -45,6 +45,8 @@ def _attach_second_cdp(profile, url_substring):
 
 def test_actions_with_second_cdp_client_attached(client, edge, pages):
     csp_url = f"{pages}/csp.html"
+    # Active: headless Edge never paints a background tab, so Page.captureScreenshot would hang.
+    # The captureVisibleTab fallback always reports "activated", which the CDP path never does.
     nav_res = client("tab_new", {"url": csp_url})
     assert nav_res["success"], nav_res
     tid = nav_res["tab"]["id"]
@@ -69,7 +71,7 @@ def test_actions_with_second_cdp_client_attached(client, edge, pages):
             # 3. screenshot succeeds via CDP without activating/switching tabs
             shot_res = client("screenshot", {"tabId": tid})
             assert shot_res["success"] is True, shot_res
-            assert shot_res.get("activated") is not True, shot_res
+            assert "activated" not in shot_res and "native" not in shot_res, shot_res
         finally:
             second_client.close()
     finally:

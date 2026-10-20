@@ -222,9 +222,21 @@
     return el;
   }
 
+  // The control a write means: the deep element at (x, y) or the deep focused element, with a
+  // label resolved to its control in the label's own tree (a shadow root has its own ids).
+  function controlAt(mode) {
+    let el = !mode ? null : (mode.active ? deepActive() : deepFromPoint(mode.x, mode.y));
+    if (el && el.tagName === "LABEL") {
+      const root = el.getRootNode();
+      const byFor = el.htmlFor ? ((root.getElementById && root.getElementById(el.htmlFor)) || document.getElementById(el.htmlFor)) : null;
+      el = byFor || el.querySelector("input, textarea") || el;
+    }
+    return el;
+  }
+
   window.__eabLib = {
     INTERACTIVE_ROLES, CONTAINER_TAGS, roleOf, nameOf, ownText, collapse, labelText, isVisible,
     childElements, queryAllDeep, rectOf, center, highlight, frameInfo, iframeIndex,
-    deepFromPoint, deepActive
+    deepFromPoint, deepActive, controlAt
   };
 })();

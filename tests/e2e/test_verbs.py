@@ -1,12 +1,14 @@
 import base64
 import re
 import time
+from pathlib import Path
 
 import pytest
 
 from edge_agent_bridge.client import Edge
 
 pytestmark = pytest.mark.e2e
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -161,6 +163,28 @@ def test_scroll_ref_brings_element_into_view(client, pages):
     top = client("eval", {"code": "document.getElementById('bottomBtn').getBoundingClientRect().top"})["result"]
     height = client("eval", {"code": "window.innerHeight"})["result"]
     assert 0 <= top < height, (top, height)
+
+
+def test_scroll_deltas_with_target_scroll_the_element(client, pages):
+    assert client("nav", {"url": pages + "/scroll.html"})["success"]
+    r = client("scroll", {"target": "#box", "y": 200})
+    assert r["success"], r
+    time.sleep(0.3)
+    pos = client("eval", {"code": "[document.getElementById('box').scrollTop, window.scrollY]"})["result"]
+    assert pos[0] > 0 and pos[1] == 0, pos
+
+
+def test_scroll_fallback_scrolls_the_element_under_the_point(client, pages):
+    # The no-debugger path can't be forced here, so run page.js's pageScroll in the page itself.
+    src = (ROOT / "edge_agent_bridge" / "extension" / "page.js").read_text(encoding="utf-8")
+    fn = re.search(r"export function pageScroll\(.*?\n}\n", src, re.S).group(0).replace("export ", "")
+    assert client("nav", {"url": pages + "/scroll.html"})["success"]
+    code = ("(() => {" + fn + "const b = document.getElementById('box').getBoundingClientRect();"
+            "const r = pageScroll(0, 200, b.x + 10, b.y + 10);"
+            "return [r.element, document.getElementById('box').scrollTop, window.scrollY]; })()")
+    assert client("eval", {"code": code})["result"] == ["div", 200, 0]
+    code = "(() => {" + fn + "pageScroll(0, 200, 5, 5); return window.scrollY; })()"
+    assert client("eval", {"code": code})["result"] == 200
 
 
 def test_scroll_x_only_scrolls_horizontally(client, pages):

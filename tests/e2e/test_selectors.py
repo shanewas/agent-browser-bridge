@@ -61,3 +61,12 @@ def test_bad_selector_fails_fast(client):
     r = client("click", {"selector": "div[[", "timeout": 5000})
     assert r.get("code") == "bad_selector", r
     assert time.monotonic() - t0 < 3
+
+
+def test_exact_target_skips_substring_names(client):
+    client("eval", {"code": "document.body.insertAdjacentHTML('beforeend', '<button id=\"draft\">Save draft</button>')"})
+    r = client("click", {"target": "Save dra", "exact": True, "timeout": 1000})
+    assert r["success"] is False and r["code"] == "target_not_found", r
+    r = client("click", {"target": "Save draft", "exact": True})
+    assert r["success"], r
+    assert client("click", {"target": "Save dra", "timeout": 1000})["success"]

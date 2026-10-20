@@ -1,6 +1,6 @@
 // Edge Agent Bridge - command router. dispatch() resolves the tab and serializes per tab;
 // execute() is the action switch and is re-entrant (batch calls it directly).
-import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
+import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles, isDetachError } from "./cdp.js";
 import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
 import * as page from "./page.js";
 import { frameOfRef, probeSubframeIds, snapshotTab as framesSnapshotTab } from "./frames.js";
@@ -153,7 +153,8 @@ function hasCoords(p) {
 
 // An explicit --selector is always CSS; ref, target and text go through name matching first.
 function targetKind(p) {
-  return p.selector && !p.ref && !p.target ? "selector" : "target";
+  if (p.selector && !p.ref && !p.target) return "selector";
+  return p.exact ? "exact" : "target";
 }
 
 // Resolve coordinates for an input action from x/y or a target expression.
@@ -437,7 +438,10 @@ export async function execute(cmd) {
       case "select": {
         const loc = await locate(tabId, p, "select");
         if (!loc.ok) return loc.result;
-        const res = await execInTab(tabId, page.pageSelect, [p.ref || null, loc.x, loc.y, p.value, p.label], "ISOLATED", frameOfRef(p.ref));
+        const target = p.ref || p.target || p.selector || p.text || null;
+        const frameId = hasCoords(p) ? undefined : frameOfRef(target);
+        const at = frameId !== undefined ? loc.info.local : loc;
+        const res = await execInTab(tabId, page.pageSelect, [target, at.x, at.y, p.value, p.label], "ISOLATED", frameId);
         return res && res.success ? { ...res, ...loc.info, x: loc.x, y: loc.y } : res;
       }
 
@@ -458,7 +462,7 @@ export async function execute(cmd) {
           if (!hasDbg) return fail("debugger_unavailable", getDebuggerError(tabId) || "upload needs the debugger permission");
           await setFileInputFiles(tabId, '[data-eab-upload="1"]', files);
         } catch (e) {
-          if (e.message && (e.message.includes("Debugger is not attached") || e.message.includes("not attached"))) {
+          if (isDetachError(e.message)) {
             return fail("debugger_unavailable", e.message);
           }
           return fail("upload_failed", e.message);
@@ -503,11 +507,13 @@ export async function execute(cmd) {
           clip = { x: r.x - r.width / 2, y: r.y - r.height / 2, width: r.width, height: r.height };
         }
         const hasDbg = await attach(tabId);
+        let cdpError = null;
         if (hasDbg) {
           try {
             const dataUrl = await captureScreenshot(tabId, { format, quality: p.quality, clip });
             return { success: true, dataUrl, format, clip, tabId: tab.id, title: tab.title, url: tab.url };
           } catch (e) {
+            cdpError = e.message;
             log(`Page.captureScreenshot failed (${e.message}); activating tab for captureVisibleTab`);
           }
         }
@@ -522,9 +528,9 @@ export async function execute(cmd) {
           try { await chrome.tabs.update(prev.id, { active: true }); } catch (e) {}
         }
         const out = { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
-        if (!hasDbg) {
+        if (!hasDbg || cdpError) {
           out.native = false;
-          out.debuggerError = getDebuggerError(tabId);
+          out.debuggerError = cdpError || getDebuggerError(tabId);
         }
         return out;
       }
@@ -790,10 +796,10 @@ export async function execute(cmd) {
             try {
               await nativeClick(tabId, pt.x, pt.y, "left", 1);
               showCursor(tabId, pt.x, pt.y, true, p);
-              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear], "ISOLATED", frameId);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode, shouldClear], "ISOLATED", frameId);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text], "ISOLATED", frameId);
+              await execInTab(tabId, page.pageFillCommit, [mode, text], "ISOLATED", frameId);
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
@@ -855,7 +861,8 @@ export async function execute(cmd) {
             await nativeScroll(tabId, r.x, r.y, dx, dy);
             return { success: true, scrollX: dx, scrollY: dy, native: true };
           }
-          return await execInTab(tabId, page.pageScroll, [dx, dy]);
+          const resT = await execInTab(tabId, page.pageScroll, [dx, dy, r.local.x, r.local.y], "ISOLATED", frameOfRef(target));
+          return resT && resT.success ? { ...resT, native: false, debuggerError: getDebuggerError(tabId) } : resT;
         }
         const hasDbg = await attach(tabId);
         if (hasDbg) {
@@ -934,7 +941,7 @@ export async function execute(cmd) {
       case "select_radio": {
         const target = p.ref || p.target || p.selector || p.text;
         const isExplicitSelector = Boolean(p.selector && !p.ref && !p.target);
-        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(p.ref));
+        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(target));
       }
 
       case "get_text":
@@ -942,7 +949,8 @@ export async function execute(cmd) {
         const target = p.ref || p.target || p.selector;
         const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p), wantText: true });
         if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: "${target}"`);
-        return { ...r, success: true, text: r.ownText !== null && r.ownText !== undefined ? r.ownText : "" };
+        const { ownText, ...rest } = r;
+        return { ...rest, success: true, text: ownText ?? "" };
       }
 
       default:
@@ -954,7 +962,7 @@ export async function execute(cmd) {
     if (msg.includes("No tab with given id")) {
       return fail("tab_not_found", msg);
     }
-    if (err.code === "debugger_unavailable" || msg.includes("Debugger is not attached") || msg.includes("not attached")) {
+    if (err.code === "debugger_unavailable" || isDetachError(msg)) {
       return fail("debugger_unavailable", msg);
     }
     return fail("internal_error", msg);

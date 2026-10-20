@@ -385,7 +385,6 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "daemon_version": state.daemon_version,
                 "pid": os.getpid(),
                 "extension_version": ext_ver,
-                "instance": ext_inst,
                 "extension_instance": ext_inst,
                 "rejected_instance": rej_inst,
                 "extension_outdated": ext_outdated,
@@ -928,7 +927,6 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
     token = config.ensure_token()
     setup_logging(home)
 
-    daemon_version = os.environ.get("EDGE_BRIDGE_TEST_DAEMON_VERSION") or __version__
     state = BridgeState(
         port=port,
         home=home,
@@ -937,7 +935,6 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
         heartbeat_sec=config.heartbeat_seconds(),
         pong_timeout_sec=config.pong_timeout_seconds(),
         lock_timeout_sec=config.lock_timeout_seconds(),
-        daemon_version=daemon_version,
     )
 
     stop_event = threading.Event()
