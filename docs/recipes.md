@@ -38,7 +38,8 @@ dh.type_file_and_confirm("cv.docx")  # types name, presses Return
 ```
 
 Windows only: the doppelhand server runs on Windows. Calls return a result
-dict and never raise; a missing server returns `doppelhand_unreachable`.
+dict and never raise; a missing server returns `doppelhand_unreachable`, a server
+that doesn't answer in time `doppelhand_timeout`.
 
 Doppelhand mutating calls require POST (the client does this); coords are in
 view space from `/screen`. Verify with `shot()` after any coord click.

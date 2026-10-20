@@ -4,11 +4,18 @@
 <h1>Shadow fill</h1>
 <x-field id="one"></x-field>
 <x-outer id="two"></x-outer>
+<x-for id="three"></x-for>
+<p><input id="combo" role="combobox" aria-label="combo" aria-controls="combo-list" aria-expanded="false">
+<div id="combo-list" role="listbox" tabindex="-1"><div role="option">One</div></div></p>
 <p><label>Steal source <input id="stealSrc" aria-label="steal source"></label>
 <label>Steal target <input id="stealDst" aria-label="steal target"></label></p>
 <script>
   document.getElementById("stealSrc").addEventListener("keydown", function () {
     setTimeout(() => document.getElementById("stealDst").focus(), 10);
+  }, { once: true });
+  // A combobox that moves focus into its own listbox is not a focus theft.
+  document.getElementById("combo").addEventListener("keydown", function () {
+    setTimeout(() => document.getElementById("combo-list").focus(), 10);
   }, { once: true });
 </script>
 <script>
@@ -22,6 +29,12 @@
     constructor() {
       super();
       this.attachShadow({ mode: "open" }).innerHTML = '<label>Deep <input aria-label="deep name"></label>';
+    }
+  });
+  customElements.define("x-for", class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" }).innerHTML = '<label for="f" id="forLabel">For label</label> <input id="f">';
     }
   });
   customElements.define("x-outer", class extends HTMLElement {

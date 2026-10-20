@@ -25,6 +25,26 @@ def _wait_closed(ext, timeout=5):
     return ext.closed_with
 
 
+def test_result_arriving_after_timeout_is_dropped(tmp_path):
+    # The result lands in state.results after the wait has already timed out: the daemon must
+    # answer timeout and pop it, or every late result stays in memory for the daemon's lifetime.
+    from edge_agent_bridge.bridge import BridgeRequestHandler, BridgeState
+
+    state = BridgeState(port=0, home=tmp_path, token="t")
+
+    class LateExtension:
+        closed = False
+
+        def send_text(self, text):
+            state.results[json.loads(text)["id"]] = {"success": True}
+            return True
+
+    state.ext, state.ext_accepted = LateExtension(), True
+    res, code = BridgeRequestHandler._dispatch_once(None, state, "ping", {}, time.time(), False)
+    assert (code, res["code"]) == (504, "timeout")
+    assert state.results == {} and state.pending == {}
+
+
 def test_status_reports_running(daemon):
     st = daemon.status()
     assert st["bridge_running"] is True
@@ -333,6 +353,7 @@ def test_different_instance_rejected_with_4002(daemon):
     assert _wait_active(daemon)
     st = daemon.status()
     assert st.get("rejected_instance") is None
+    assert st["extension_instance"] == "inst-1" and "instance" not in st
 
     ext2 = FakeExtension(daemon.port, instance="inst-2").connect().run()
     assert _wait_closed(ext2) == 4002

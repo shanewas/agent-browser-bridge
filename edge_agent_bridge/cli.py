@@ -60,11 +60,11 @@ def _port_listening(port: int) -> bool:
 
 
 def _read_stdin_text() -> str:
-    """Read all of stdin as UTF-8, whatever the console code page says."""
+    """Read all of stdin as UTF-8, whatever the console code page says, without a leading BOM."""
     buffer = getattr(sys.stdin, "buffer", None)
     if buffer is not None:
-        return buffer.read().decode("utf-8")
-    return sys.stdin.read()
+        return buffer.read().decode("utf-8-sig")
+    return sys.stdin.read().removeprefix(chr(0xFEFF))
 
 
 def _handle_daemon_cmd(args, port: int) -> int:
@@ -73,15 +73,19 @@ def _handle_daemon_cmd(args, port: int) -> int:
 
     if sub == "stop":
         if not pid_p.exists():
-            print("Daemon PID file not found")
-            return 0
-        try:
-            pid = int(pid_p.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError) as e:
-            print(f"Error stopping daemon: {e}")
-            pid_p.unlink(missing_ok=True)
-            return 0
-        if not getattr(args, "force", False):
+            # Without bridge.pid, the daemon answering on the port is the only source of its PID.
+            pid = _probe_status(port).get("pid")
+            if not pid:
+                print("Daemon PID file not found")
+                return 0
+        else:
+            try:
+                pid = int(pid_p.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError) as e:
+                print(f"Error stopping daemon: {e}")
+                pid_p.unlink(missing_ok=True)
+                return 0
+        if pid_p.exists() and not getattr(args, "force", False):
             st = _probe_status(port)
             if st.get("bridge_running") and "pid" not in st:
                 # An answer proves a bridge runs on the port, not that bridge.pid names it.
@@ -201,12 +205,12 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("extension", connected, ext_detail,
             "" if connected else "open Edge and check the popup shows Connected")
         ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
-        if ext_v is None:
-            add("versions", False, "extension version unknown",
-                "open Edge and check the popup shows Connected")
-        elif dae_v is not None and dae_v != __version__:
+        if dae_v is not None and dae_v != __version__:
             add("versions", False, f"CLI {__version__} differs from daemon {dae_v}",
                 "edge-bridge daemon restart")
+        elif ext_v is None:
+            add("versions", False, "extension version unknown",
+                "open Edge and check the popup shows Connected")
         elif dae_v is not None and parse_version(ext_v) < parse_version(dae_v):
             add("versions", False, f"extension {ext_v} predates daemon {dae_v}",
                 f"update from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
@@ -353,7 +357,7 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool, opt_tab=None) -> 
 
     src = args.steps_file
     try:
-        raw = _read_stdin_text() if src == "-" else Path(src).read_text(encoding="utf-8")
+        raw = _read_stdin_text() if src == "-" else Path(src).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
         return usage(f"Cannot read {'stdin' if src == '-' else src}: {e}")
     if len(raw.encode("utf-8")) > 1024 * 1024:
@@ -791,7 +795,8 @@ def main(argv=None) -> int:
         port=port,
         highlight=not opt_no_highlight,
         pin=False,
-        auto_start=args.cmd != "status",
+        # A freshly started daemon has no sessions, so only session start is worth starting one for.
+        auto_start=args.cmd != "status" and (args.cmd != "session" or args.session_action == "start"),
         session_token=opt_session,
     )
 
@@ -997,10 +1002,11 @@ def main(argv=None) -> int:
                     return 3
             else:
                 try:
-                    params["code"] = Path(args.file).read_text(encoding="utf-8")
-                except OSError as e:
+                    params["code"] = Path(args.file).read_text(encoding="utf-8-sig")
+                except (OSError, UnicodeDecodeError) as e:
+                    code = "bad_params" if isinstance(e, UnicodeDecodeError) else "file_not_found"
                     if opt_json:
-                        print(json.dumps({"success": False, "code": "file_not_found", "error": str(e)}))
+                        print(json.dumps({"success": False, "code": code, "error": str(e)}))
                     else:
                         print(f"Error: cannot read --file: {e}", file=sys.stderr)
                     return 3

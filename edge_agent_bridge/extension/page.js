@@ -230,14 +230,12 @@ export function pageTypeText(selector, text, clear) {
 }
 
 // Native fill, step 1: focus the input under (x, y) (or the label's input) and clear it.
-export function pageFillPrepare(cx, cy, shouldClear) {
-  let el = document.elementFromPoint(cx, cy);
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+export function pageFillPrepare(mode, shouldClear) {
+  const lib = window.__eabLib;
+  if (!lib) return { success: false, code: "lib_missing" };
+  let el = lib.controlAt(mode);
   if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA" && !el.isContentEditable)) {
-    const a = document.activeElement;
+    const a = lib.deepActive();
     if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) {
       el = a;
     }
@@ -260,14 +258,12 @@ export function pageFillPrepare(cx, cy, shouldClear) {
 }
 
 // Native fill, step 2: make sure the value landed and fire the framework events.
-export function pageFillCommit(cx, cy, tVal) {
-  let el = document.elementFromPoint(cx, cy);
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+export function pageFillCommit(mode, tVal) {
+  const lib = window.__eabLib;
+  if (!lib) return { success: false, code: "lib_missing" };
+  let el = lib.controlAt(mode);
   if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA" && !el.isContentEditable)) {
-    if (document.activeElement) el = document.activeElement;
+    el = lib.deepActive() || el;
   }
   if (!el) return { success: false, code: "target_not_found", error: "No input at point" };
   const targetInput = el.shadowRoot ? (el.shadowRoot.querySelector("input, textarea") || el) : el;
@@ -301,19 +297,25 @@ export function pagePressKey(key) {
   return { success: true, key, target: el.tagName };
 }
 
-export function pageScroll(x, y) {
+// With a point, scrolls what a wheel there would: the nearest ancestor that can scroll
+// in the requested direction, else the window.
+export function pageScroll(x, y, cx, cy) {
+  const canScroll = (el) => {
+    const cs = window.getComputedStyle(el);
+    const open = (v) => v === "auto" || v === "scroll" || v === "overlay";
+    return (y !== 0 && open(cs.overflowY) && el.scrollHeight > el.clientHeight)
+      || (x !== 0 && open(cs.overflowX) && el.scrollWidth > el.clientWidth);
+  };
+  let el = cx === undefined ? null : document.elementFromPoint(cx, cy);
+  while (el && el !== document.body && el !== document.documentElement) {
+    if (el.nodeType === 1 && canScroll(el)) {
+      el.scrollBy(x, y);
+      return { success: true, scrollX: el.scrollLeft, scrollY: el.scrollTop, element: el.tagName.toLowerCase() };
+    }
+    el = el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+  }
   window.scrollBy(x, y);
   return { success: true, scrollX: window.scrollX, scrollY: window.scrollY };
-}
-
-export function pageTextAt(cx, cy) {
-  let el = document.elementFromPoint(cx, cy);
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
-  const val = el ? (el.value || el.innerText || el.textContent || "") : "";
-  return { success: true, text: val.trim() };
 }
 
 // Ref snapshot (spec 7.4). Needs window.__eabLib (page-lib.js); returns code "lib_missing"
@@ -504,6 +506,8 @@ export async function pageResolve(query, opts) {
   const compoundSelector = /^[a-zA-Z][\w-]*[#.[\:]/.test(q);
   const bareTag = /^[a-z][a-z0-9-]*$/.test(q);
   const explicitSelector = o.kind === "selector";
+  // The client's fallback ladder asks for exact names only: a substring could be another element.
+  const exactOnly = o.kind === "exact";
   if (!el && (explicitSelector || looksLikeSelector || compoundSelector)) {
     let selEl = null;
     let selErr = null;
@@ -545,7 +549,7 @@ export async function pageResolve(query, opts) {
     if (!el) {
       const labels = L.queryAllDeep(document, "label");
       const matched = labels.filter(l => L.collapse(l.innerText || l.textContent).toLowerCase() === qLower)
-        .concat(labels.filter(l => L.collapse(l.innerText || l.textContent).toLowerCase().includes(qLower)));
+        .concat(exactOnly ? [] : labels.filter(l => L.collapse(l.innerText || l.textContent).toLowerCase().includes(qLower)));
       for (const lab of matched) {
         const root = lab.getRootNode();
         let target = lab.htmlFor ? ((root.getElementById && root.getElementById(lab.htmlFor)) || document.getElementById(lab.htmlFor)) : null;
@@ -553,7 +557,7 @@ export async function pageResolve(query, opts) {
         if (target) { el = target; break; }
       }
     }
-    if (!el) {
+    if (!el && !exactOnly) {
       el = smallest(cands.filter(x => L.nameOf(x.el, x.role).toLowerCase().includes(qLower)).map(x => x.el));
     }
   }
@@ -809,13 +813,15 @@ export function pageCheckRadio(target, value, isExplicitSelector) {
     }
   }
 
-  // 3. Candidate selector (only if it parses without throwing)
-  if (!el && !isExplicitSelector && target) {
+  // 3. Candidate selector: only when it parses and hits a radio, checkbox or label. A bare
+  // word is label text, not a tag name: "Option" or "Button" must not match <option>/<button>.
+  if (!el && !isExplicitSelector && target && !/^[A-Za-z][\w-]*$/.test(target)) {
     try {
       el = document.querySelector(target);
     } catch (e) {
       // not valid selector syntax; fall through to label text
     }
+    if (el && !el.matches("input[type='radio'], input[type='checkbox'], [role='radio'], [role='checkbox'], label")) el = null;
   }
 
   // 4. Label text or role radio/checkbox
@@ -898,16 +904,7 @@ export function pageCheckRadio(target, value, isExplicitSelector) {
 export async function pageAssertFocus(mode, uuid, checkOnly) {
   const lib = window.__eabLib;
   if (!lib) return { success: false, code: "lib_missing" };
-  let el = null;
-  if (mode && mode.active) {
-    el = lib.deepActive();
-  } else if (mode) {
-    el = lib.deepFromPoint(mode.x, mode.y);
-  }
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+  const el = lib.controlAt(mode);
   if (!el) return { success: true, focused: false, focusable: false };
   const tag = el.tagName || "";
   const focusable = !el.disabled && (el.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el.tabIndex >= 0 && typeof el.focus === "function"));
@@ -935,16 +932,7 @@ export async function pageAssertFocus(mode, uuid, checkOnly) {
 export function pageReadback(mode) {
   const lib = window.__eabLib;
   if (!lib) return { success: false, code: "lib_missing" };
-  let el = null;
-  if (mode && mode.active) {
-    el = lib.deepActive();
-  } else if (mode) {
-    el = lib.deepFromPoint(mode.x, mode.y);
-  }
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+  const el = lib.controlAt(mode);
   if (!el || el === document.body || el === document.documentElement) {
     return { success: true, present: false, verifiable: false };
   }

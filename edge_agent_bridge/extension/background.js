@@ -7,6 +7,10 @@ const MAX_BACKOFF_MS = 5000;
 
 let bridgeWs = null;
 let pairingBlocked = false;
+// Session storage outlives the MV3 worker, so a restarted worker doesn't retry a rejection.
+const blockedLoaded = chrome.storage.session.get("pairingBlocked")
+  .then((d) => { pairingBlocked = Boolean(d && d.pairingBlocked); })
+  .catch((e) => console.warn("[Edge Bridge] pairingBlocked not restored:", e));
 let wsReconnectTimer = null;
 let wsBackoffMs = 1000;
 let lastLog = "Initializing...";
@@ -44,7 +48,14 @@ async function getOrCreateInstanceId() {
   }
 }
 
-function connectWebSocket(force = false) {
+function setPairingBlocked(value) {
+  pairingBlocked = value;
+  chrome.storage.session.set({ pairingBlocked: value })
+    .catch((e) => console.warn("[Edge Bridge] pairingBlocked not saved:", e));
+}
+
+async function connectWebSocket(force = false) {
+  if (!force) await blockedLoaded;
   if (pairingBlocked && !force) {
     return;
   }
@@ -61,6 +72,7 @@ function connectWebSocket(force = false) {
   try {
     const ws = new WebSocket(WS_URL);
     bridgeWs = ws;
+    let accepted = false;
 
     ws.onopen = async () => {
       wsBackoffMs = 1000;
@@ -81,6 +93,11 @@ function connectWebSocket(force = false) {
         return;
       }
       if (!msg || typeof msg !== "object") return;
+      if (!accepted) {
+        // Any message means the daemon kept us after hello: a stale rejection notice is wrong now.
+        accepted = true;
+        try { chrome.storage.local.set({ pairingRejected: false }); } catch (e) {}
+      }
       if (msg.ping) {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ pong: true }));
         return;
@@ -116,7 +133,7 @@ function connectWebSocket(force = false) {
         // Rejected (4001 pairing, 4002 another browser holds the bridge): reconnecting only
         // repeats the rejection, including from the watchdog alarm. Stay down until a token
         // is saved or Reconnect is clicked (both arrive as RECONNECT, which connects with force).
-        pairingBlocked = true;
+        setPairingBlocked(true);
         if (event.code === 4001) {
           try { chrome.storage.local.set({ pairingRejected: true }); } catch (e) {}
         }
@@ -152,7 +169,7 @@ function wsConnected() {
 // connectWebSocket() is a no-op while the socket is open or a reconnect timer is pending.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "RECONNECT") {
-    pairingBlocked = false;
+    setPairingBlocked(false);
     try { chrome.storage.local.set({ pairingRejected: false }); } catch (e) {}
     if (bridgeWs) {
       try { bridgeWs.close(); } catch (e) {}
