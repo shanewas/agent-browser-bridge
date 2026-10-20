@@ -318,26 +318,33 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
     from edge_agent_bridge import __version__
     port = free_port()
     daemon = DaemonHandle(port, tmp_path).start(extra_env={"EDGE_BRIDGE_TEST_DAEMON_VERSION": "2.4.0"})
-    ext = FakeExtension(port, version="2.5.0", handler=_tabs_handler).connect().run()
-    time.sleep(0.3)
-    env = _stub_env(tmp_path, daemon)
+    try:
+        env = _stub_env(tmp_path, daemon)
 
-    # status check
-    code, out, err = run_cli(["status"], env=env)
-    assert code == 0
-    assert f"CLI {__version__}, daemon 2.4.0, extension 2.5.0" in out
-    assert "edge-bridge daemon restart" in out
+        # A stale daemon is the fix to show even while the extension is disconnected.
+        code, out, err = run_cli(["--json", "doctor"], env=env)
+        checks = {c["name"]: c for c in json.loads(out)["checks"]}
+        assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
+        assert "edge-bridge daemon restart" in checks["versions"]["fix"]
 
-    # doctor --json check
-    code, out, err = run_cli(["--json", "doctor"], env=env)
-    assert code == 1
-    checks = {c["name"]: c for c in json.loads(out)["checks"]}
-    assert checks["versions"]["ok"] is False
-    assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
-    assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+        ext = FakeExtension(port, version="2.5.0", handler=_tabs_handler).connect().run()
+        try:
+            time.sleep(0.3)
+            code, out, err = run_cli(["status"], env=env)
+            assert code == 0
+            assert f"CLI {__version__}, daemon 2.4.0, extension 2.5.0" in out
+            assert "edge-bridge daemon restart" in out
 
-    ext.close()
-    daemon.stop()
+            code, out, err = run_cli(["--json", "doctor"], env=env)
+            assert code == 1
+            checks = {c["name"]: c for c in json.loads(out)["checks"]}
+            assert checks["versions"]["ok"] is False
+            assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
+            assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+        finally:
+            ext.close()
+    finally:
+        daemon.stop()
 
 
 def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):

@@ -205,12 +205,12 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("extension", connected, ext_detail,
             "" if connected else "open Edge and check the popup shows Connected")
         ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
-        if ext_v is None:
-            add("versions", False, "extension version unknown",
-                "open Edge and check the popup shows Connected")
-        elif dae_v is not None and dae_v != __version__:
+        if dae_v is not None and dae_v != __version__:
             add("versions", False, f"CLI {__version__} differs from daemon {dae_v}",
                 "edge-bridge daemon restart")
+        elif ext_v is None:
+            add("versions", False, "extension version unknown",
+                "open Edge and check the popup shows Connected")
         elif dae_v is not None and parse_version(ext_v) < parse_version(dae_v):
             add("versions", False, f"extension {ext_v} predates daemon {dae_v}",
                 f"update from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
