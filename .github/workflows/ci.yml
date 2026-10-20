@@ -50,4 +50,22 @@ jobs:
       - name: Ensure Edge
         shell: bash
         run: python tests/e2e/ensure_edge.py
+      - name: Edge startup probe (temporary)
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          ls -lR /etc/opt/edge "/Library/Managed Preferences" 2>/dev/null | head -40 || true
+          env | grep -iE 'dbus|xdg|display|wayland' || true
+          B=$(python tests/e2e/ensure_edge.py)
+          for extra in "" "--password-store=basic --use-mock-keychain"; do
+            P=$(mktemp -d)
+            echo "=== probe extra=[$extra]"
+            "$B" --headless=new --user-data-dir=$P --no-sandbox --disable-dev-shm-usage --remote-debugging-port=0 --no-first-run --enable-logging=stderr --v=1 $extra about:blank > $P/log 2>&1 &
+            pid=$!
+            for i in $(seq 60); do [ -f $P/DevToolsActivePort ] && { echo "devtools up after ${i}s"; break; }; sleep 1; done
+            [ -f $P/DevToolsActivePort ] || echo "devtools NOT up after 60s"
+            grep -v "dbus/" $P/log | head -120
+            kill $pid 2>/dev/null; sleep 2; kill -9 $pid 2>/dev/null || true
+          done
       - run: python -u -m pytest -q -m e2e
