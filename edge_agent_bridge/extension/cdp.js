@@ -13,9 +13,32 @@ export function isDetachError(msg) {
   return /Debugger is not attached|Detached while handling command/.test(msg || "");
 }
 
+// Attaching makes Edge show its "started debugging this browser" bar, which shrinks the
+// viewport as it slides in, starting about 50-90 ms later. A point resolved before that is off
+// by the bar's height and can fall below the viewport, where input is silently dropped. Wait
+// until the height has held for 150 ms after changing, or 500 ms if it never changes. Polled
+// over CDP rather than in the page, because the attach often comes right before a navigation.
+async function settleViewport(tabId) {
+  const height = () => new Promise((resolve) => {
+    chrome.debugger.sendCommand({ tabId }, "Page.getLayoutMetrics", {}, (m) => {
+      void chrome.runtime.lastError;
+      resolve(m && m.cssLayoutViewport ? m.cssLayoutViewport.clientHeight : null);
+    });
+  });
+  const start = Date.now();
+  let last = await height();
+  let changedAt = 0;
+  while (Date.now() - start < 1500) {
+    await new Promise(r => setTimeout(r, 30));
+    const h = await height();
+    if (h !== last) { last = h; changedAt = Date.now(); }
+    else if (changedAt ? Date.now() - changedAt >= 150 : Date.now() - start >= 500) return;
+  }
+}
+
 export async function ensureDebugger(tabId) {
   if (attachedTabs.has(tabId)) return true;
-  return new Promise((resolve) => {
+  const ok = await new Promise((resolve) => {
     chrome.debugger.attach({ tabId }, "1.3", () => {
       if (chrome.runtime.lastError) {
         const msg = chrome.runtime.lastError.message || "";
@@ -30,11 +53,15 @@ export async function ensureDebugger(tabId) {
         console.log(`[Edge Bridge] CDP attach failed for tab ${tabId}: ${msg}`);
         return resolve(false);
       }
-      attachedTabs.add(tabId);
       debuggerErrors.delete(tabId);
-      resolve(true);
+      resolve("fresh");
     });
   });
+  if (ok === "fresh") {
+    await settleViewport(tabId);
+    attachedTabs.add(tabId);
+  }
+  return Boolean(ok);
 }
 
 chrome.debugger.onDetach.addListener((source, reason) => {
