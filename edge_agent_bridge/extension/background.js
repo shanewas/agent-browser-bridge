@@ -6,6 +6,7 @@ const WS_URL = "ws://127.0.0.1:18999/ws";
 const MAX_BACKOFF_MS = 5000;
 
 let bridgeWs = null;
+let pairingBlocked = false;
 let wsReconnectTimer = null;
 let wsBackoffMs = 1000;
 let lastLog = "Initializing...";
@@ -29,7 +30,24 @@ async function pairToken() {
   }
 }
 
+async function getOrCreateInstanceId() {
+  try {
+    const data = await chrome.storage.local.get("instanceId");
+    if (data && data.instanceId) return data.instanceId;
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `inst-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    await chrome.storage.local.set({ instanceId: id });
+    return id;
+  } catch (e) {
+    return undefined;
+  }
+}
+
 function connectWebSocket(force = false) {
+  if (pairingBlocked && !force) {
+    return;
+  }
   if (bridgeWs && (bridgeWs.readyState === WebSocket.CONNECTING || bridgeWs.readyState === WebSocket.OPEN)) {
     return;
   }
@@ -49,6 +67,8 @@ function connectWebSocket(force = false) {
       const hello = { version: chrome.runtime.getManifest().version, id: chrome.runtime.id };
       const token = await pairToken();
       if (token) hello.token = token;
+      const inst = await getOrCreateInstanceId();
+      if (inst) hello.instance = inst;
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ hello }));
       log("Connected to bridge daemon");
     };
@@ -90,8 +110,19 @@ function connectWebSocket(force = false) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       bridgeWs = null;
+      if (event && (event.code === 4001 || event.code === 4002)) {
+        // Rejected (4001 pairing, 4002 another browser holds the bridge): reconnecting only
+        // repeats the rejection, including from the watchdog alarm. Stay down until a token
+        // is saved or Reconnect is clicked (both arrive as RECONNECT, which connects with force).
+        pairingBlocked = true;
+        if (event.code === 4001) {
+          try { chrome.storage.local.set({ pairingRejected: true }); } catch (e) {}
+        }
+        log(`Bridge closed with ${event.code} (${event.reason || "connection rejected"}); not reconnecting until a token is saved or Reconnect is clicked`);
+        return;
+      }
       scheduleWsReconnect();
     };
 
@@ -121,6 +152,8 @@ function wsConnected() {
 // connectWebSocket() is a no-op while the socket is open or a reconnect timer is pending.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "RECONNECT") {
+    pairingBlocked = false;
+    try { chrome.storage.local.set({ pairingRejected: false }); } catch (e) {}
     if (bridgeWs) {
       try { bridgeWs.close(); } catch (e) {}
     } else {

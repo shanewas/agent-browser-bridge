@@ -37,6 +37,9 @@ dh = Doppelhand(token="...")         # or DOPPELHAND_TOKEN env
 dh.type_file_and_confirm("cv.docx")  # types name, presses Return
 ```
 
+Windows only: the doppelhand server runs on Windows. Calls return a result
+dict and never raise; a missing server returns `doppelhand_unreachable`.
+
 Doppelhand mutating calls require POST (the client does this); coords are in
 view space from `/screen`. Verify with `shot()` after any coord click.
 

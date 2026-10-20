@@ -1,7 +1,12 @@
 """Tests for edge_agent_bridge.cli."""
 import io
 import json
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
+import pytest
 from edge_agent_bridge import cli, config
 from edge_agent_bridge.client import Edge
 from tests.fake_extension import FakeExtension
@@ -31,14 +36,19 @@ def test_cli_json_tab_not_found_exits_1(daemon):
     ext.close()
 
 
-def test_cli_unreachable_port_exits_2(monkeypatch, tmp_path):
+def test_cli_unreachable_port_autostarts_instead_of_exits_2(monkeypatch, tmp_path):
+    # Since issue #30 the CLI starts the daemon on first use, so a port with
+    # no daemon answers extension_offline (exit 1), not daemon_unreachable.
     port = free_port()
     env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(port)}
     code, out, err = run_cli(["--json", "ping"], env=env)
-    assert code == 2
+    assert code == 1
     data = json.loads(out)
     assert data["success"] is False
-    assert data["code"] in ("daemon_unreachable", "missing_token")
+    assert data["code"] == "extension_offline"
+    pid = int((tmp_path / "bridge.pid").read_text(encoding="utf-8").strip())
+    import os as _os, signal as _sig
+    _os.kill(pid, _sig.SIGTERM)
 
 
 def test_cli_close_without_tab_exits_3(daemon):
@@ -111,6 +121,21 @@ def test_cli_no_fallback_flag_accepted(daemon):
     ext.close()
 
 
+def test_cli_type_mismatch_warns_and_exits_1(daemon):
+    def handler(action, params):
+        if action == "type":
+            return {"success": True, "written": "56", "readback": "5", "match": False,
+                    "field": "contenteditable", "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        return {"success": True, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["type", "56"], env=env)
+    ext.close()
+    assert code == 1, err
+    assert out.startswith("OK"), out
+    assert "Warning (write_mismatch): wrote '56', read back '5'" in err, err
+
 def test_cli_status_shows_real_pid(daemon, fake_ext):
     import re
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
@@ -122,6 +147,106 @@ def test_cli_status_shows_real_pid(daemon, fake_ext):
     assert code == 0
     assert "PID None" not in out
     assert re.search(r"\(PID \d+\)", out)
+
+
+def test_cli_daemon_status_prints_pid_from_status_not_file(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    pid = daemon.status()["pid"]
+    (daemon.home / "bridge.pid").write_text("1", encoding="utf-8")
+    code, out, err = run_cli(["daemon", "status"], env=env)
+    assert code == 0, err
+    assert f"(PID {pid})" in out
+
+
+@pytest.fixture
+def bystander():
+    """A live process that is not the daemon, standing in for a recycled PID or a hung daemon."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    yield proc
+    proc.kill()
+    proc.wait(timeout=5)
+
+
+def test_cli_daemon_stop_leaves_stale_pid_process_alive(tmp_path, bystander):
+    # A crash leaves bridge.pid behind and the OS recycles the PID; stop killed whatever owned it (#5).
+    (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+    env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(free_port())}
+    code, out, err = run_cli(["daemon", "stop"], env=env)
+    assert code == 0, err
+    assert "stale" in out
+    assert not (tmp_path / "bridge.pid").exists()
+    assert bystander.poll() is None
+
+
+def test_cli_daemon_stop_kills_the_daemon_that_owns_the_pid(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["daemon", "stop"], env=env)
+    assert code == 0, err
+    assert "Stopped daemon" in out
+    daemon.proc.wait(timeout=10)
+
+
+def test_cli_daemon_stop_refuses_daemon_without_status_pid(tmp_path, bystander):
+    # A pre-fix daemon answers /status without "pid"; that proves a bridge runs, not that bridge.pid names it.
+    import http.server
+    import threading
+
+    class OldStatus(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"bridge_running": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), OldStatus)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(srv.server_address[1])}
+        code, out, err = run_cli(["daemon", "stop"], env=env)
+        assert code == 1
+        assert "--force" in err
+        assert (tmp_path / "bridge.pid").exists()
+        assert bystander.poll() is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_cli_daemon_stop_hung_daemon_needs_force(tmp_path, bystander):
+    # Alive PID plus a port that accepts but never answers: plain stop keeps bridge.pid so --force can still kill.
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    try:
+        (tmp_path / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(listener.getsockname()[1])}
+        started = time.time()
+        code, out, err = run_cli(["daemon", "stop"], env=env)
+        assert code == 1
+        assert "--force" in err
+        assert time.time() - started < 15
+        assert (tmp_path / "bridge.pid").exists()
+        assert bystander.poll() is None
+        code, out, err = run_cli(["daemon", "stop", "--force"], env=env)
+        assert code == 0, err
+        bystander.wait(timeout=10)
+        assert not (tmp_path / "bridge.pid").exists()
+    finally:
+        listener.close()
+
+
+def test_cli_daemon_restart_fails_while_another_daemon_answers(daemon, bystander):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    (daemon.home / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+    code, out, err = run_cli(["daemon", "restart"], env=env)
+    assert code == 1
+    assert f"PID {daemon.status()['pid']} still answers" in err
+    assert bystander.poll() is None
 
 
 def test_cli_status_session_line(daemon):
@@ -222,6 +347,126 @@ def test_cli_run_steps_and_exit_codes(daemon, fake_ext, tmp_path):
     assert len(out.splitlines()) == 1
 
 
+def test_cli_run_tab_forwarded_to_steps(daemon, tmp_path):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "tab": {"id": 77, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    steps = tmp_path / "steps.json"
+    steps.write_text(json.dumps([
+        {"action": "snapshot", "params": {}},
+        {"action": "snapshot", "params": {"tabId": 9}},
+    ]), encoding="utf-8")
+    code, out, err = run_cli(["run", str(steps), "--tab", "77"], env=env)
+    assert code == 0, err
+    assert seen[0][1].get("tabId") == 77, seen
+    assert seen[1][1].get("tabId") == 9, seen
+    ext.close()
+
+
+def test_cli_eval_text_screenshot_print_results(daemon):
+    def handler(action, params):
+        if action == "eval":
+            return {"success": True, "result": 42, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        if action == "text":
+            return {"success": True, "text": "hello world", "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        if action == "screenshot":
+            return {"success": True, "dataUrl": "data:image/jpeg;base64,AAAA",
+                    "tab": {"id": 1, "title": "t", "url": "http://t"}}
+        return {"success": True, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["eval", "6*7"], env=env)
+    assert code == 0 and out.strip() == "42", (code, out, err)
+    code, out, err = run_cli(["text", "main"], env=env)
+    assert code == 0 and out.strip() == "hello world", (code, out, err)
+    code, out, err = run_cli(["screenshot"], env=env)
+    assert code == 0 and "27 bytes" in out, (code, out, err)
+    ext.close()
+
+
+def test_cli_repl_is_removed():
+    # The repl subcommand is gone (issue #26): argparse rejects it with exit 2.
+    code, out, err = run_cli(["repl"])
+    assert code == 2 and "invalid choice" in err, (code, out, err)
+
+
+def test_cli_stdin_read_as_utf8_bytes(daemon):
+    # Issue #25: stdin is read as UTF-8 bytes, not the console code page.
+    import os as _os, subprocess as _sp, sys as _sys
+    from pathlib import Path as _P
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "match": True, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {k: v for k, v in _os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update({"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)})
+    root = _P(__file__).resolve().parents[1]
+
+    def run_bytes(args, payload):
+        r = _sp.run([_sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args,
+                    cwd=root, env=env, input=payload, capture_output=True)
+        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+    text = "bullet \u2022 emoji \U0001F600"
+    steps = json.dumps([{"action": "fill", "params": {"target": "x", "text": text}}]).encode("utf-8")
+    code, out, err = run_bytes(["run", "-"], steps)
+    assert code == 0, (code, out, err)
+    fills = [prm for a, prm in seen if a == "fill"]
+    assert fills and fills[-1].get("text") == text, seen
+
+    code, out, err = run_bytes(["eval", "--file", "-"], "var s = \'\u2022\';".encode("utf-8"))
+    assert code == 0, (code, out, err)
+    evals = [prm for a, prm in seen if a == "eval"]
+    assert evals and "\u2022" in evals[-1].get("code", ""), seen
+
+    code, out, err = run_bytes(["run", "-"], b"\xff\xfe not utf-8")
+    assert code == 3, (code, out, err)
+    ext.close()
+
+
+def test_cli_autostarts_daemon_but_status_does_not(tmp_path):
+    # Issue #30: browser commands start the daemon on first use; status must not.
+    import urllib.request as _u
+    from tests.support import free_port as _fp
+
+    def probe(port):
+        try:
+            with _u.urlopen(f"http://127.0.0.1:{port}/status", timeout=2) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    port = _fp()
+    home = tmp_path / "home1"
+    env = {"EDGE_BRIDGE_HOME": str(home), "EDGE_BRIDGE_PORT": str(port)}
+    code, out, err = run_cli(["--json", "tabs"], env=env)
+    body = json.loads(out)
+    assert body["code"] == "extension_offline", (code, out, err)
+    assert probe(port) and probe(port)["bridge_running"] is True
+    ext = FakeExtension(port, handler=lambda a, p: {"success": True, "tabs": []}).connect().run()
+    time.sleep(0.3)
+    code, out, err = run_cli(["--json", "tabs"], env=env)
+    assert code == 0 and json.loads(out)["success"] is True, (code, out, err)
+    ext.close()
+    pid = int((home / "bridge.pid").read_text(encoding="utf-8").strip())
+    import os as _os, signal as _sig
+    _os.kill(pid, _sig.SIGTERM)
+
+    port2 = _fp()
+    env2 = {"EDGE_BRIDGE_HOME": str(tmp_path / "home2"), "EDGE_BRIDGE_PORT": str(port2)}
+    run_cli(["status"], env=env2)
+    assert probe(port2) is None
+
+
 def test_cli_run_usage_errors(daemon, tmp_path):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["run", str(tmp_path / "missing.json")], env=env)
@@ -313,3 +558,37 @@ def test_cli_wait_asks_the_daemon_for_its_whole_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
     assert cli.main(["--json", "wait", "--text", "X", "--timeout", "60000"]) == 0
     assert bodies[0]["timeout"] == 65, bodies
+
+
+def test_cli_check_radio_dispatches_ref_selector_target(tmp_path, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setenv("EDGE_BRIDGE_PORT", str(free_port()))
+    monkeypatch.delenv("EDGE_BRIDGE_SESSION", raising=False)
+    config.ensure_token()
+    calls = []
+
+    class RecordingConnection:
+        sock = None
+
+        def request(self, method, url, body=None, headers=None):
+            calls.append((url, json.loads(body)))
+
+        def getresponse(self):
+            return io.BytesIO(b'{"success": true}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
+
+    assert cli.main(["--json", "check-radio", "--ref", "e5"]) == 0
+    assert calls[-1][0] == "/exec"
+    assert calls[-1][1]["action"] == "check_radio"
+    assert calls[-1][1]["params"]["ref"] == "e5"
+
+    assert cli.main(["--json", "check-radio", "--selector", "#agree"]) == 0
+    assert calls[-1][1]["params"]["selector"] == "#agree"
+
+    assert cli.main(["--json", "check-radio", "Option A"]) == 0
+    assert calls[-1][1]["params"]["target"] == "Option A"
+

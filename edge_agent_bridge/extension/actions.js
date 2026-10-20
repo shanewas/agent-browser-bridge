@@ -1,6 +1,6 @@
 // Edge Agent Bridge - command router. dispatch() resolves the tab and serializes per tab;
 // execute() is the action switch and is re-entrant (batch calls it directly).
-import { ensureDebugger, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
+import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
 import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
 import * as page from "./page.js";
 import { frameOfRef, probeSubframeIds, snapshotTab as framesSnapshotTab } from "./frames.js";
@@ -27,6 +27,26 @@ const UNSCRIPTABLE_PREFIXES = ["edge://", "chrome://", "chrome-extension://", "e
 
 function isScriptable(url) {
   return Boolean(url) && !UNSCRIPTABLE_PREFIXES.some(p => url.startsWith(p));
+}
+
+async function checkFileAccess() {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.extension?.isAllowedFileSchemeAccess) {
+      return await new Promise((resolve) => {
+        try {
+          const res = chrome.extension.isAllowedFileSchemeAccess((val) => resolve(Boolean(val)));
+          if (res && typeof res.then === "function") {
+            res.then((val) => resolve(Boolean(val))).catch(() => resolve(false));
+          }
+        } catch {
+          resolve(false);
+        }
+      });
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 export async function getTargetTab(tabId) {
@@ -84,7 +104,7 @@ export async function execInTab(tabId, func, args = [], world = "ISOLATED", fram
   const cleanArgs = (args || []).map(a => (a === undefined ? null : a));
   const run = async () => {
     const results = await chrome.scripting.executeScript({ target, func, args: cleanArgs, world });
-    if (results && results[0]) return results[0].result;
+    if (results && results[0] && results[0].result !== undefined) return results[0].result;
     return fail("inject_failed", "Script injected but returned no result");
   };
   try {
@@ -93,6 +113,7 @@ export async function execInTab(tabId, func, args = [], world = "ISOLATED", fram
       await injectLib(tabId, frameId);
       result = await run();
     }
+    if (result === undefined) return fail("inject_failed", "Script injected but returned no result");
     return result;
   } catch (err) {
     return fail("inject_failed", err.message);
@@ -105,7 +126,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
   if (typeof target === "object" && target !== null && target.x !== undefined && target.y !== undefined) {
     return { found: true, x: Number(target.x), y: Number(target.y) };
   }
-  const resolveOpts = { highlight: opts.highlight !== false };
+  const resolveOpts = { highlight: opts.highlight !== false, kind: opts.kind || "target", wantText: Boolean(opts.wantText) };
   const frameId = frameOfRef(target);
   if (frameId !== undefined) {
     const live = await probeSubframeIds(tabId);
@@ -120,6 +141,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
     if (last && last.found) {
       return last;
     }
+    if (last && last.code === "bad_selector") return last;
     await new Promise(r => setTimeout(r, 100));
   }
   return { found: false, code: (last && last.code) || "target_not_found", error: (last && last.error) || `Target not found within ${timeoutMs}ms: "${target}"` };
@@ -129,12 +151,17 @@ function hasCoords(p) {
   return p.x !== undefined && p.y !== undefined && p.x !== null && p.y !== null;
 }
 
+// An explicit --selector is always CSS; ref, target and text go through name matching first.
+function targetKind(p) {
+  return p.selector && !p.ref && !p.target ? "selector" : "target";
+}
+
 // Resolve coordinates for an input action from x/y or a target expression.
 async function locate(tabId, p, verb) {
   if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
   const target = p.ref || p.target || p.selector || p.text;
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
-  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
   if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
   if (frameOfRef(target) !== undefined && r.rendered !== false) {
     // pageResolve ran inside the subframe, blind to main-frame overlays. The top
@@ -163,6 +190,13 @@ function normalizeReadValue(v) {
   if (typeof v === "string") return v;
   if (v === null || v === undefined) return "";
   return String(v);
+}
+
+// Rich editors pad innerText with newlines and store typed spaces as U+00A0.
+function writeMatches(readback, written, field) {
+  if (field !== "contenteditable") return readback === written;
+  const norm = (s) => s.replace(/\u00a0/g, " ").replace(/^\n+|\n+$/g, "");
+  return norm(readback) === norm(written);
 }
 
 // Pre-assert focus on mode ({x,y} or {active:true}) in frameId. Returns {ok} or {ok:false, result}.
@@ -196,7 +230,7 @@ export async function execute(cmd) {
   try {
     switch (action) {
       case "ping":
-        return { success: true, message: "pong", version: chrome.runtime.getManifest().version };
+        return { success: true, message: "pong", version: chrome.runtime.getManifest().version, fileAccess: await checkFileAccess() };
 
       case "reload_extension":
         setTimeout(() => { chrome.runtime.reload(); }, 100);
@@ -251,16 +285,20 @@ export async function execute(cmd) {
       case "nav": {
         const url = p.url;
         if (!url) return fail("bad_params", "nav requires url");
+        if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+        }
+        const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
         let tab = await getTargetTab(tabId);
         if (tab) await attach(tab.id);
         if (!tab) {
           tab = await chrome.tabs.create({ url });
-          const loaded = await waitForTabLoad(tab.id, 15000, true);
+          const loaded = await waitForTabLoad(tab.id, loadTimeout, true);
           const created = await chrome.tabs.get(tab.id);
           if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: created.url, tab: tabInfo(created) });
           return { success: true, title: created.title, url: created.url, tab: tabInfo(created) };
         } else {
-          const pending = waitForTabLoad(tab.id);
+          const pending = waitForTabLoad(tab.id, loadTimeout);
           await chrome.tabs.update(tab.id, { url });
           if (p.wait === "none") {
             const t0 = await chrome.tabs.get(tab.id);
@@ -271,14 +309,13 @@ export async function execute(cmd) {
           if (!ok) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: t.url, tab: tabInfo(t) });
           return { success: true, title: t.title, url: t.url, tab: tabInfo(t) };
         }
-        const loaded = await waitForTabLoad(tab.id);
-        const updatedTab = await chrome.tabs.get(tab.id);
-        if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: updatedTab.url, tab: tabInfo(updatedTab) });
-        return { success: true, title: updatedTab.title, url: updatedTab.url, tab: tabInfo(updatedTab) };
       }
 
       case "tab_new": {
         const url = p.url || "about:blank";
+        if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+        }
         const active = p.active !== false;
         let tab;
         if (p.window) {
@@ -305,7 +342,8 @@ export async function execute(cmd) {
             group = { code: "group_unsupported", error: e.message };
           }
         }
-        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, 15000, true);
+        const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
+        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, loadTimeout, true);
         const t = await chrome.tabs.get(tab.id);
         return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
       }
@@ -361,7 +399,8 @@ export async function execute(cmd) {
       case "back":
       case "forward":
       case "reload": {
-        const pending = p.wait === "none" ? null : waitForTabLoad(tabId);
+        const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
+        const pending = p.wait === "none" ? null : waitForTabLoad(tabId, loadTimeout);
         try {
           if (action === "reload") {
             await chrome.tabs.reload(tabId);
@@ -384,7 +423,13 @@ export async function execute(cmd) {
         } catch (e) {
           return fail("no_history", e.message);
         }
-        if (pending) await pending;
+        if (pending) {
+          const ok = await pending;
+          if (!ok) {
+            const t = await chrome.tabs.get(tabId);
+            return fail("nav_timeout", `${action} timed out waiting for page load`, { url: t.url, tab: tabInfo(t) });
+          }
+        }
         const t = await chrome.tabs.get(tabId);
         return { success: true, url: t.url, title: t.title, tab: tabInfo(t) };
       }
@@ -401,15 +446,21 @@ export async function execute(cmd) {
         if (!files.length) return fail("bad_params", "upload requires files: [absolute paths]");
         const relative = files.filter(f => !/^([a-zA-Z]:[\\/]|\/|\\\\)/.test(f));
         if (relative.length) return fail("bad_params", `upload needs absolute paths, got: ${relative.join(", ")}`);
+        if (!await checkFileAccess()) {
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+        }
         const loc = await locate(tabId, p, "upload");
         if (!loc.ok) return loc.result;
         const mark = await execInTab(tabId, page.pageMarkUpload, [p.ref || null, loc.x, loc.y]);
         if (!mark || mark.success === false) return mark || fail("no_file_input", "No file input found");
         try {
           const hasDbg = await attach(tabId);
-          if (!hasDbg) return fail("debugger_unavailable", "upload needs the debugger permission");
+          if (!hasDbg) return fail("debugger_unavailable", getDebuggerError(tabId) || "upload needs the debugger permission");
           await setFileInputFiles(tabId, '[data-eab-upload="1"]', files);
         } catch (e) {
+          if (e.message && (e.message.includes("Debugger is not attached") || e.message.includes("not attached"))) {
+            return fail("debugger_unavailable", e.message);
+          }
           return fail("upload_failed", e.message);
         } finally {
           execInTab(tabId, page.pageUnmarkUpload, []).catch(() => {});
@@ -470,7 +521,12 @@ export async function execute(cmd) {
         if (prev && prev.id !== tab.id) {
           try { await chrome.tabs.update(prev.id, { active: true }); } catch (e) {}
         }
-        return { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
+        const out = { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
+        if (!hasDbg) {
+          out.native = false;
+          out.debuggerError = getDebuggerError(tabId);
+        }
+        return out;
       }
 
       case "click":
@@ -478,7 +534,7 @@ export async function execute(cmd) {
       case "rightclick": {
         const loc = await locate(tabId, p, action);
         if (!loc.ok) {
-          if (action !== "rightclick" && (p.selector || p.text)) {
+          if (action !== "rightclick" && (p.selector || p.text) && loc.result.code !== "bad_selector") {
             const fn = action === "click" ? page.pageClickElement : page.pageDblclickElement;
             return await execInTab(tabId, fn, [p.selector, p.text]);
           }
@@ -497,7 +553,8 @@ export async function execute(cmd) {
           return { success: true, x, y, native: true, ...info };
         }
         const fallback = action === "click" ? page.pageClickAt : (action === "dblclick" ? page.pageDblclickAt : page.pageRightClickAt);
-        return await execInTab(tabId, fallback, [x, y]);
+        const res = await execInTab(tabId, fallback, [x, y]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId), ...info } : res;
       }
 
       case "move":
@@ -514,7 +571,8 @@ export async function execute(cmd) {
           }
           return { success: true, x, y, native: true, ...info };
         }
-        return await execInTab(tabId, page.pageMoveAt, [x, y]);
+        const res = await execInTab(tabId, page.pageMoveAt, [x, y]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId), ...info } : res;
       }
 
       case "drag": {
@@ -533,7 +591,7 @@ export async function execute(cmd) {
           toY = rTo.y;
         }
         const hasDbg = await attach(tabId);
-        if (!hasDbg) return fail("debugger_unavailable", "Native drag requires debugger permission");
+        if (!hasDbg) return fail("debugger_unavailable", getDebuggerError(tabId) || "Native drag requires debugger permission");
         const onStep = p.highlight === false ? null : (cx, cy) => execInTab(tabId, page.pageCursor, [cx, cy, false]).catch(() => {});
         await nativeDrag(tabId, Number(fromX), Number(fromY), Number(toX), Number(toY), Number(p.steps || 12), onStep);
         return { success: true, fromX: Number(fromX), fromY: Number(fromY), toX: Number(toX), toY: Number(toY), native: true };
@@ -553,7 +611,8 @@ export async function execute(cmd) {
 
       case "wait_for":
       case "wait": {
-        const timeout = Number(p.timeout || 5000);
+        let timeout = Number(p.timeout || 5000);
+        if (p.deadlineMs) timeout = Math.min(timeout, Math.max(0, p.deadlineMs - Date.now()));
         const start = Date.now();
         const waited = () => Date.now() - start;
         if (p.idle) {
@@ -594,7 +653,7 @@ export async function execute(cmd) {
           }
           return fail("timeout", `page did not finish loading within ${timeout}ms`, { waited: waited() });
         }
-        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector || p.text, timeout, { highlight: false });
+        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector || p.text, timeout, { highlight: false, kind: targetKind(p) });
         if (r && r.found) return { success: true, waited: waited(), ...r };
         return fail(r ? r.code : "target_not_found", r ? r.error : "Target not found", { waited: waited() });
       }
@@ -679,11 +738,15 @@ export async function execute(cmd) {
           await sleep(100);
           const rb = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           if (!rb || rb.success === false || rb.verifiable === false || rb.present === false) {
-            return { success: true, text, native: hasDbg, chars: chars.length, written: valueBefore === null ? text : valueBefore + text, readback: null, match: "unknown" };
+            const out = { success: true, text, native: hasDbg, chars: chars.length, written: valueBefore === null ? text : valueBefore + text, readback: null, match: "unknown" };
+            if (!hasDbg) out.debuggerError = getDebuggerError(tabId);
+            return out;
           }
           const written = valueBefore === null ? text : valueBefore + text;
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: readback === written };
+          const out = { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: writeMatches(readback, written, rb.field), field: rb.field };
+          if (!hasDbg) out.debuggerError = getDebuggerError(tabId);
+          return out;
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
@@ -704,7 +767,7 @@ export async function execute(cmd) {
         if (hasCoords(p) && !target) {
           mode = pt = { x: Number(p.x), y: Number(p.y) };
         } else if (target) {
-          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
           if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
           pt = { x: r.x, y: r.y };
           mode = r.local || pt;
@@ -722,6 +785,7 @@ export async function execute(cmd) {
           const asserted = await preAssertFocus(tabId, frameId, mode, uuid);
           if (!asserted.ok) return asserted.result;
           let native = false;
+          let fillDbgError = null;
           if (hasDbg && hasPoint) {
             try {
               await nativeClick(tabId, pt.x, pt.y, "left", 1);
@@ -733,6 +797,7 @@ export async function execute(cmd) {
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
+              fillDbgError = e.message;
             }
           }
           if (!native) {
@@ -746,10 +811,14 @@ export async function execute(cmd) {
           const rb = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           const written = shouldClear ? text : valueBefore + text;
           if (!rb || rb.success === false || rb.verifiable === false || rb.present === false) {
-            return { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
+            const out = { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
+            if (!native) out.debuggerError = getDebuggerError(tabId) || fillDbgError;
+            return out;
           }
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native, written, readback, match: readback === written, ...targetInfo };
+          const out = { success: true, text, native, written, readback, match: writeMatches(readback, written, rb.field), field: rb.field, ...targetInfo };
+          if (!native) out.debuggerError = getDebuggerError(tabId) || fillDbgError;
+          return out;
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
@@ -762,16 +831,39 @@ export async function execute(cmd) {
           await nativeKey(tabId, p.key);
           return { success: true, key: p.key, native: true };
         }
-        return await execInTab(tabId, page.pagePressKey, [p.key]);
+        const res = await execInTab(tabId, page.pagePressKey, [p.key]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId) } : res;
       }
 
       case "scroll": {
+        const hasX = p.x !== undefined && p.x !== null;
+        const hasY = p.y !== undefined && p.y !== null;
+        const hasDeltas = hasX || hasY;
+        // Defaults apply only when both deltas are absent, so an explicit 0 stays 0.
+        const dx = hasX ? Number(p.x) : 0;
+        const dy = hasY ? Number(p.y) : (hasDeltas ? 0 : 300);
+        const target = p.ref || p.target || p.selector;
+        if (target) {
+          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+          if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
+          if (!hasDeltas) {
+            // pageResolve already scrolled the element into view.
+            return { success: true, scrolledIntoView: true, x: r.x, y: r.y };
+          }
+          const hasDbgT = await attach(tabId);
+          if (hasDbgT) {
+            await nativeScroll(tabId, r.x, r.y, dx, dy);
+            return { success: true, scrollX: dx, scrollY: dy, native: true };
+          }
+          return await execInTab(tabId, page.pageScroll, [dx, dy]);
+        }
         const hasDbg = await attach(tabId);
         if (hasDbg) {
-          await nativeScroll(tabId, 500, 300, Number(p.x || 0), Number(p.y || 300));
-          return { success: true, scrollX: p.x || 0, scrollY: p.y || 300, native: true };
+          await nativeScroll(tabId, 500, 300, dx, dy);
+          return { success: true, scrollX: dx, scrollY: dy, native: true };
         }
-        return await execInTab(tabId, page.pageScroll, [Number(p.x || 0), Number(p.y || 0)]);
+        const res = await execInTab(tabId, page.pageScroll, [dx, dy]);
+        return res && res.success ? { ...res, native: false, debuggerError: getDebuggerError(tabId) } : res;
       }
 
       case "snapshot": {
@@ -808,6 +900,7 @@ export async function execute(cmd) {
       case "eval": {
         if (p.code === undefined) return fail("bad_params", "eval requires code");
         const hasDbg = await ensureDebugger(tabId);
+        let cdpError = null;
         if (hasDbg) {
           try {
             const res = await cdpSend(tabId, "Runtime.evaluate", {
@@ -823,25 +916,33 @@ export async function execute(cmd) {
             }
             return { success: true, result: res.result ? res.result.value : undefined };
           } catch (cdpErr) {
+            cdpError = cdpErr.message;
             // CDP not available for this tab — fall through to execInTab
           }
+        } else {
+          cdpError = getDebuggerError(tabId);
         }
-        return await execInTab(tabId, page.pageEval, [p.code], "MAIN");
+        const r = await execInTab(tabId, page.pageEval, [p.code], "MAIN");
+        if (r && r.success === false && cdpError) {
+          r.debuggerError = cdpError;
+        }
+        return r;
       }
 
       case "check_radio":
       case "check":
       case "select_radio": {
-        return await execInTab(tabId, page.pageCheckRadio, [p.selector || p.target, p.text, p.value]);
+        const target = p.ref || p.target || p.selector || p.text;
+        const isExplicitSelector = Boolean(p.selector && !p.ref && !p.target);
+        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(p.ref));
       }
 
       case "get_text":
       case "text": {
         const target = p.ref || p.target || p.selector;
-        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p), wantText: true });
         if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: "${target}"`);
-        const textRes = await execInTab(tabId, page.pageTextAt, [r.x, r.y]);
-        return { ...r, ...textRes };
+        return { ...r, success: true, text: r.ownText !== null && r.ownText !== undefined ? r.ownText : "" };
       }
 
       default:
@@ -849,7 +950,14 @@ export async function execute(cmd) {
     }
   } catch (err) {
     log(`Error in ${action}: ${err.message}`);
-    return fail("internal_error", err.message);
+    const msg = err.message || "";
+    if (msg.includes("No tab with given id")) {
+      return fail("tab_not_found", msg);
+    }
+    if (err.code === "debugger_unavailable" || msg.includes("Debugger is not attached") || msg.includes("not attached")) {
+      return fail("debugger_unavailable", msg);
+    }
+    return fail("internal_error", msg);
   }
 }
 

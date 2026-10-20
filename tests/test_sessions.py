@@ -47,6 +47,86 @@ def test_pin_inject_and_one_shot_override(daemon):
     ext.close()
 
 
+def test_cli_pin_follows_switch_and_new(daemon):
+    # Issue #17: tokenless calls stick to the tab picked by switch/new.
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action == "tab_new":
+            return {"success": True, "tab": {"id": 12, "title": "t", "url": "http://t"}}
+        tid = params.get("tabId", 5)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    _, sw = daemon.exec("tab_switch", {"tabId": 5})
+    assert sw["success"] is True
+    daemon.exec("click", {"target": "b"})
+    assert seen[-1][1].get("tabId") == 5, seen
+    assert daemon.status().get("pin") == 5
+    daemon.exec("click", {"target": "b", "tabId": 9})
+    assert seen[-1][1].get("tabId") == 9, seen
+    daemon.exec("click", {"target": "b"})
+    assert seen[-1][1].get("tabId") == 5, seen
+    _, nw = daemon.exec("tab_new", {"url": "http://x", "background": True})
+    assert nw["success"] is True
+    daemon.exec("snapshot")
+    assert seen[-1][1].get("tabId") == 12, seen
+    ext.close()
+
+
+def test_cli_pin_closed_until_switch_and_sessions_ignore_it(daemon):
+    seen = []
+    gone = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action == "click" and params.get("tabId") == 5 and gone:
+            return {"success": False, "code": "tab_not_found", "error": "gone"}
+        tid = params.get("tabId", 7)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    daemon.exec("tab_switch", {"tabId": 5})
+    gone.append(True)
+    _, r1 = daemon.exec("click", {"target": "b"})
+    assert r1["code"] == "tab_not_found", r1
+    _, r2 = daemon.exec("click", {"target": "b"})
+    assert r2["code"] == "tab_closed", r2
+    # A session call ignores the tokenless pin entirely.
+    _, start = daemon.exec("session_start")
+    token = start["sessionToken"]
+    _, r3 = daemon.exec("click", {"target": "b"}, session_token=token)
+    assert r3["success"] is True and "tabId" not in seen[-1][1], seen
+    # switch re-pins and clears the closed state.
+    daemon.exec("tab_switch", {"tabId": 7})
+    _, r4 = daemon.exec("click", {"target": "b"})
+    assert r4["success"] is True and seen[-1][1].get("tabId") == 7, seen
+    ext.close()
+
+
+def test_cli_pin_does_not_inject_into_tab_close(daemon):
+    # tab_close requires an explicit tabId; tokenless pin must not be auto-injected.
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action == "tab_close" and not params.get("tabId"):
+            return {"success": False, "code": "tab_required", "error": "tab_close requires an explicit tabId"}
+        return {"success": True, "tab": {"id": params.get("tabId", 5), "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    daemon.exec("tab_switch", {"tabId": 5})
+    assert daemon.status().get("pin") == 5
+    _, r = daemon.exec("tab_close", {})
+    assert r["success"] is False and r["code"] == "tab_required", r
+    assert "tabId" not in seen[-1][1], seen
+    ext.close()
+
+
 def test_tokenless_legacy_unchanged(daemon):
     seen = []
 
@@ -128,6 +208,45 @@ def test_batch_expanded_daemon_side_with_pin(daemon):
     assert seen[-1][1].get("tabId") == 9  # one-shot inside batch, no pin change
     _, st = daemon.exec("session_status", session_token=token)
     assert st["tabId"] == 5
+    ext.close()
+
+
+def test_batch_nested_params_match_flat(daemon):
+    # Issue #20: {action, params} steps must forward the same params as flat steps.
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "tab": {"id": 5, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [
+        {"action": "click", "params": {"ref": "e1"}},
+        {"action": "click", "ref": "e1"},
+        {"action": "click", "params": {"ref": "e9", "text": "inner"}, "ref": "e2"},
+    ]
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=10)
+    assert code == 200 and body["success"] is True, body
+    # tabId comes from the tokenless pin after the first step (issue #17), not from the step.
+    forwarded = [{k: v for k, v in prm.items() if k not in ("deadlineMs", "tabId")} for _, prm in seen]
+    assert forwarded[0] == forwarded[1] == {"ref": "e1"}, forwarded
+    assert forwarded[2].get("ref") == "e2" and forwarded[2].get("text") == "inner", forwarded
+    ext.close()
+
+
+def test_batch_first_slow_step_keeps_remaining_budget(daemon):
+    # One deadline for the whole batch: a slow first step must not shrink the rest.
+    def handler(action, params):
+        if params.get("target") == "slow":
+            time.sleep(2)
+        return {"success": True, "tab": {"id": 5, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [{"action": "click", "target": "slow"}] + [{"action": "ping"}] * 3
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=6)
+    assert code == 200 and body["success"] is True and body["count"] == 4, body
     ext.close()
 
 
@@ -249,10 +368,16 @@ def test_status_reports_data_dir(daemon):
 def test_deadline_ms_forwarded_for_tab_scoped_only(daemon, fake_ext):
     import time as _t
     before = int(_t.time() * 1000)
-    daemon.exec("click", {"target": "b", "tabId": 3})
+    daemon.exec("click", {"target": "b", "tabId": 3}, timeout=5)
     daemon.exec("ping")
     fwd_click = [m for m in fake_ext.received if m.get("action") == "click"][-1]
     fwd_ping = [m for m in fake_ext.received if m.get("action") == "ping"][-1]
     assert "deadlineMs" in fwd_click["params"]
-    assert before + 9000 < fwd_click["params"]["deadlineMs"] < before + 15000
+    assert before + 3500 < fwd_click["params"]["deadlineMs"] < before + 5500
     assert "deadlineMs" not in fwd_ping["params"]
+
+    before10 = int(_t.time() * 1000)
+    daemon.exec("click", {"target": "b", "tabId": 3}, timeout=10)
+    fwd_click10 = [m for m in fake_ext.received if m.get("action") == "click"][-1]
+    assert "deadlineMs" in fwd_click10["params"]
+    assert before10 + 8500 < fwd_click10["params"]["deadlineMs"] < before10 + 10500

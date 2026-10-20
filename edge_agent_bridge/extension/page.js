@@ -498,11 +498,26 @@ export async function pageResolve(query, opts) {
   }
 
   const looksLikeSelector = /^[#.\[:]/.test(q) || q.includes(">") || q.includes("[") || (/^[a-z][\w-]*(\s*[>+~]\s*|\s+)[a-z#.\[]/i.test(q) && !/["']/.test(q));
-  if (!el && looksLikeSelector) {
+  // A tag followed by # . [ or : is a compound selector (h2.title, input#email);
+  // a bare lowercase word may be a tag (main, table) but is tried only after
+  // name matching, so a button named "Main" still beats a <main> element.
+  const compoundSelector = /^[a-zA-Z][\w-]*[#.[\:]/.test(q);
+  const bareTag = /^[a-z][a-z0-9-]*$/.test(q);
+  const explicitSelector = o.kind === "selector";
+  if (!el && (explicitSelector || looksLikeSelector || compoundSelector)) {
+    let selEl = null;
+    let selErr = null;
     try {
-      el = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
+      selEl = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
     } catch (e) {
-      el = null;
+      selErr = e;
+    }
+    if (selEl) {
+      el = selEl;
+    } else if (explicitSelector) {
+      // An explicit selector never falls back to name matching.
+      if (selErr) return { found: false, code: "bad_selector", error: `Invalid selector: "${q}"` };
+      return { found: false, code: "target_not_found", error: `Target not found: "${q}"` };
     }
   }
 
@@ -540,6 +555,14 @@ export async function pageResolve(query, opts) {
     }
     if (!el) {
       el = smallest(cands.filter(x => L.nameOf(x.el, x.role).toLowerCase().includes(qLower)).map(x => x.el));
+    }
+  }
+
+  if (!el && bareTag && !explicitSelector) {
+    try {
+      el = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
+    } catch (e) {
+      el = null;
     }
   }
 
@@ -599,6 +622,14 @@ export async function pageResolve(query, opts) {
   }
   if (o.highlight !== false) L.highlight(r, ref);
   const role = L.roleOf(el);
+  // The text action reads the resolved element itself, not whatever sits at
+  // its center: containers would return one child, display:none the corner.
+  let ownText = null;
+  if (o.wantText) {
+    const tagName = el.tagName.toLowerCase();
+    if (tagName === "input" || tagName === "textarea" || tagName === "select") ownText = el.value || "";
+    else ownText = el.innerText || el.textContent || "";
+  }
   return {
     found: true,
     rendered,
@@ -612,6 +643,7 @@ export async function pageResolve(query, opts) {
     id: el.id || "",
     ref,
     role,
+    ownText,
     text: L.nameOf(el, role).slice(0, 60)
   };
 }
@@ -663,8 +695,7 @@ export function pageSelect(ref, cx, cy, value, label) {
 }
 
 // Find the file input for an upload target and mark it so the worker can address it over CDP.
-// Pierces open shadow roots (Salesforce Lightning, custom elements); temp-reveals
-// hidden inputs since CDP setFileInputFiles rejects display:none ("Not allowed").
+// Pierces open shadow roots (Salesforce Lightning, custom elements); temp-reveals hidden inputs.
 export function pageMarkUpload(ref, cx, cy) {
   let el = null;
   if (ref && window.__eab && window.__eab.refs) el = window.__eab.refs.get(ref) || null;
@@ -754,29 +785,80 @@ export async function pageEval(code) {
   }
 }
 
-// check_radio: check a radio button or checkbox by selector, label text, or value.
-export function pageCheckRadio(selector, text, value) {
+// check_radio: check a radio button or checkbox by ref, selector, label text, or value.
+export function pageCheckRadio(target, value, isExplicitSelector) {
   let el = null;
-  if (selector) el = document.querySelector(selector);
-  if (!el && value !== undefined && value !== null) {
-    el = document.querySelector(`input[type="radio"][value="${value}"], input[type="checkbox"][value="${value}"]`);
+  // 1. Ref
+  if (target && window.__eab && window.__eab.refs) {
+    el = window.__eab.refs.get(target) || null;
   }
-  if (!el && text) {
-    const lower = text.toLowerCase().trim();
-    const labels = Array.from(document.querySelectorAll("label, [role='radio'], [role='checkbox']"));
-    const matched = labels.find(l => (l.innerText || "").trim().toLowerCase() === lower || (l.innerText || "").toLowerCase().includes(lower));
+
+  // 2. Explicit selector
+  if (!el && isExplicitSelector && target) {
+    let selErr = null;
+    try {
+      el = document.querySelector(target);
+    } catch (e) {
+      selErr = e;
+    }
+    if (selErr) {
+      return { success: false, code: "bad_selector", error: `Invalid selector: "${target}"` };
+    }
+    if (!el) {
+      return { success: false, code: "target_not_found", error: `Radio/checkbox not found for selector: "${target}"` };
+    }
+  }
+
+  // 3. Candidate selector (only if it parses without throwing)
+  if (!el && !isExplicitSelector && target) {
+    try {
+      el = document.querySelector(target);
+    } catch (e) {
+      // not valid selector syntax; fall through to label text
+    }
+  }
+
+  // 4. Label text or role radio/checkbox
+  if (!el && target) {
+    const lower = String(target).toLowerCase().trim();
+    const candidates = Array.from(document.querySelectorAll("label, [role='radio'], [role='checkbox'], input[type='radio'], input[type='checkbox']"));
+    const matchScore = (item) => {
+      const txt = (item.innerText || item.textContent || "").trim().toLowerCase();
+      const aria = (item.getAttribute && item.getAttribute("aria-label") || "").trim().toLowerCase();
+      if (txt === lower || aria === lower) return 2;
+      if (txt.includes(lower) || aria.includes(lower)) return 1;
+      return 0;
+    };
+    const exact = candidates.find(item => matchScore(item) === 2);
+    const matched = exact || candidates.find(item => matchScore(item) === 1);
     if (matched) {
       if (matched.htmlFor) el = document.getElementById(matched.htmlFor);
       if (!el) el = matched.querySelector("input[type='radio'], input[type='checkbox']");
       if (!el) el = matched;
     }
   }
-  if (!el) return { success: false, error: `Radio/checkbox not found: selector="${selector}", text="${text}", value="${value}"` };
+
+  // 5. Value
+  const val = (value !== undefined && value !== null) ? value : (!el && !isExplicitSelector ? target : null);
+  if (!el && val !== undefined && val !== null && val !== "") {
+    try {
+      const esc = CSS.escape(String(val));
+      el = document.querySelector(`input[type="radio"][value="${esc}"], input[type="checkbox"][value="${esc}"]`);
+    } catch (e) {}
+  }
+
+  if (!el) {
+    return {
+      success: false,
+      code: "target_not_found",
+      error: `Radio/checkbox not found: target="${target || ''}", value="${value ?? ''}"`
+    };
+  }
 
   try { el.scrollIntoView({ behavior: "instant", block: "center" }); } catch (e) {}
   try { el.focus(); } catch (e) {}
 
-  const label = el.closest("label") || (el.id ? document.querySelector(`label[for="${el.id}"]`) : null);
+  const label = el.closest("label") || (el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
   if (label && label !== el) {
     label.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
     label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
@@ -798,6 +880,7 @@ export function pageCheckRadio(selector, text, value) {
     inp.dispatchEvent(new Event("input", { bubbles: true }));
     inp.dispatchEvent(new Event("change", { bubbles: true }));
   } else {
+    // Report the widget's own aria-checked; writing it here would fake the app's state.
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -808,7 +891,7 @@ export function pageCheckRadio(selector, text, value) {
     id: el.id || (inp ? inp.id : ""),
     name: el.name || (inp ? inp.name : ""),
     value: (inp ? inp.value : el.value) || "",
-    checked: inp ? inp.checked : true,
+    checked: inp ? inp.checked : (el.getAttribute("aria-checked") === "true"),
   };
 }
 
@@ -817,9 +900,9 @@ export async function pageAssertFocus(mode, uuid, checkOnly) {
   if (!lib) return { success: false, code: "lib_missing" };
   let el = null;
   if (mode && mode.active) {
-    el = document.activeElement;
+    el = lib.deepActive();
   } else if (mode) {
-    el = document.elementFromPoint(mode.x, mode.y);
+    el = lib.deepFromPoint(mode.x, mode.y);
   }
   if (el && el.tagName === "LABEL") {
     if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
@@ -835,7 +918,8 @@ export async function pageAssertFocus(mode, uuid, checkOnly) {
     try { el.dataset.bridgeAssert = uuid; } catch (e) {}
   }
   const active = document.activeElement;
-  let focused = active === el || (!!active && !!active.dataset && active.dataset.bridgeAssert === uuid);
+  const deep = lib.deepActive();
+  let focused = active === el || deep === el || (!!deep && !!deep.dataset && deep.dataset.bridgeAssert === uuid) || (!!active && !!active.dataset && active.dataset.bridgeAssert === uuid);
   if (!focused && active && active !== document.body) {
     const owns = ((el.getAttribute && el.getAttribute("aria-owns") || "") + " " + (el.getAttribute && el.getAttribute("aria-controls") || "")).split(/\s+/);
     if (active.id && owns.indexOf(active.id) !== -1) focused = true;
@@ -853,9 +937,9 @@ export function pageReadback(mode) {
   if (!lib) return { success: false, code: "lib_missing" };
   let el = null;
   if (mode && mode.active) {
-    el = document.activeElement;
+    el = lib.deepActive();
   } else if (mode) {
-    el = document.elementFromPoint(mode.x, mode.y);
+    el = lib.deepFromPoint(mode.x, mode.y);
   }
   if (el && el.tagName === "LABEL") {
     if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
@@ -866,12 +950,12 @@ export function pageReadback(mode) {
   }
   const tag = el.tagName || "";
   const type = (el.getAttribute && el.getAttribute("type") || "").toLowerCase();
-  if (el.isContentEditable) return { success: true, present: true, verifiable: true, value: el.innerText };
+  if (el.isContentEditable) return { success: true, present: true, verifiable: true, value: el.innerText, field: "contenteditable" };
   if (tag === "INPUT" && (type === "checkbox" || type === "radio")) {
     return { success: true, present: true, verifiable: true, value: el.checked };
   }
   if (tag === "SELECT" && !el.multiple) return { success: true, present: true, verifiable: true, value: el.value };
-  if ("value" in el) return { success: true, present: true, verifiable: true, value: el.value };
+  if ("value" in el) return { success: true, present: true, verifiable: true, value: el.value, field: tag.toLowerCase() };
   return { success: true, present: true, verifiable: false, value: null };
 }
 

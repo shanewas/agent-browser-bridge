@@ -5,6 +5,7 @@ import threading
 import time
 import pytest
 from tests.fake_extension import FakeExtension
+from edge_agent_bridge import config
 from tests.support import DaemonHandle, free_port
 
 
@@ -27,6 +28,23 @@ def _wait_closed(ext, timeout=5):
 def test_status_reports_running(daemon):
     st = daemon.status()
     assert st["bridge_running"] is True
+    assert st["pid"] == int((daemon.home / "bridge.pid").read_text(encoding="utf-8"))
+
+
+def test_second_daemon_on_busy_port_exits_1(daemon):
+    # Windows SO_REUSEADDR let a second daemon bind the live port and overwrite bridge.pid (#5).
+    import os
+    import subprocess
+    import sys
+    from tests.support import ROOT
+    first_pid = (daemon.home / "bridge.pid").read_text(encoding="utf-8")
+    env = dict(os.environ, EDGE_BRIDGE_HOME=str(daemon.home), EDGE_BRIDGE_PORT=str(daemon.port))
+    res = subprocess.run([sys.executable, "-u", "-m", "edge_agent_bridge.bridge", "--port", str(daemon.port)],
+                         cwd=ROOT, env=env, capture_output=True, timeout=30)
+    assert res.returncode == 1
+    assert "Daemon crashed:" in (daemon.home / "bridge.log").read_text(encoding="utf-8")
+    assert (daemon.home / "bridge.pid").read_text(encoding="utf-8") == first_pid
+    assert daemon.status()["bridge_running"] is True
 
 
 def test_ping_roundtrip_via_fake_extension(daemon, fake_ext):
@@ -47,6 +65,22 @@ def test_exec_rejects_browser_context(daemon, fake_ext):
     assert code == 403 and body["code"] == "browser_context"
 
 
+def test_exec_malformed_bodies_get_json_errors(daemon, fake_ext):
+    # Non-ASCII token header must answer 401, not drop the connection (issue #29).
+    code, body = daemon.exec("ping", token="t\u00f6k\u00e9n")
+    assert code == 401 and body["code"] == "bad_token", (code, body)
+    # A non-string action must answer 400 bad_body.
+    code, body = daemon._request("POST", "/exec", {"action": {}, "params": {}},
+                                 headers={config.TOKEN_HEADER: daemon.token})
+    assert code == 400 and body["code"] == "bad_body", (code, body)
+    # A batch whose steps is not a list must answer 400 bad_body.
+    code, body = daemon.exec("batch", {"steps": 5})
+    assert code == 400 and body["code"] == "bad_body", (code, body)
+    # The daemon still answers the next valid request.
+    code, body = daemon.exec("ping")
+    assert code == 200 and body["success"] is True, (code, body)
+
+
 def test_bad_host_rejected(daemon):
     code, body = daemon._request("GET", "/status", headers={"Host": "evil.example:80"})
     assert code == 421 and body["code"] == "bad_host"
@@ -64,7 +98,8 @@ def test_status_fields(daemon, fake_ext):
     for k in ("bridge_running", "daemon_version", "extension_version", "extension_outdated",
               "extension_connected", "websocket_active", "last_seen_seconds_ago", "pending", "pairing_required"):
         assert k in st
-    assert st["extension_version"] == "2.0.0" and st["extension_outdated"] is False and st["websocket_active"] is True
+    from edge_agent_bridge import __version__
+    assert st["extension_version"] == __version__ and st["extension_outdated"] is False and st["websocket_active"] is True
 
 
 def test_poll_and_result_gone(daemon):
@@ -163,11 +198,50 @@ def test_inflight_timeout_and_late_result_dropped(daemon):
     ext.close()
 
 
+def test_pending_command_fails_fast_when_extension_drops(daemon):
+    # Issue #23: a dropped socket must fail in-flight commands at once.
+    import threading as _t
+
+    def handler(action, params):
+        time.sleep(5)
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    assert _wait_active(daemon)
+    outcome = {}
+
+    def call():
+        outcome["r"] = daemon.exec("click", {"target": "x"}, timeout=20)
+
+    th = _t.Thread(target=call)
+    th.start()
+    time.sleep(0.5)
+    ext.close()
+    th.join(timeout=8)
+    assert not th.is_alive(), "caller still waiting after the socket dropped"
+    code, body = outcome["r"]
+    assert body["code"] == "extension_offline", (code, body)
+    assert daemon.status()["pending"] == 0
+
+
 def test_extension_outdated_rewrite(daemon):
     ext = FakeExtension(daemon.port, send_hello=False).connect().run()   # behaves like 1.x
     time.sleep(1.2)
     code, body = daemon.exec("snapshot", timeout=3)
     assert code == 200 and body["code"] == "extension_outdated" and "2.0.0" in body["error"]
+    assert daemon.status()["extension_outdated"] is True
+    ext.close()
+
+
+def test_extension_outdated_rewrite_for_older_v2_extension(daemon):
+    def handler(action, params):
+        return {"success": False, "code": "unknown_action", "error": "Unknown action: future_cmd"}
+
+    ext = FakeExtension(daemon.port, version="2.4.0", handler=handler).connect().run()
+    time.sleep(1.2)
+    code, body = daemon.exec("future_cmd", timeout=3)
+    assert code == 200 and body["code"] == "extension_outdated"
+    assert "2.4.0" in body["error"]
     assert daemon.status()["extension_outdated"] is True
     ext.close()
 
@@ -252,3 +326,38 @@ def test_new_hello_replaces_stale_connection_without_pairing(daemon):
     assert code == 200 and body["version"] == "2.0.1"
     new.close()
     old.close()
+
+
+def test_different_instance_rejected_with_4002(daemon):
+    ext1 = FakeExtension(daemon.port, instance="inst-1").connect().run()
+    assert _wait_active(daemon)
+    st = daemon.status()
+    assert st.get("rejected_instance") is None
+
+    ext2 = FakeExtension(daemon.port, instance="inst-2").connect().run()
+    assert _wait_closed(ext2) == 4002
+    assert daemon.status()["websocket_active"] is True
+    st2 = daemon.status()
+    assert st2.get("rejected_instance") == "inst-2"
+
+    # First extension remains connected and functional
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True
+    ext1.close()
+    ext2.close()
+
+
+def test_same_instance_replaces_old_socket(daemon):
+    old = FakeExtension(daemon.port, version="2.0.0", instance="inst-1").connect().run()
+    assert _wait_active(daemon)
+    new = FakeExtension(daemon.port, version="2.0.1", instance="inst-1").connect().run()
+    deadline = time.time() + 3
+    while time.time() < deadline and daemon.status()["extension_version"] != "2.0.1":
+        time.sleep(0.05)
+    assert daemon.status()["extension_version"] == "2.0.1"
+    assert _wait_closed(old) is not None
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["version"] == "2.0.1"
+    new.close()
+    old.close()
+

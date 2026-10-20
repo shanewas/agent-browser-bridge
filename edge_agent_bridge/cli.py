@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import sysconfig
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from . import __version__, config
 from .client import Edge, EdgeClient, send_cmd, ensure_bridge_running
+from .bridge import parse_version
 
 EDGE_STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
 
@@ -24,8 +26,45 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
+        sys.stdin.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+
+def _probe_status(port: int) -> dict:
+    """/status with a short timeout and no auto-start, so stop never blocks on a hung daemon."""
+    with Edge(port=port, timeout=2, auto_start=False) as client:
+        return client.status()
+
+
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        # os.kill(pid, 0) terminates the process on Windows.
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace").stdout
+        return str(pid) in out.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _port_listening(port: int) -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def _read_stdin_text() -> str:
+    """Read all of stdin as UTF-8, whatever the console code page says."""
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        return buffer.read().decode("utf-8")
+    return sys.stdin.read()
 
 
 def _handle_daemon_cmd(args, port: int) -> int:
@@ -33,23 +72,43 @@ def _handle_daemon_cmd(args, port: int) -> int:
     pid_p = config.pid_path()
 
     if sub == "stop":
-        if pid_p.exists():
-            try:
-                pid = int(pid_p.read_text(encoding="utf-8").strip())
-                if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    os.kill(pid, signal.SIGTERM)
-                print(f"Stopped daemon (PID {pid})")
-            except Exception as e:
-                print(f"Error stopping daemon: {e}")
-            finally:
-                try:
-                    pid_p.unlink(missing_ok=True)
-                except Exception:
-                    pass
-        else:
+        if not pid_p.exists():
             print("Daemon PID file not found")
+            return 0
+        try:
+            pid = int(pid_p.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError) as e:
+            print(f"Error stopping daemon: {e}")
+            pid_p.unlink(missing_ok=True)
+            return 0
+        if not getattr(args, "force", False):
+            st = _probe_status(port)
+            if st.get("bridge_running") and "pid" not in st:
+                # An answer proves a bridge runs on the port, not that bridge.pid names it.
+                print(f"The daemon on 127.0.0.1:{port} predates pid reporting, so PID {pid} cannot be confirmed. "
+                      "Run: edge-bridge daemon stop --force", file=sys.stderr)
+                return 1
+            if not st.get("bridge_running") and _pid_alive(pid) and _port_listening(port):
+                print(f"PID {pid} is alive and 127.0.0.1:{port} accepts connections but does not answer /status. "
+                      "If that is a hung daemon, run: edge-bridge daemon stop --force", file=sys.stderr)
+                return 1
+            if st.get("pid") != pid:
+                pid_p.unlink(missing_ok=True)
+                print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
+                return 0
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            print(f"Stopped daemon (PID {pid})")
+        except Exception as e:
+            print(f"Error stopping daemon: {e}")
+        finally:
+            try:
+                pid_p.unlink(missing_ok=True)
+            except Exception:
+                pass
         return 0
 
     elif sub == "start":
@@ -66,15 +125,22 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     elif sub == "restart":
-        _handle_daemon_cmd(argparse.Namespace(daemon_action="stop"), port)
-        time.sleep(0.5)
+        rc = _handle_daemon_cmd(argparse.Namespace(daemon_action="stop", force=getattr(args, "force", False)), port)
+        if rc:
+            return rc
+        deadline = time.time() + 5
+        while (st := _probe_status(port)).get("bridge_running") and time.time() < deadline:
+            time.sleep(0.2)
+        if st.get("bridge_running"):
+            print(f"Daemon PID {st.get('pid', '?')} still answers on 127.0.0.1:{port}; not restarted", file=sys.stderr)
+            return 1
         return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=False), port)
 
     elif sub == "status":
         with Edge(port=port, auto_start=False) as client:
-            st, pid = _status_data(client, port)
+            st = client.status()
         if st.get("bridge_running"):
-            print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
+            print(f"Daemon: running on 127.0.0.1:{port} (PID {st.get('pid', '?')})")
             print(f"Extension: {st.get('extension_version', 'none')} ({'connected' if st.get('websocket_active') else 'disconnected'})")
             return 0
         else:
@@ -82,19 +148,6 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     return 3
-
-
-def _status_data(edge: Edge, port: int):
-    """Fetch /status plus the pid-file pid. Both status verbs share this."""
-    res = edge.status()
-    pid = "?"
-    try:
-        pid_file = config.pid_path()
-        if pid_file.exists():
-            pid = pid_file.read_text(encoding="utf-8").strip()
-    except Exception:
-        pass
-    return res, pid
 
 
 def _is_elevated() -> bool:
@@ -141,31 +194,46 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
 
     if up:
         connected = bool(st.get("websocket_active"))
-        add("extension", connected,
-            f"connected, version {st.get('extension_version')}" if connected else "not connected",
+        rej = st.get("rejected_instance")
+        ext_detail = f"connected, version {st.get('extension_version')}" if connected else "not connected"
+        if rej:
+            ext_detail += f" (another browser rejected: instance {rej})"
+        add("extension", connected, ext_detail,
             "" if connected else "open Edge and check the popup shows Connected")
         ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
-        try:
-            ext_major = int(str(ext_v).split(".")[0]) if ext_v else None
-            dae_major = int(str(dae_v).split(".")[0]) if dae_v else None
-        except (TypeError, ValueError):
-            ext_major = dae_major = None
-        if ext_major is None:
+        if ext_v is None:
             add("versions", False, "extension version unknown",
                 "open Edge and check the popup shows Connected")
-        elif dae_major is not None and ext_major < dae_major:
+        elif dae_v is not None and dae_v != __version__:
+            add("versions", False, f"CLI {__version__} differs from daemon {dae_v}",
+                "edge-bridge daemon restart")
+        elif dae_v is not None and parse_version(ext_v) < parse_version(dae_v):
             add("versions", False, f"extension {ext_v} predates daemon {dae_v}",
                 f"update from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
+        elif dae_v is not None and parse_version(ext_v) > parse_version(dae_v):
+            add("versions", True, f"daemon {dae_v}, extension {ext_v} (extension newer than daemon)", "")
         else:
             add("versions", True, f"daemon {dae_v}, extension {ext_v}", "")
         with Edge(port=port, auto_start=False) as edge2:
             tabs_res = edge2.tabs()
+            ping_res = edge2.ping() if connected else {}
         if tabs_res.get("success"):
             tabs = tabs_res.get("tabs", [])
             add("tabs", True, f"{len(tabs)} tab(s) reachable", "")
         else:
             add("tabs", False, f"{tabs_res.get('code')}: {tabs_res.get('error')}",
                 "open Edge and check the popup shows Connected")
+        if ping_res.get("success") and ping_res.get("fileAccess"):
+            add("file-access", True, "allowed", "")
+        elif ping_res.get("success") and "fileAccess" not in ping_res:
+            add("file-access", True, "unknown: the extension predates this check", "")
+        elif ping_res.get("success"):
+            add("file-access", False,
+                "turned off: file:// navigation and uploads will fail",
+                "turn on 'Allow access to file URLs' in edge://extensions > Details")
+        else:
+            detail = f"{ping_res.get('code')}: {ping_res.get('error')}" if ping_res.get("code") else "extension not connected"
+            add("file-access", False, detail, "open Edge and check the popup shows Connected")
         if st.get("pairing_required"):
             if connected:
                 add("pairing", True, "required and paired", "")
@@ -176,7 +244,7 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         else:
             add("pairing", True, "not required", "")
     else:
-        for name in ("extension", "versions", "tabs", "pairing"):
+        for name in ("extension", "versions", "tabs", "file-access", "pairing"):
             add(name, False, "skipped: daemon not running", "edge-bridge daemon start")
 
     pid_p = config.pid_path()
@@ -220,9 +288,14 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
     try:
         reg = registration_status()
         detail = ", ".join(f"{k}={v}" for k, v in sorted(reg.items()))
+        has_stale = any(v == "stale" for v in reg.values())
+        if has_stale:
+            add("mcp", False, detail or "no clients found", "run edge-bridge setup to re-register")
+        else:
+            add("mcp", True, detail or "no clients found", "")
     except Exception as e:
         detail = f"check failed: {e}"
-    add("mcp", True, detail or "no clients found", "")
+        add("mcp", True, detail, "")
 
     if opt_json:
         print(json.dumps({"success": all(c["ok"] for c in checks), "checks": checks}))
@@ -269,7 +342,7 @@ def _handle_logs(args, opt_json: bool) -> int:
     return 0
 
 
-def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
+def _handle_run(args, edge: Edge, opt_session, opt_json: bool, opt_tab=None) -> int:
     def usage(msg):
         err = {"success": False, "code": "bad_params", "error": msg}
         if opt_json:
@@ -280,9 +353,9 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
 
     src = args.steps_file
     try:
-        raw = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8")
-    except OSError as e:
-        return usage(f"Cannot read {src}: {e}")
+        raw = _read_stdin_text() if src == "-" else Path(src).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return usage(f"Cannot read {'stdin' if src == '-' else src}: {e}")
     if len(raw.encode("utf-8")) > 1024 * 1024:
         return usage("steps file over 1 MB; batches are not bulk transport")
     try:
@@ -300,7 +373,10 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
             if args.stop_on_error:
                 break
             continue
-        res = edge.send(step["action"], step.get("params") or {})
+        params = dict(step.get("params") or {})
+        if opt_tab is not None and "tabId" not in params:
+            params["tabId"] = opt_tab
+        res = edge.send(step["action"], params)
         out = {"step": i, "action": step["action"]}
         out.update(res if isinstance(res, dict) else {"success": False, "code": "bad_response"})
         print(json.dumps(out))
@@ -411,34 +487,6 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
     return 0 if res.get("success") else 1
 
 
-def _run_repl(edge: Edge) -> int:
-    print(f"Edge Agent Bridge REPL (port {edge.port}). Type 'help' or action commands, 'exit' to quit.")
-    while True:
-        try:
-            line = input("eab> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not line:
-            continue
-        if line in ("exit", "quit"):
-            break
-        if line == "help":
-            print("Actions: ping, status, tabs, tab, nav <url>, snapshot, click <target>, fill <target> <text>, eval <code>")
-            continue
-        parts = line.split(maxsplit=1)
-        action = parts[0]
-        params = {}
-        if len(parts) > 1:
-            try:
-                params = json.loads(parts[1])
-            except Exception:
-                params = {"target": parts[1]}
-        res = edge.send(action, params)
-        print(json.dumps(res, indent=2))
-    return 0
-
-
 def main(argv=None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output raw result as single JSON line")
@@ -484,9 +532,9 @@ def main(argv=None) -> int:
     p_daemon = add_cmd("daemon", help="Manage daemon process")
     p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status"])
     p_daemon.add_argument("--require-pairing", action="store_true", help="Require pairing token")
+    p_daemon.add_argument("--force", action="store_true",
+                          help="stop/restart: kill the PID in bridge.pid even if /status does not confirm it")
 
-    # repl
-    add_cmd("repl", help="Interactive REPL session")
 
     # tabs
     add_cmd("tabs", help="List open tabs")
@@ -591,6 +639,7 @@ def main(argv=None) -> int:
     # check-radio
     p_chk = add_cmd("check-radio", help="Check a radio button or checkbox")
     p_chk.add_argument("target", nargs="?", default=None, help="Label text, selector, or value")
+    p_chk.add_argument("--ref", default=None)
     p_chk.add_argument("--selector", "-s", default=None)
     p_chk.add_argument("--text", default=None)
     p_chk.add_argument("--value", "-v", default=None)
@@ -742,22 +791,20 @@ def main(argv=None) -> int:
         port=port,
         highlight=not opt_no_highlight,
         pin=False,
-        auto_start=False,
+        auto_start=args.cmd != "status",
         session_token=opt_session,
     )
 
     if args.cmd == "session":
         return _handle_session_cmd(args, edge, opt_json)
 
-    if args.cmd == "repl":
-        return _run_repl(edge)
 
     if args.cmd == "run":
-        return _handle_run(args, edge, opt_session, opt_json)
+        return _handle_run(args, edge, opt_session, opt_json, opt_tab)
 
     # Route status
     if args.cmd == "status":
-        res, pid = _status_data(edge, port)
+        res = edge.status()
         sst = None
         if res.get("success") and opt_session:
             sst = edge._send_once("session_status", {})
@@ -766,9 +813,17 @@ def main(argv=None) -> int:
             print(json.dumps(res))
         else:
             if res.get("success"):
-                print(f"Edge Agent Bridge v{res.get('daemon_version') or __version__}")
-                print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
+                dae_v = res.get("daemon_version") or __version__
+                ext_v = res.get("extension_version") or "none"
+                print(f"CLI {__version__}, daemon {dae_v}, extension {ext_v}")
+                if dae_v != __version__:
+                    print("Fix: edge-bridge daemon restart")
+                elif ext_v != "none" and parse_version(ext_v) < parse_version(dae_v):
+                    print(f"Fix: update extension from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
+                print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
+                if res.get("pin") is not None:
+                    print(f"Pinned tab: {res['pin']}")
                 if sst is not None:
                     if sst.get("success"):
                         if sst.get("tabClosed"):
@@ -888,7 +943,9 @@ def main(argv=None) -> int:
         params["key"] = args.key
     elif action == "check-radio":
         action = "check_radio"
-        if args.selector:
+        if args.ref:
+            params["ref"] = args.ref
+        elif args.selector:
             params["selector"] = args.selector
         elif args.target:
             params["target"] = args.target
@@ -930,7 +987,14 @@ def main(argv=None) -> int:
     elif action == "eval":
         if args.file:
             if args.file == "-":
-                params["code"] = sys.stdin.read()
+                try:
+                    params["code"] = _read_stdin_text()
+                except (OSError, UnicodeDecodeError) as e:
+                    if opt_json:
+                        print(json.dumps({"success": False, "code": "bad_params", "error": f"cannot read stdin: {e}"}))
+                    else:
+                        print(f"Error: cannot read stdin: {e}", file=sys.stderr)
+                    return 3
             else:
                 try:
                     params["code"] = Path(args.file).read_text(encoding="utf-8")
@@ -1015,11 +1079,17 @@ def main(argv=None) -> int:
                 for t in tabs:
                     act = "*" if t.get("active") else " "
                     print(f"  {act} [{t.get('id')}] {t.get('title', '')[:50]} - {t.get('url')}")
+            elif action == "eval":
+                if "result" in res:
+                    v = res["result"]
+                    print(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+            elif action == "text":
+                print(res.get("text", ""))
             elif action == "screenshot":
                 if res.get("path"):
                     print(f"Saved screenshot: {res['path']}")
                 else:
-                    print(f"Screenshot taken ({len(res.get('data', ''))} bytes base64)")
+                    print(f"Screenshot taken ({len(res.get('dataUrl', ''))} bytes base64)")
             elif action == "history_search":
                 items = res.get("items", [])
                 print(f"Found {len(items)} history item(s):")
@@ -1038,7 +1108,19 @@ def main(argv=None) -> int:
             else:
                 tab_info = res.get("tab")
                 tab_str = f" (tab {tab_info['id']})" if isinstance(tab_info, dict) and "id" in tab_info else ""
-                print(f"OK{tab_str}")
+                ladder = res.get("ladder")
+                matched = ladder.get("matched") if isinstance(ladder, dict) else None
+                if isinstance(matched, dict):
+                    print(f'OK{tab_str} via fallback: {action} "{matched.get("name", "")}"')
+                elif isinstance(ladder, dict):
+                    print(f"OK{tab_str} via fallback ({ladder.get('rung')})")
+                else:
+                    print(f"OK{tab_str}")
+                if action in ("type", "fill") and res.get("match") is False:
+                    print(f"Warning (write_mismatch): wrote {res.get('written')!r}, read back {res.get('readback')!r}",
+                          file=sys.stderr)
+                elif action in ("type", "fill") and res.get("match") == "unknown":
+                    print("Warning: write not verified", file=sys.stderr)
         else:
             err_code = res.get("code", "error")
             err_msg = res.get("error", "Action failed")
@@ -1046,7 +1128,8 @@ def main(argv=None) -> int:
 
     # Determine exit code
     if res.get("success"):
-        return 0
+        # A landed-but-wrong write must stop `&&` chains.
+        return 1 if action in ("type", "fill") and res.get("match") is False else 0
     code = res.get("code")
     if code in ("daemon_unreachable", "missing_token"):
         return 2

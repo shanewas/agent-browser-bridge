@@ -1,3 +1,7 @@
+import time
+
+from edge_agent_bridge.client import Edge
+from tests.fake_extension import FakeExtension
 from tests.test_ladder import ScriptedEdge
 
 
@@ -8,14 +12,30 @@ def test_match_true_passthrough():
 
 def test_mismatch_retries_once_then_write_mismatch():
     e = ScriptedEdge([
-        ("type", {"success": True, "written": "Hello", "readback": "Hell", "match": False}),
+        ("fill", {"success": True, "written": "Hello", "readback": "Hell", "match": False}),
         ("fill", {"success": True, "written": "Hello", "readback": "Hell!", "match": False}),
     ])
-    data = e.send("type", {"target": "t", "text": "Hello"})
+    data = e.send("fill", {"target": "t", "text": "Hello"})
     assert data["code"] == "write_mismatch"
     assert data["expected"] == "Hello" and data["readback"] == "Hell!" and data["attempts"] == 2
     assert e.calls[1] == ("fill", {"target": "t", "text": "Hello", "clear": True})
 
+
+def test_contenteditable_fill_mismatch_is_not_retried():
+    e = ScriptedEdge([
+        ("fill", {"success": True, "written": "a", "readback": "b", "match": False, "field": "contenteditable"}),
+    ])
+    data = e.send("fill", {"target": "t", "text": "a"})
+    assert data["success"] is True and data["match"] is False and len(e.calls) == 1
+
+
+def test_select_fill_mismatch_still_retries():
+    e = ScriptedEdge([
+        ("fill", {"success": True, "written": "b", "readback": "a", "match": False, "field": "select"}),
+        ("fill", {"success": True, "written": "b", "readback": "b", "match": True}),
+    ])
+    data = e.send("fill", {"target": "t", "text": "b"})
+    assert data["success"] is True and data["retried"] is True
 
 def test_mismatch_retry_success_marks_retried():
     e = ScriptedEdge([
@@ -56,3 +76,38 @@ def test_unknown_session_remints_once_and_retries(daemon, fake_ext, monkeypatch)
     _, st = daemon.exec("session_status", session_token=edge.session_token)
     assert st["success"] is True
     edge.close()
+
+
+def _edge_with_ext(daemon, monkeypatch, answers):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append(action)
+        return answers[action].pop(0)
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    return Edge(port=daemon.port, auto_start=False, pin=False), ext, seen
+
+
+def test_type_mismatch_sends_no_fill(daemon, monkeypatch):
+    edge, ext, seen = _edge_with_ext(daemon, monkeypatch, {"type": [
+        {"success": True, "written": "\n\n\n56", "readback": "56\n", "match": False, "field": "contenteditable"}]})
+    data = edge.send("type", {"target": "cell", "text": "56"})
+    edge.close()
+    ext.close()
+    assert data["success"] is True and data["match"] is False, data
+    assert data["written"] == "\n\n\n56" and data["readback"] == "56\n"
+    assert seen == ["type"]
+
+
+def test_unknown_retry_passes_through_as_unknown(daemon, monkeypatch):
+    edge, ext, seen = _edge_with_ext(daemon, monkeypatch, {"fill": [
+        {"success": True, "written": "send", "readback": "sen", "match": False, "field": "input"},
+        {"success": True, "written": "send", "readback": None, "match": "unknown"}]})
+    data = edge.send("fill", {"target": "to", "text": "send"})
+    edge.close()
+    ext.close()
+    assert data["success"] is True and data["match"] == "unknown", data
+    assert seen == ["fill", "fill"]

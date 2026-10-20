@@ -10,6 +10,7 @@ const FIXES = {
   tab_busy: "Another command holds this tab. Wait a moment and retry.",
   click_covered: "A sticky overlay covers the target. Dismiss it or scroll the target clear.",
   file_not_found: "The upload path does not exist. Pass an existing file.",
+  file_access_required: "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.",
   unknown_session: "The session expired (daemon restarted). Run: edge-bridge session start",
 };
 
@@ -50,7 +51,24 @@ async function updateUI() {
   setText("versions", st ? `daemon ${st.daemon_version || "?"} · extension ${extVersion}` : "daemon not running");
   show("outdated", Boolean(st && st.extension_outdated));
   show("pairing", Boolean(st && st.pairing_required));
+  if (chrome.extension && typeof chrome.extension.isAllowedFileSchemeAccess === "function") {
+    try {
+      chrome.extension.isAllowedFileSchemeAccess((allowed) => {
+        show("fileAccessWarn", !allowed);
+      });
+    } catch (e) {
+      show("fileAccessWarn", false);
+    }
+  }
   lastStatus = st;
+  try {
+    chrome.storage.local.get(["pairingRejected"], (data) => {
+      if (data && data.pairingRejected) {
+        show("pairing", true);
+        setText("pairMsg", "Pairing rejected: paste the daemon token and save.");
+      }
+    });
+  } catch (e) {}
 
   const pairInput = document.getElementById("pairToken");
   if (pairInput) {

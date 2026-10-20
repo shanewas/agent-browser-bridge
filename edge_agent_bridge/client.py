@@ -61,19 +61,23 @@ def _wsl_to_windows(path_str: str) -> str:
 
 
 def score_element_match(entries, text):
+    """The scan rung's match: an exact name, else a case-insensitive name,
+    and only when exactly one element matches. Substring matches never
+    count: clicking a different element whose name merely contains the
+    target text is the failure the ladder exists to avoid (issue #19)."""
     def name(e):
         return e.get("text") or e.get("name") or ""
-    for e in entries or []:
-        if name(e) == text:
-            return e
+    entries = entries or []
+    exact = [e for e in entries if name(e) == text]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
     tl = (text or "").lower()
-    for e in entries or []:
-        if name(e).lower() == tl:
-            return e
-    for e in entries or []:
-        if tl and tl in name(e).lower():
-            return e
-    return None
+    if not tl:
+        return None
+    folded = [e for e in entries if name(e).lower() == tl]
+    return folded[0] if len(folded) == 1 else None
 
 
 def _probe_status(port: int) -> dict | None:
@@ -287,7 +291,8 @@ class Edge:
                 if mint.get("success") and mint.get("sessionToken"):
                     self.session_token = mint["sessionToken"]
                     if self._last_tab_id is not None:
-                        repin = self._send_once("tab_switch", {"tabId": self._last_tab_id}, timeout)
+                        # Read-only "tab" pins the fresh session; tab_switch would pull the window to the front.
+                        repin = self._send_once("tab", {"tabId": self._last_tab_id}, timeout)
                         if not repin.get("success"):
                             # Tab is gone; stay unpinned so the retry resolves
                             # the active tab like a fresh session.
@@ -376,7 +381,9 @@ class Edge:
         final = self._send_once(action, rung4, timeout)
         tried.append({"step": "coords", "outcome": "ok" if final.get("success") else final.get("code")})
         if final.get("success"):
-            final["ladder"] = {"rung": "coords", "tried": tried}
+            final["ladder"] = {"rung": "coords", "tried": tried,
+                               "matched": {"name": match.get("text") or match.get("name") or "",
+                                           "ref": match.get("ref")}}
             return final
         return {"success": False, "code": "exhausted_fallback",
                 "error": f"{action} target could not be re-resolved", "tried": tried}
@@ -427,6 +434,10 @@ class Edge:
                       file=sys.stderr)
                 data["notice"] = "extension predates verified writes; match unknown"
             return data
+        # A clearing fill would wipe rich-editor markup, and type's expected value guesses the caret
+        # position, so neither is retried.
+        if action == "type" or data.get("field") == "contenteditable":
+            return data
         expected = data.get("written")
         if expected is None:
             expected = params.get("text", "")
@@ -434,7 +445,7 @@ class Edge:
         retry_params["text"] = expected
         retry_params["clear"] = True
         retry = self._send_once("fill", retry_params, timeout)
-        if retry.get("success") and retry.get("match") is True:
+        if retry.get("success") and retry.get("match") in (True, "unknown"):
             retry["retried"] = True
             return retry
         return {"success": False, "code": "write_mismatch",
@@ -446,6 +457,9 @@ class Edge:
 
     def tabs(self) -> dict:
         return self.send("tabs")
+
+    def ping(self) -> dict:
+        return self.send("ping")
 
     def tab_switch(self, tab_id=None) -> dict:
         p = {}
@@ -585,10 +599,12 @@ class Edge:
             p["tabId"] = tab_id
         return self.send("key", p)
 
-    def check_radio(self, target=None, selector: str = None, text: str = None, value: str = None, tab_id=None, fallback=True) -> dict:
+    def check_radio(self, target=None, ref=None, selector: str = None, text: str = None, value: str = None, tab_id=None, fallback=True) -> dict:
         """Check a radio button or checkbox by selector, label text, or value attribute."""
         p = {}
-        if selector is not None:
+        if ref is not None:
+            p["ref"] = ref
+        elif selector is not None:
             p["selector"] = selector
         elif target is not None:
             p["target"] = target

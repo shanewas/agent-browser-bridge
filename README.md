@@ -132,7 +132,7 @@ with Edge() as browser:
 ```
 
 The daemon starts on first use. `Edge` pins itself to the tab of its first result, so a later call
-can't drift onto a different tab because you switched windows in the meantime. Methods return the
+can't drift onto a different tab because you switched windows in the meantime. Bare CLI commands share one daemon-side pin instead: `switch` and `new` set it, tab-less commands keep acting on that tab, and `--tab` stays a one-shot override; several agents at once still need one session each. Methods return the
 raw result dict and never raise on a failed action: check `success`, read `code` and `error`.
 
 ---
@@ -152,6 +152,7 @@ edge-bridge upload e3 C:/tmp/spec.pdf    # WSL /mnt/<drive>/... paths translate 
 edge-bridge wait --text Opened
 edge-bridge wait --idle                   # no in-flight requests; ignores WebSockets
 edge-bridge screenshot out.jpg --of e4
+edge-bridge eval "document.title"         # prints the returned value (here: the page title)
 edge-bridge console                       # console output, exceptions, dialogs
 edge-bridge nav https://example.com
 edge-bridge new https://example.com --group Agent
@@ -171,6 +172,7 @@ edge-bridge click e5 --session <uuid>   # session pin; --tab is a one-shot overr
 edge-bridge click e5 --no-fallback      # disable the ref→text→scan→coords ladder
 edge-bridge doctor                      # diagnose daemon, extension, token, pairing
 edge-bridge logs --tail 50              # daemon log (--follow streams)
+edge-bridge daemon stop                 # only if /status confirms bridge.pid; --force for a hung daemon
 ```
 
 `--json` prints the raw result as a single line and sets the exit code: 0 on success, 1 when the
@@ -178,19 +180,7 @@ action failed, 2 when the daemon is unreachable, 3 on a usage error. `--no-highl
 ring drawn around the element about to be acted on.
 
 Each CLI call pays roughly 600 ms of Python startup. For anything repetitive use MCP, the Python
-API, `run` (one process for a whole step file), or the REPL, which reuses one connection:
-
-```bash
-edge-bridge repl
-```
-
-```text
-Edge Agent Bridge REPL (port 18999). Type 'help' or action commands, 'exit' to quit.
-edge> tab
-[11.8ms] {"success": true, "tab": {"id": 1459, "title": "GitHub"}}
-edge> click "Pull requests"
-[14.2ms] {"success": true, "x": 380, "y": 96, "native": true}
-```
+API, or `run` (one process for a whole step file).
 
 ---
 

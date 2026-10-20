@@ -246,12 +246,13 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "edge_check_radio",
-        "description": "Check a radio button or checkbox by selector, label text, or value attribute.",
+        "description": "Check a radio button or checkbox by ref, selector, label text, or value attribute.",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "ref": {"type": "string", "description": "Target ref (e.g. 'e1')."},
                 "selector": {"type": "string", "description": "CSS selector for the input element."},
-                "target": {"type": "string", "description": "Label text or selector shorthand."},
+                "target": {"type": "string", "description": "Label text, selector shorthand, or ref."},
                 "text": {"type": "string", "description": "Label text to match."},
                 "value": {"type": "string", "description": "Value attribute of the radio/checkbox."},
                 **COMMON_TOOL_PROPERTIES,
@@ -435,7 +436,7 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "steps": {"type": "array", "description": "List of action objects: [{action, params}]"},
+                "steps": {"type": "array", "description": "List of action objects: [{action, params}] or flat [{action, ...params}]; a params object is merged under the flat keys"},
                 **COMMON_TOOL_PROPERTIES,
             },
             "required": ["steps"],
@@ -593,6 +594,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             )
         elif tool_name == "edge_check_radio":
             res = edge.check_radio(
+                ref=args.get("ref"),
                 selector=args.get("selector"),
                 target=args.get("target"),
                 text=args.get("text"),
@@ -741,6 +743,16 @@ def serve(stdin=None, stdout=None) -> None:
                     "jsonrpc": "2.0",
                     "id": None,
                     "error": {"code": -32700, "message": "Parse error"},
+                }
+                out_stream.write(json.dumps(err_resp).encode("utf-8") + b"\n")
+                out_stream.flush()
+                continue
+
+            if not isinstance(msg, dict):
+                err_resp = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": "Invalid Request"},
                 }
                 out_stream.write(json.dumps(err_resp).encode("utf-8") + b"\n")
                 out_stream.flush()

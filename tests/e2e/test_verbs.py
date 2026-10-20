@@ -4,6 +4,8 @@ import time
 
 import pytest
 
+from edge_agent_bridge.client import Edge
+
 pytestmark = pytest.mark.e2e
 
 
@@ -75,6 +77,17 @@ def test_type_sends_key_events_and_keeps_unicode(client):
     assert int(state[1]) >= 6, state
 
 
+
+def test_type_into_rich_editor_keeps_markup(e2e_daemon, client, monkeypatch):
+    # Through the client: a type mismatch used to become a clearing fill that wiped the <b>.
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(e2e_daemon.home))
+    with Edge(port=e2e_daemon.port, auto_start=False, pin=False) as edge:
+        r = edge.send("type", {"target": "#editor", "text": "!", "delay": 5, "highlight": False})
+    assert r["success"] and r["field"] == "contenteditable" and "retried" not in r, r
+    assert r["match"] is True, r
+    state = client("eval", {"code": "[document.querySelectorAll('#editor b').length, document.getElementById('editor').innerText]"})["result"]
+    assert state[0] == 1 and "!" in state[1], state
+
 def test_upload_by_ref_button_and_failure(client, tmp_path):
     f = tmp_path / "hello.txt"
     f.write_text("hi", encoding="utf-8")
@@ -134,3 +147,26 @@ def test_screenshot_of_background_tab_keeps_focus(client, pages):
         assert client("tab")["tab"]["id"] == second
     finally:
         client("tab_close", {"tabId": second})
+
+
+def test_scroll_ref_brings_element_into_view(client, pages):
+    assert client("nav", {"url": pages + "/scroll.html"})["success"]
+    snap = client("snapshot")["text"]
+    ref = ref_of(snap, "button", "Bottom button")
+    before = client("eval", {"code": "document.getElementById('bottomBtn').getBoundingClientRect().top"})["result"]
+    assert before > 900, before
+    r = client("scroll", {"ref": ref})
+    assert r["success"], r
+    time.sleep(0.3)
+    top = client("eval", {"code": "document.getElementById('bottomBtn').getBoundingClientRect().top"})["result"]
+    height = client("eval", {"code": "window.innerHeight"})["result"]
+    assert 0 <= top < height, (top, height)
+
+
+def test_scroll_x_only_scrolls_horizontally(client, pages):
+    assert client("nav", {"url": pages + "/scroll.html"})["success"]
+    r = client("scroll", {"x": 200, "y": 0})
+    assert r["success"], r
+    time.sleep(0.3)
+    pos = client("eval", {"code": "[window.scrollX, window.scrollY]"})["result"]
+    assert pos[0] > 0 and pos[1] == 0, pos

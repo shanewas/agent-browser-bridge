@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Shadow fill fixture</title></head>
+<body>
+<h1>Shadow fill</h1>
+<x-field id="one"></x-field>
+<x-outer id="two"></x-outer>
+<p><label>Steal source <input id="stealSrc" aria-label="steal source"></label>
+<label>Steal target <input id="stealDst" aria-label="steal target"></label></p>
+<script>
+  document.getElementById("stealSrc").addEventListener("keydown", function () {
+    setTimeout(() => document.getElementById("stealDst").focus(), 10);
+  }, { once: true });
+</script>
+<script>
+  customElements.define("x-field", class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" }).innerHTML = '<label>Name <input aria-label="name"></label>';
+    }
+  });
+  customElements.define("x-inner", class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" }).innerHTML = '<label>Deep <input aria-label="deep name"></label>';
+    }
+  });
+  customElements.define("x-outer", class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" }).innerHTML = '<x-inner></x-inner>';
+    }
+  });
+</script>
+</body></html>

@@ -38,7 +38,7 @@ LOCK_EXEMPT_ACTIONS = frozenset({
 })
 PIN_MUTATING_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
 CLOSING_ACTIONS = frozenset({"tab_close", "close_tab"})
-DISPATCH_BUDGET_SEC = 12.0
+DEADLINE_MARGIN_SEC = 0.5
 LOCK_IDLE_EVICT_SEC = 3600.0
 
 logger = logging.getLogger("edge_bridge")
@@ -54,6 +54,20 @@ def setup_logging(home_dir: Path):
     formatter = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+
+
+def parse_version(v: str | None) -> tuple[int, ...]:
+    if not v:
+        return (0, 0, 0)
+    parts = []
+    for p in str(v).split("."):
+        try:
+            parts.append(int(p.split("-")[0]))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
 
 
 class WebSocketConnection:
@@ -126,17 +140,20 @@ class HeldCommand:
 class BridgeState:
     def __init__(self, port: int, home: Path, token: str, pairing_required: bool = False,
                  heartbeat_sec: float = 20.0, pong_timeout_sec: float = 45.0,
-                 lock_timeout_sec: float = 10.0):
+                 lock_timeout_sec: float = 10.0, daemon_version: str | None = None):
         self.port = port
         self.home = home
         self.token = token
         self.pairing_required = pairing_required
         self.heartbeat_sec = heartbeat_sec
         self.pong_timeout_sec = pong_timeout_sec
+        self.daemon_version = daemon_version or os.environ.get("EDGE_BRIDGE_TEST_DAEMON_VERSION") or __version__
 
         self.lock = threading.RLock()
         self.ext: WebSocketConnection | None = None
         self.ext_version: str | None = None
+        self.ext_instance: str | None = None
+        self.rejected_instance: str | None = None
         self.ext_accepted: bool = False
         self.extension_outdated: bool = False
 
@@ -145,6 +162,10 @@ class BridgeState:
         self.results: dict[str, dict] = {}
         self.lock_timeout_sec = lock_timeout_sec
         self.sessions: dict[str, dict] = {}
+        # The one tokenless pin (#17): all session-less clients share it, a
+        # single-operator convenience that follows switch/new like a session.
+        self.cli_pin: int | None = None
+        self.cli_pin_closed: bool = False
         self.tab_locks: dict[int, list] = {}
 
         self.last_seen: float = 0.0
@@ -161,7 +182,8 @@ class BridgeState:
     def is_active_locked(self, ws: WebSocketConnection) -> bool:
         return self.ext is ws and self.ext_accepted and not ws.closed
 
-    def accept_extension_locked(self, ws: WebSocketConnection, version: str | None):
+    def accept_extension_locked(self, ws: WebSocketConnection, version: str | None,
+                                instance: str | None = None):
         """Make ws the extension connection. Called only once ws has passed hello/pairing (or the
         pairing-off grace window), so a socket that never authenticates cannot displace the live one."""
         if ws.grace_timer:
@@ -178,6 +200,7 @@ class BridgeState:
             self.last_pong = now
             self.last_ping_sent = now
         self.ext_version = version
+        self.ext_instance = instance
         self.ext_accepted = True
         self.mark_seen()
         self._drain_held_locked()
@@ -198,6 +221,13 @@ class BridgeState:
             if self.ext is ws:
                 self.ext = None
                 self.ext_accepted = False
+                self.ext_instance = None
+                # Commands already sent to this socket will never be answered;
+                # fail them now instead of letting callers wait out the timeout.
+                for cmd_id, event in list(self.pending.items()):
+                    self.results[cmd_id] = {"success": False, "code": "extension_offline",
+                                            "error": "Edge extension disconnected while the command was in flight."}
+                    event.set()
 
     def session_create_locked(self, name: str | None = None) -> str:
         token = str(uuid.uuid4())
@@ -342,21 +372,29 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 ext_connected = bool(state.ext and not state.ext.closed)
                 ws_active = bool(state.ext and not state.ext.closed and state.ext_accepted)
                 ext_ver = state.ext_version
+                ext_inst = state.ext_instance
+                rej_inst = state.rejected_instance
                 ext_outdated = state.extension_outdated
                 pending_count = len(state.pending) + len(state.held)
                 session_count = len(state.sessions)
+                pin_tab = state.cli_pin
                 last_seen = state.last_seen
 
             self._respond(200, {
                 "bridge_running": True,
-                "daemon_version": __version__,
+                "daemon_version": state.daemon_version,
+                "pid": os.getpid(),
                 "extension_version": ext_ver,
+                "instance": ext_inst,
+                "extension_instance": ext_inst,
+                "rejected_instance": rej_inst,
                 "extension_outdated": ext_outdated,
                 "extension_connected": ext_connected,
                 "websocket_active": ws_active,
                 "last_seen_seconds_ago": round(time.time() - last_seen, 1) if last_seen > 0 else None,
                 "pending": pending_count,
                 "sessions": session_count,
+                "pin": pin_tab,
                 "pairing_required": state.pairing_required,
                 "data_dir": str(config.home()),
             })
@@ -507,8 +545,22 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     logger.warning("Pairing token mismatch from extension hello; closing 4001")
                     ws_conn.close_with_code(4001, "pairing_failed")
                     return
+            instance = hello.get("instance")
+            if not isinstance(instance, str):
+                instance = None
             with state.lock:
-                state.accept_extension_locked(ws_conn, version)
+                if (instance is not None
+                        and state.ext_instance is not None
+                        and state.ext and not state.ext.closed and state.ext_accepted
+                        and instance != state.ext_instance):
+                    logger.warning("Another browser instance connected (%s vs active %s); closing 4002",
+                                   instance, state.ext_instance)
+                    state.rejected_instance = instance
+                    ws_conn.close_with_code(4002, "another browser is connected")
+                    return
+                if state.rejected_instance == instance:
+                    state.rejected_instance = None
+                state.accept_extension_locked(ws_conn, version, instance)
 
         with state.lock:
             if not state.is_active_locked(ws_conn):
@@ -523,24 +575,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             result = data["result"]
             with state.lock:
                 if cmd_id in state.pending and state.is_active_locked(ws_conn):
-                    is_v1 = False
-                    if state.ext_version is None:
-                        is_v1 = True
-                    else:
-                        try:
-                            major = int(state.ext_version.split(".")[0])
-                            if major < 2:
-                                is_v1 = True
-                        except (ValueError, IndexError):
-                            is_v1 = True
                     err = result.get("error") if isinstance(result, dict) else ""
                     code = result.get("code") if isinstance(result, dict) else ""
-                    if is_v1 and ((isinstance(err, str) and err.startswith("Unknown action")) or code == "unknown_action"):
+                    is_unknown = (isinstance(err, str) and err.startswith("Unknown action")) or code == "unknown_action"
+                    if is_unknown and (state.ext_version is None or parse_version(state.ext_version) < parse_version(state.daemon_version)):
                         state.extension_outdated = True
                         result = {
                             "success": False,
                             "code": "extension_outdated",
-                            "error": f"Extension {state.ext_version or 'older than 2.0.0'} is connected; daemon {__version__} needs extension 2.0.0 or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."
+                            "error": f"Extension {state.ext_version or 'older than 2.0.0'} is connected; daemon {state.daemon_version} needs extension {state.daemon_version} or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."
                         }
                     state.results[cmd_id] = result
                     ev = state.pending.pop(cmd_id)
@@ -562,7 +605,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if not token_hdr:
                 self._respond(401, {"success": False, "code": "missing_token", "error": "X-Bridge-Token header required"})
                 return
-            if not hmac.compare_digest(token_hdr, state.token):
+            if not hmac.compare_digest(token_hdr.encode("utf-8", "replace"), state.token.encode("utf-8")):
                 self._respond(401, {"success": False, "code": "bad_token", "error": "Invalid token"})
                 return
 
@@ -572,7 +615,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             action = req.get("action")
-            if not action:
+            if not isinstance(action, str) or not action:
                 self._respond(400, {"success": False, "code": "bad_body", "error": "Missing action field"})
                 return
 
@@ -646,17 +689,25 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         "error": "Session tab is closed. Use switch or new to re-pin."})
                     return
 
+            if session is None and tab_scoped and action not in PIN_MUTATING_ACTIONS \
+                    and params.get("tabId") is None:
+                with state.lock:
+                    pin_closed = state.cli_pin_closed
+                if pin_closed:
+                    self._respond(200, {"success": False, "code": "tab_closed",
+                                        "error": "Pinned tab is closed. Use switch or new to re-pin."})
+                    return
+
             if action == "batch":
                 self._exec_batch(state, session_token, session, params, timeout)
                 return
 
             _strip_session_token(params)
-            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped)
+            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped, action)
             res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
                                                       tab_scoped, forward_tab)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
-            if not self._respond(status_code, res):
-                self._best_effort_cancel(state, getattr(self, "_last_cmd_id", None))
+            self._respond(status_code, res)
             return
 
         if self.path.startswith("/poll") or self.path.startswith("/result"):
@@ -665,7 +716,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         self._respond(404, {"success": False, "code": "not_found", "error": "Unknown path"})
 
-    def _resolve_forward_tab(self, state, session, params, tab_scoped):
+    def _resolve_forward_tab(self, state, session, params, tab_scoped, action=None):
         if not tab_scoped:
             return None
         explicit = params.get("tabId")
@@ -674,9 +725,17 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return int(explicit)
             except (TypeError, ValueError):
                 return None
+        if action in CLOSING_ACTIONS:
+            return None
         if session is not None:
             with state.lock:
                 pin = session["tabId"]
+            if pin is not None:
+                params["tabId"] = pin
+                return int(pin)
+        elif session is None:
+            with state.lock:
+                pin = state.cli_pin
             if pin is not None:
                 params["tabId"] = pin
                 return int(pin)
@@ -700,9 +759,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     def _dispatch_once(self, state, action, params, deadline, tab_scoped):
         fwd_params = dict(params)
         if tab_scoped:
-            fwd_params["deadlineMs"] = int((time.time() + DISPATCH_BUDGET_SEC) * 1000)
+            fwd_params["deadlineMs"] = int(max(time.time(), deadline - DEADLINE_MARGIN_SEC) * 1000)
         cmd_id = str(uuid.uuid4())
-        self._last_cmd_id = cmd_id
         event = threading.Event()
         cmd_payload = {"id": cmd_id, "action": action, "params": fwd_params}
         with state.lock:
@@ -718,11 +776,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         rem = max(0.01, deadline - time.time())
         finished = event.wait(timeout=rem)
         with state.lock:
+            state.pending.pop(cmd_id, None)
             if finished:
                 res = state.results.pop(cmd_id, None)
                 if res is not None:
                     return (res, 200)
-            state.pending.pop(cmd_id, None)
+            state.results.pop(cmd_id, None)
             return ({"success": False, "code": "timeout",
                      "error": "Command timed out waiting for Edge extension response"}, 504)
 
@@ -733,6 +792,30 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         or (action in CLOSING_ACTIONS and res.get("success"))):
             with state.lock:
                 state.tab_lock_evict_locked(forward_tab)
+        if session is None and session_token is None:
+            # Tokenless pin (#17), mirroring the session rules below: switch/new
+            # set it, the first successful tab-bound result sets it while empty,
+            # an explicit tabId is a one-shot override that leaves it alone.
+            tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
+            with state.lock:
+                if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
+                        and tab_info.get("id") is not None:
+                    state.cli_pin = int(tab_info["id"])
+                    state.cli_pin_closed = False
+                elif state.cli_pin is None and forward_tab is None and res.get("success") \
+                        and tab_info is not None and tab_info.get("id") is not None:
+                    state.cli_pin = int(tab_info["id"])
+                if forward_tab is not None and forward_tab == state.cli_pin:
+                    if res.get("code") == "tab_not_found":
+                        if not state.cli_pin_closed:
+                            logger.warning("Pinned tab %s closed; tokenless calls are now sticky tab_closed", forward_tab)
+                        state.cli_pin_closed = True
+                    elif action in CLOSING_ACTIONS and res.get("success"):
+                        # A close sent through the bridge is deliberate: clear
+                        # the pin so the next call re-resolves, as Edge does.
+                        state.cli_pin = None
+                        state.cli_pin_closed = False
+            return
         if session is None or session_token is None:
             return
         with state.lock:
@@ -755,19 +838,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                         sess["warned"].add("tab_closed")
                         logger.warning("Session tab %s closed; session is now sticky tab_closed", forward_tab)
 
-    def _best_effort_cancel(self, state, cmd_id):
-        if not cmd_id:
-            return
-        try:
-            with state.lock:
-                ws = state.ext
-            if ws and not ws.closed:
-                ws.send_text(json.dumps({"cancel": cmd_id}))
-        except Exception:
-            pass
 
     def _exec_batch(self, state, session_token, session, params, timeout):
         steps = params.get("steps") or []
+        if not isinstance(steps, list):
+            self._respond(400, {"success": False, "code": "bad_body", "error": "steps must be a list"})
+            return
         _strip_session_token(params)
         results = []
         top_tab = params.get("tabId")
@@ -801,11 +877,16 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(200, {"success": False, "code": "bad_params", "error": err,
                                     "stoppedAt": "batch", "results": results})
                 return
-            s_params = {k: v for k, v in step.items() if k != "action"}
+            s_params = {k: v for k, v in step.items() if k not in ("action", "params")}
+            nested = step.get("params")
+            if isinstance(nested, dict):
+                merged = dict(nested)
+                merged.update(s_params)
+                s_params = merged
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
             s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS
-            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped)
+            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
             results.append(res)
@@ -818,7 +899,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
 class BridgeServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # Windows SO_REUSEADDR lets a second daemon bind a port the first already listens on.
+    allow_reuse_address = sys.platform != "win32"
 
     def __init__(self, server_address, RequestHandlerClass, state: BridgeState):
         self.state = state
@@ -846,6 +928,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
     token = config.ensure_token()
     setup_logging(home)
 
+    daemon_version = os.environ.get("EDGE_BRIDGE_TEST_DAEMON_VERSION") or __version__
     state = BridgeState(
         port=port,
         home=home,
@@ -854,6 +937,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
         heartbeat_sec=config.heartbeat_seconds(),
         pong_timeout_sec=config.pong_timeout_seconds(),
         lock_timeout_sec=config.lock_timeout_seconds(),
+        daemon_version=daemon_version,
     )
 
     stop_event = threading.Event()
@@ -866,7 +950,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     import atexit
     atexit.register(lambda: pid_file.unlink(missing_ok=True))
-    logger.info("Starting Edge Agent Bridge daemon v%s on %s:%d (pid %d)", __version__, host, port, os.getpid())
+    logger.info("Starting Edge Agent Bridge daemon v%s on %s:%d (pid %d)", state.daemon_version, host, port, os.getpid())
 
     try:
         server.serve_forever()

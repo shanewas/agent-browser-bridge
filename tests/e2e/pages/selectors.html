@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Selector fixture</title></head>
+<body>
+<main id="m">main content</main>
+<button id="btnMain">Main</button>
+<h2 class="title" id="h">Heading</h2>
+<input id="email" aria-label="Email">
+<a href="#x" id="pdf">spec.pdf</a>
+<button id="btnSave">Save</button>
+<script>
+  for (const id of ["m", "btnMain", "h", "email", "pdf", "btnSave"]) {
+    document.getElementById(id).addEventListener("click", function () { this.dataset.clicked = "true"; });
+  }
+</script>
+</body></html>

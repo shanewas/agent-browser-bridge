@@ -40,7 +40,7 @@ Every result carries `tab: {id, title, url}`. If the user didn't name a page, co
 first snapshot that you are on the one they meant before you type into it. Your session pins
 to that tab afterwards, so a tab the user switches to will not receive your commands.
 
-Without a tab id or a session, a command goes to the active tab of the last focused Edge window
+Without a tab id or a session, commands follow the daemon's one tokenless pin: `switch` and `new` set it, and while it is empty the first successful tab-bound result sets it. Once pinned, a tokenless command goes to the pinned tab, not the focused one; an explicit tab id is a one-shot override that leaves the pin alone. When the pinned tab closes outside the bridge, tokenless calls fail with `tab_closed` until the next `switch` or `new`; closing it through the bridge clears the pin. All tokenless clients share this one pin, so several agents still need one session each. Before any pin exists, a command goes to the active tab of the last focused Edge window
 that runs the extension. An InPrivate window or a window of another Edge profile doesn't count,
 so while the user works in one of those, that command lands in a different window. Pass the tab
 id or work inside a session there.
@@ -78,7 +78,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 |---|---|---|
 | `stale_snapshot`, `stale_ref` | refs are from an old page state | snapshot again |
 | `target_not_found` | nothing matched within the timeout | snapshot, pick a ref |
-| `tab_not_found` | the pinned tab is gone | tokenless: the next call re-resolves the active tab; session: expect sticky `tab_closed` until `switch`/`new` |
+| `tab_not_found` | the pinned tab is gone | tokenless and session: expect sticky `tab_closed` until `switch`/`new` |
 | `tab_not_scriptable` | the tab shows a browser page (`edge://`, `chrome://`, `view-source:`, an extension page) that extensions can't script | ask the user which tab they mean and `edge_tab_switch` to it, or `edge_navigate` this tab first |
 | `extension_offline` | Edge is closed or the extension is off | tell the user to open Edge and check the popup |
 | `extension_outdated` | the extension predates the daemon | tell the user to update it |
@@ -87,11 +87,12 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `daemon_unreachable` | nothing answers on the daemon port | `edge-bridge daemon start`, then retry |
 | `connection_lost` | the daemon got the command, then the connection dropped before an answer came back (daemon restart or crash) | check the page before retrying, because the action may have run; run `edge-bridge status` if it keeps happening |
 | `tab_busy` | another call holds the tab lock | backoff 250ms·2ⁿ+jitter ≤4×, then surface |
-| `tab_closed` | session pin points at a closed tab | `switch` or `new` to re-pin |
+| `tab_closed` | the session or tokenless pin points at a closed tab | `switch` or `new` to re-pin |
 | `stale_ref` | ref/frame no longer valid | ladder runs automatically; on `exhausted_fallback`, snapshot fresh |
 | `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once and re-pins your last tab; if repeated, `session start` |
 | `click_covered` | sticky overlay covers the target | dismiss it or scroll the target clear, then retry |
 | `file_not_found` | upload path missing | check the path; the error names both the given and translated form |
+| `file_access_required` | extension lacks file URL access | tell the user to turn on "Allow access to file URLs" for Edge Agent Bridge in edge://extensions > Details |
 | `bad_name` | session name outside `[A-Za-z0-9_-]{1,40}` | pick a conforming name |
 | `no_log` | daemon never started here | `edge-bridge daemon start` |
 | `focus_lost` | target never took focus | snapshot, check overlays, coords click |
@@ -148,8 +149,9 @@ moves tabs into an existing group, or a new one when `groupId` is omitted;
 `edge_fill`/`edge_type` verify every write. Results carry `written` (expected full value), `readback` (value read back after 100ms), and `match`:
 
 - `match: true` — written value confirmed.
-- `match: false` — the client already retried once with fill semantics; a second mismatch returns `write_mismatch` with `{expected, readback, attempts: 2}`. Report both values and STOP; do not continue silently.
-- `match: "unknown"` — the extension predates readback (check `edge-bridge status`: old `extension_version` means expected degradation, new version means broken readback). The client warns once and continues unverified.
+- `match: false` — the readback differs from `written`. Results also carry `field` (`input`, `textarea`, `contenteditable`, ...). A `fill` is retried once as a clearing fill unless `field` is `contenteditable`; a second mismatch returns `write_mismatch` with `{expected, readback, attempts: 2}`. `type` and contenteditable fills are never retried: they return `match: false` with `written` and `readback` and leave the field alone, because `type` assumes the caret sat at the end and a clearing fill would wipe the editor's markup. The CLI prints `Warning (write_mismatch): wrote ..., read back ...` to stderr and exits 1, so `&&` chains stop. Compare the two values; if the text is wrong, report both and STOP.
+- Contenteditable comparisons ignore leading and trailing newlines and treat U+00A0 as a space.
+- `match: "unknown"` — the value could not be read back (element gone or not readable), or the extension predates readback (check `edge-bridge status`: old `extension_version` means expected degradation, new version means broken readback). A retry that comes back unknown is returned as unknown, not `write_mismatch`. The client warns once about an old extension and continues unverified; the CLI prints `Warning: write not verified` to stderr and exits 0.
 
 Focus is asserted before every write (≤3 tries) and rechecked after the 1st char and every 8 chars while typing:
 
@@ -160,6 +162,6 @@ Focus is asserted before every write (≤3 tries) and rechecked after the 1st ch
 
 ## The fallback ladder and `tab_busy`
 
-Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the best match (exact, then case-insensitive, then substring text match), with at most 2 extra scans per call. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
+Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the scan match (exact name, else case-insensitive name, and only when exactly one element matches; substring matches never click), with at most 2 extra scans per call. A scan success reports `ladder.matched: {name, ref}` for the element acted on. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
 
 `tab_busy` means another writer holds your tab's lock (the daemon waits up to 10s for it, never past the call's own timeout). Back off 250ms·2ⁿ with jitter, ≤4 retries, then surface or use another tab.

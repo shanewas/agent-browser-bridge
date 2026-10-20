@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Verified writes no longer clear the field: `type` is never retried, the clearing
+  `fill` retry skips contenteditable targets, contenteditable readback ignores
+  leading and trailing newlines and U+00A0, and an unreadable retry returns
+  `match: "unknown"` instead of `write_mismatch`. The CLI warns on stderr when a
+  write is unverified and exits 1 on a mismatch (#6).
+- Extension attaches to tabs even when DevTools or another CDP client is
+  already attached, removing the premature `getTargets` shortcut. Failed
+  attaches report `native: false` with `debuggerError` instead of silent
+  synthetic event fallback, and commands map missing tabs to `tab_not_found`.
+- Detect missing "Allow access to file URLs" toggle in the extension: upload and
+  `file://` navigation fail with `file_access_required` instead of Chromium's
+  internal `Not allowed` error. `doctor` adds a `file-access` check, and the
+  extension popup warns when file access is off.
 - macOS: the daemon no longer blocks about 30 s in `socket.getfqdn()` before it
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
@@ -10,11 +23,109 @@
   hit-testing now uses frame-local coordinates instead of failing with
   `focus_lost`. Corrects the 2.4.0 known-issue note:
   `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- `daemon stop` and `daemon restart` kill only when `/status` on the configured
+  port reports the PID in `bridge.pid`. A stale file left by a crash or reboot is
+  deleted and nothing is killed, so a recycled PID no longer takes down an
+  unrelated process. If the PID is alive and the port accepts connections without
+  answering, the file is kept and stop exits 1; `--force` keeps the old
+  unconditional kill for that hung daemon. `daemon restart` exits 1 when a daemon
+  still answers after the stop, instead of reporting success.
+- Upgrading: a daemon from 2.5.0 or earlier does not report its PID, so plain
+  `daemon stop` refuses it. Run `edge-bridge daemon restart --force` once after
+  upgrading.
+- `/status` reports the daemon's `pid`; `status` and `daemon status` print it
+  from there instead of reading `bridge.pid`.
+- Windows: the daemon no longer sets `SO_REUSEADDR`, so a second daemon on a busy
+  port fails with `WinError 10048` and exits 1 instead of binding silently and
+  overwriting `bridge.pid`.
+- `run --tab N` forwards `tabId: N` to every step that does not carry its
+  own, instead of running all steps on the focused tab.
+- `eval` and `text` print their result in human output instead of `OK`, and
+  a path-less `screenshot` reports the size of the returned `dataUrl`.
+- `fill` and `type` work on inputs inside open shadow roots (including two
+  roots deep): focus assertion and readback step into shadow roots instead
+  of stopping at the host and failing with `focus_lost`.
+- Targets that are CSS selectors resolve as selectors: an explicit
+  `selector` always goes to `querySelector` (never name matching, with
+  `bad_selector` for unparsable input), tag compounds like `h2.title` and
+  `input#email` try the selector before name matching, and a bare tag like
+  `main` tries it after, so a button named "Main" still wins.
+- `text` returns the target element's own text (a container's full text,
+  a field's value, a `display:none` element's text) instead of the text of
+  whatever element sits at the target's center.
+- `batch` steps in the `{action, params}` shape forward their params (merged
+  under any flat keys) instead of sending a nested `params` key; the MCP
+  schema says both shapes are accepted.
+- `scroll --ref/--target` resolves the element and scrolls it into view (or
+  wheels at its center when deltas are given) instead of scrolling at a
+  fixed viewport point, and `--y 0` no longer scrolls 300 px.
+- Changed: the fallback ladder's scan rung no longer clicks substring
+  matches or one of several same-named elements; it accepts an exact or
+  case-insensitive name only when exactly one element matches, and reports
+  the element acted on as `ladder.matched`.
+- `edge-bridge setup` registers the absolute interpreter path
+  `[sys.executable, "-m", "edge_agent_bridge", "mcp"]` at user scope across
+  clients, runs npm CLI registrations via their resolved binary paths, and
+  flags missing or stale interpreter paths in `doctor`.
+- Version drift detection: `status` reports CLI and daemon versions side-by-side
+  with remediation hints on mismatch; `doctor` checks version parity and flags
+  outdated extensions; daemon rewrites `unknown_action` from older extensions to
+  `extension_outdated`.
+- Browser instance isolation: extension hello carries a persistent `instance` ID.
+  A different browser/profile attempting to connect while another is active is
+  closed with code 4002 ("another browser is connected") rather than displacing
+  the active browser, and `/status` and `doctor` report the rejected instance.
+- Changed: tab-less CLI commands follow the tab picked by `switch` or `new`
+  (one shared daemon-side pin, also set by the first successful tab-bound
+  result while empty); when that tab closes outside the bridge they fail
+  with `tab_closed` instead of drifting to the focused tab. `/status`
+  reports it as `pin`. Side effect: a Python `Edge()` with no session now
+  receives the pinned tab instead of the focused one on its first call.
+- `check_radio` resolves target by ref, explicit/candidate selector, label text,
+  or value attribute, avoiding unhandled `bad_selector` syntax errors on
+  non-ASCII or punctuation-heavy label strings.
+- The MCP server answers a JSON array or scalar line with `-32600 Invalid
+  Request` and keeps serving, instead of exiting.
+- `Doppelhand` calls return `{success: false, code: "doppelhand_unreachable"}`
+  (or `doppelhand_http_<status>`) instead of raising `URLError`; the client
+  and recipe now state the server is Windows only.
+- Windows: `run -` and `eval --file -` read stdin as UTF-8 instead of the
+  console code page, and undecodable stdin is a usage error (exit 3) naming
+  stdin instead of a traceback or mojibake.
+- CLI commands that talk to the browser start the daemon on first use, as
+  the README already said; `status`, `doctor`, `logs` and `daemon` commands
+  still never start it.
+- Malformed `/exec` requests (non-ASCII token header, non-string `action`,
+  non-list batch `steps`) get a JSON 400/401 answer instead of a dropped
+  connection.
+- Extension command deadlines: tab-scoped dispatches derive `deadlineMs` from
+  the request timeout rather than a fixed 12 s budget. `wait` and `nav`/`back`/`reload`
+  load waits stop at `deadlineMs` (still capped at 15 s) instead of keeping the
+  tab busy, and the daemon cleans up late results on timeout. Changed: `back`,
+  `forward` and `reload` now return `nav_timeout` when the page doesn't finish
+  loading, where they used to report success.
+- When the extension socket drops, in-flight commands fail at once with
+  `extension_offline` instead of waiting out their timeout, and leave no entry
+  in `/status` `pending`. A rejected connection (close 4001 for pairing, 4002
+  for a second browser) stops the worker reconnecting, from the watchdog alarm
+  too, until a token is saved or Reconnect is clicked; after 4001 the popup
+  shows the pairing field.
+- After a daemon restart, the session re-pin no longer sends `tab_switch`
+  (which activated the tab and pulled its window to the front); it uses the
+  read-only `tab` action, so the session stays pinned even when the first call
+  after the restart is a tab-less one such as `tabs`.
+- Changed: a session `close` without `--tab` returns `tab_required` instead of
+  closing the session's tab.
+
+### Removed
+
+- `edge-bridge repl`: its line format matched no verb's arguments, and `run`,
+  MCP and the Python API cover the many-steps-in-one-process case.
 
 ## 2.5.0
 
 - PATH-proof entry points: `py -m edge_agent_bridge` and `python -m edge_agent_bridge`
-  delegate directly to the CLI, allowing commands to run even when `edge-bridge`
+  delegate directly to the CLI so commands run even when `edge-bridge`
   is not recognized on PATH.
 - `edge-bridge doctor` adds `launcher`, `path`, and Windows `elevation` diagnostics:
   identifies missing scripts, broken PATH, stale installs, and elevated shells with
@@ -31,8 +142,10 @@
 - `upload` pierces open shadow roots and temp-reveals hidden file inputs: the
   page marks the input through shadow trees, the worker resolves it with a
   pierced CDP lookup, and styles are restored after. Fixes `no_file_input` on
-  Salesforce Lightning forms and `upload_failed (-32000)` on `display:none`
-  inputs. New e2e page `shadow-upload.html` covers both plus style restore.
+  Salesforce Lightning forms (the `upload_failed (-32000)` note was a
+  misdiagnosis: Chromium returns `Not allowed` when file URL access is disabled
+  in the extension, not for `display:none` inputs). New e2e page
+  `shadow-upload.html` covers both plus style restore.
 - `eval --file PATH` (`-` for stdin) runs JS from a file instead of a
   shell-quoted argument.
 - New `edge_agent_bridge.doppelhand` companion client for OS-level file

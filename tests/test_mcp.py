@@ -182,6 +182,18 @@ def test_mcp_unknown_tool_and_malformed(mcp_proc):
     assert r2["error"]["code"] == -32700
 
 
+def test_mcp_non_object_lines_get_invalid_request(mcp_proc):
+    # Valid JSON that is not an object must not kill the server (issue #27).
+    for raw in (b"[]\n", b"42\n", b'"x"\n'):
+        mcp_proc.stdin.write(raw)
+        mcp_proc.stdin.flush()
+        resp = json.loads(mcp_proc.stdout.readline().decode("utf-8").strip())
+        assert resp["id"] is None, resp
+        assert resp["error"]["code"] == -32600, resp
+    resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 9, "method": "ping"})
+    assert resp["id"] == 9 and resp["result"] == {}
+
+
 def test_mcp_tool_failure_is_error(daemon):
     def handler(action, params):
         return {"success": False, "code": "target_not_found", "error": "Element not found"}
