@@ -796,10 +796,10 @@ export async function execute(cmd) {
             try {
               await nativeClick(tabId, pt.x, pt.y, "left", 1);
               showCursor(tabId, pt.x, pt.y, true, p);
-              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear], "ISOLATED", frameId);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode, shouldClear], "ISOLATED", frameId);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text], "ISOLATED", frameId);
+              await execInTab(tabId, page.pageFillCommit, [mode, text], "ISOLATED", frameId);
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);

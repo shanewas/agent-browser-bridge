@@ -230,14 +230,12 @@ export function pageTypeText(selector, text, clear) {
 }
 
 // Native fill, step 1: focus the input under (x, y) (or the label's input) and clear it.
-export function pageFillPrepare(cx, cy, shouldClear) {
-  let el = document.elementFromPoint(cx, cy);
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+export function pageFillPrepare(mode, shouldClear) {
+  const lib = window.__eabLib;
+  if (!lib) return { success: false, code: "lib_missing" };
+  let el = lib.controlAt(mode);
   if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA" && !el.isContentEditable)) {
-    const a = document.activeElement;
+    const a = lib.deepActive();
     if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) {
       el = a;
     }
@@ -260,14 +258,12 @@ export function pageFillPrepare(cx, cy, shouldClear) {
 }
 
 // Native fill, step 2: make sure the value landed and fire the framework events.
-export function pageFillCommit(cx, cy, tVal) {
-  let el = document.elementFromPoint(cx, cy);
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+export function pageFillCommit(mode, tVal) {
+  const lib = window.__eabLib;
+  if (!lib) return { success: false, code: "lib_missing" };
+  let el = lib.controlAt(mode);
   if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA" && !el.isContentEditable)) {
-    if (document.activeElement) el = document.activeElement;
+    el = lib.deepActive() || el;
   }
   if (!el) return { success: false, code: "target_not_found", error: "No input at point" };
   const targetInput = el.shadowRoot ? (el.shadowRoot.querySelector("input, textarea") || el) : el;
@@ -908,16 +904,7 @@ export function pageCheckRadio(target, value, isExplicitSelector) {
 export async function pageAssertFocus(mode, uuid, checkOnly) {
   const lib = window.__eabLib;
   if (!lib) return { success: false, code: "lib_missing" };
-  let el = null;
-  if (mode && mode.active) {
-    el = lib.deepActive();
-  } else if (mode) {
-    el = lib.deepFromPoint(mode.x, mode.y);
-  }
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+  const el = lib.controlAt(mode);
   if (!el) return { success: true, focused: false, focusable: false };
   const tag = el.tagName || "";
   const focusable = !el.disabled && (el.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el.tabIndex >= 0 && typeof el.focus === "function"));
@@ -945,16 +932,7 @@ export async function pageAssertFocus(mode, uuid, checkOnly) {
 export function pageReadback(mode) {
   const lib = window.__eabLib;
   if (!lib) return { success: false, code: "lib_missing" };
-  let el = null;
-  if (mode && mode.active) {
-    el = lib.deepActive();
-  } else if (mode) {
-    el = lib.deepFromPoint(mode.x, mode.y);
-  }
-  if (el && el.tagName === "LABEL") {
-    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
-    else el = el.querySelector("input, textarea") || el;
-  }
+  const el = lib.controlAt(mode);
   if (!el || el === document.body || el === document.documentElement) {
     return { success: true, present: false, verifiable: false };
   }
