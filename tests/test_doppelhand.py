@@ -98,6 +98,64 @@ def test_http_error_returns_result_not_raise():
     assert r["success"] is False and r["code"] == "doppelhand_http_503", r
 
 
+def _serve(handler_cls):
+    httpd = HTTPServer(("127.0.0.1", 0), handler_cls)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_port}"
+
+
+def test_http_error_keeps_the_server_message():
+    class ErrHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.dumps({"ok": False, "error": "use a token"}).encode()
+            self.send_response(401)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    httpd, url = _serve(ErrHandler)
+    try:
+        r = Doppelhand(base_url=url, timeout=2).click(1, 1)
+    finally:
+        httpd.shutdown()
+    assert r == {"success": False, "code": "doppelhand_http_401", "error": "use a token"}
+
+
+def test_non_json_body_returns_result_not_raise():
+    class HtmlHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"<html>not json</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    httpd, url = _serve(HtmlHandler)
+    try:
+        r = Doppelhand(base_url=url, timeout=2).screen()
+    finally:
+        httpd.shutdown()
+    assert r["success"] is False and r["code"] == "doppelhand_bad_response", r
+
+
+def test_slow_server_reports_timeout_not_unreachable():
+    import socket
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        r = Doppelhand(base_url=f"http://127.0.0.1:{listener.getsockname()[1]}", timeout=0.5).screen()
+    finally:
+        listener.close()
+    assert r["success"] is False and r["code"] == "doppelhand_timeout", r
+
+
 def test_css_to_view_center():
     x, y = Doppelhand.css_to_view({"x": 100, "y": 50, "width": 200, "height": 100}, (1000, 500), (1280, 720))
     assert (x, y) == (256, 144)

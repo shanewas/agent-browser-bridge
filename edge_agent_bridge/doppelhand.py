@@ -2,8 +2,10 @@
 
 Windows only: the doppelhand server runs on Windows. Like Edge, calls return
 the raw result dict and never raise on a failed call: connection failures
-return code "doppelhand_unreachable" and HTTP failures return
-"doppelhand_http_<status>".
+return code "doppelhand_unreachable", a server too slow to answer
+"doppelhand_timeout", a body that isn't JSON "doppelhand_bad_response", and
+HTTP failures "doppelhand_http_<status>" with the server's own error message
+when it sent one.
 
 Doppelhand drives OS-level dialogs the bridge cannot reach (file choosers).
 All mutating calls use POST; the server rejects GET with "use POST".
@@ -19,6 +21,13 @@ DEFAULT_URL = "http://127.0.0.1:53234"
 TOKEN_HEADER = "X-Doppelhand-Token"
 
 
+def _json_or_none(body):
+    try:
+        return json.loads(body.decode("utf-8"))
+    except ValueError:
+        return None
+
+
 class Doppelhand:
     def __init__(self, base_url=None, token=None, timeout=15):
         self.base_url = base_url or os.environ.get("DOPPELHAND_URL", DEFAULT_URL)
@@ -32,13 +41,23 @@ class Doppelhand:
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                body = resp.read()
         except urllib.error.HTTPError as e:
+            detail = _json_or_none(e.read())
+            error = detail.get("error") if isinstance(detail, dict) else None
             return {"success": False, "code": f"doppelhand_http_{e.code}",
-                    "error": f"doppelhand server answered HTTP {e.code}"}
+                    "error": error or f"doppelhand server answered HTTP {e.code}"}
         except (urllib.error.URLError, OSError) as e:
+            if isinstance(getattr(e, "reason", e), TimeoutError):
+                return {"success": False, "code": "doppelhand_timeout",
+                        "error": f"doppelhand server at {self.base_url} did not answer {path} in time"}
             return {"success": False, "code": "doppelhand_unreachable",
                     "error": f"doppelhand server unreachable at {self.base_url}: {e}"}
+        result = _json_or_none(body)
+        if result is None:
+            return {"success": False, "code": "doppelhand_bad_response",
+                    "error": f"doppelhand server answered {path} with a body that is not JSON"}
+        return result
 
     def screen(self):
         """Display layout: monitors, view size, scale. Read-only."""
