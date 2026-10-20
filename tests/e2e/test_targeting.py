@@ -61,9 +61,14 @@ def test_missing_target_times_out(client):
 def test_highlight_ring_appears_and_fades(client):
     snap = client("snapshot")["text"]
     ref = ref_of(snap, "button", "Verify")
+    # The ring only lives 350 ms, which a slow runner can spend on the hover round trip
+    # alone, so record its insertion instead of looking for it afterwards.
+    client("eval", {"code": "window.__sawRing = false; new MutationObserver(() => {"
+                            " if (document.getElementById('__eab_ring')) window.__sawRing = true; })"
+                            ".observe(document.documentElement, {childList: true, subtree: true}); true"})
     r = client("hover", {"ref": ref, "highlight": True})
     assert r["success"], r
-    assert client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is True
+    assert client("eval", {"code": "window.__sawRing"})["result"] is True
     # The ring is removed by a 350 ms timer; a loaded runner can fire it late, so poll.
     deadline = time.time() + 3
     while client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is not False:
