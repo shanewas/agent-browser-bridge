@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Edge Agent Bridge",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "Let an AI agent drive the browser tabs you already have open, using page snapshots with stable element refs and trusted input.",
   "permissions": [
     "tabs",

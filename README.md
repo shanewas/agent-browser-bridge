@@ -55,7 +55,7 @@ edge-bridge daemon status
 
 ```text
 Daemon: running on 127.0.0.1:18999 (PID 24188)
-Extension: 2.6.0 (connected)
+Extension: 2.6.1 (connected)
 ```
 
 CLI commands and Python's `with Edge()` start the daemon on first use if it isn't running, but
