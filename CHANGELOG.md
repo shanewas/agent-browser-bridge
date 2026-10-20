@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `click`, `hover`, `type` and `drag` no longer miss a target near the bottom of the
+  viewport on the first native action in a tab. Attaching the debugger makes Edge show
+  its "started debugging this browser" bar, which shrank the page after the click point
+  was measured, so the click could land below the viewport and be dropped while the
+  command reported success. The extension now attaches first and waits for the bar to
+  settle before it measures.
+- E2E runs on Linux and macOS in CI as well as Windows, and all three gate releases.
+
 ## 2.6.0
 
 - `daemon stop` and `daemon restart` work when `bridge.pid` is missing but a

@@ -12,6 +12,8 @@ async function attach(tabId) {
   return ok;
 }
 
+const NATIVE_VERBS = new Set(["click", "dblclick", "rightclick", "hover", "type"]);
+
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function log(msg) {
@@ -162,7 +164,21 @@ async function locate(tabId, p, verb) {
   if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
   const target = p.ref || p.target || p.selector || p.text;
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
-  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind: targetKind(p) });
+  const opts = { highlight: p.highlight, kind: targetKind(p) };
+  let r;
+  if (NATIVE_VERBS.has(verb)) {
+    // Attach before measuring: the attach itself moves the page (see settleViewport). The
+    // viewport can still shift during a load, so only trust a point measured while it held still.
+    await attach(tabId);
+    const height = () => execInTab(tabId, () => window.innerHeight, []).catch(() => null);
+    for (let i = 0; i < 3; i++) {
+      const before = await height();
+      r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, opts);
+      if (!r || !r.found || before === await height()) break;
+    }
+  } else {
+    r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, opts);
+  }
   if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
   if (frameOfRef(target) !== undefined && r.rendered !== false) {
     // pageResolve ran inside the subframe, blind to main-frame overlays. The top
@@ -583,6 +599,7 @@ export async function execute(cmd) {
 
       case "drag": {
         let fromX = p.fromX, fromY = p.fromY;
+        await attach(tabId);
         if (!hasCoords({ x: fromX, y: fromY })) {
           const rFrom = await resolveTargetWithWait(tabId, p.from || p.source, p.timeout || 5000, { highlight: p.highlight });
           if (!rFrom || !rFrom.found) return fail("target_not_found", `Drag source not found: ${p.from || p.source}`);

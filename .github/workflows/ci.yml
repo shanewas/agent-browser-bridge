@@ -31,11 +31,11 @@ jobs:
           - os: windows-latest
             required: true
           - os: ubuntu-latest
-            required: false
+            required: true
+          - os: macos-latest
+            required: true
     runs-on: ${{ matrix.os }}
-    # Only the Windows E2E job has been run against a real Edge. Whether the Linux runner
-    # loads an unpacked extension headless is unverified, so it reports without failing
-    # the workflow. Set required to true for a platform once a run there is green.
+    # Set required to false to let a platform report without failing the workflow.
     continue-on-error: ${{ !matrix.required }}
     env:
       EDGE_BRIDGE_E2E_REQUIRED: "1"
