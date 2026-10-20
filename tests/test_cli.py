@@ -41,14 +41,14 @@ def test_cli_unreachable_port_autostarts_instead_of_exits_2(monkeypatch, tmp_pat
     # no daemon answers extension_offline (exit 1), not daemon_unreachable.
     port = free_port()
     env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(port)}
-    code, out, err = run_cli(["--json", "ping"], env=env)
-    assert code == 1
-    data = json.loads(out)
-    assert data["success"] is False
-    assert data["code"] == "extension_offline"
-    pid = int((tmp_path / "bridge.pid").read_text(encoding="utf-8").strip())
-    import os as _os, signal as _sig
-    _os.kill(pid, _sig.SIGTERM)
+    try:
+        code, out, err = run_cli(["--json", "ping"], env=env)
+        assert code == 1
+        data = json.loads(out)
+        assert data["success"] is False
+        assert data["code"] == "extension_offline"
+    finally:
+        run_cli(["daemon", "stop"], env=env)
 
 
 def test_cli_close_without_tab_exits_3(daemon):
@@ -464,23 +464,27 @@ def test_cli_autostarts_daemon_but_status_does_not(tmp_path):
     port = _fp()
     home = tmp_path / "home1"
     env = {"EDGE_BRIDGE_HOME": str(home), "EDGE_BRIDGE_PORT": str(port)}
-    code, out, err = run_cli(["--json", "tabs"], env=env)
-    body = json.loads(out)
-    assert body["code"] == "extension_offline", (code, out, err)
-    assert probe(port) and probe(port)["bridge_running"] is True
-    ext = FakeExtension(port, handler=lambda a, p: {"success": True, "tabs": []}).connect().run()
-    time.sleep(0.3)
-    code, out, err = run_cli(["--json", "tabs"], env=env)
-    assert code == 0 and json.loads(out)["success"] is True, (code, out, err)
-    ext.close()
-    pid = int((home / "bridge.pid").read_text(encoding="utf-8").strip())
-    import os as _os, signal as _sig
-    _os.kill(pid, _sig.SIGTERM)
+    try:
+        code, out, err = run_cli(["--json", "tabs"], env=env)
+        body = json.loads(out)
+        assert body["code"] == "extension_offline", (code, out, err)
+        assert probe(port) and probe(port)["bridge_running"] is True
+        ext = FakeExtension(port, handler=lambda a, p: {"success": True, "tabs": []}).connect().run()
+        try:
+            time.sleep(0.3)
+            code, out, err = run_cli(["--json", "tabs"], env=env)
+            assert code == 0 and json.loads(out)["success"] is True, (code, out, err)
+        finally:
+            ext.close()
+    finally:
+        run_cli(["daemon", "stop"], env=env)
 
     port2 = _fp()
     env2 = {"EDGE_BRIDGE_HOME": str(tmp_path / "home2"), "EDGE_BRIDGE_PORT": str(port2)}
-    run_cli(["status"], env=env2)
-    assert probe(port2) is None
+    for args in (["status"], ["session", "list"], ["session", "status", "--session", "t"],
+                 ["session", "stop", "--session", "t"], ["session", "prune"]):
+        run_cli(args, env=env2)
+        assert probe(port2) is None, args
 
 
 def test_cli_run_usage_errors(daemon, tmp_path):

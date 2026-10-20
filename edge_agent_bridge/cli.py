@@ -795,7 +795,8 @@ def main(argv=None) -> int:
         port=port,
         highlight=not opt_no_highlight,
         pin=False,
-        auto_start=args.cmd != "status",
+        # A freshly started daemon has no sessions, so only session start is worth starting one for.
+        auto_start=args.cmd != "status" and (args.cmd != "session" or args.session_action == "start"),
         session_token=opt_session,
     )
 
