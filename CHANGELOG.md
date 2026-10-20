@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.6.0
 
 - `daemon stop` and `daemon restart` work when `bridge.pid` is missing but a
   daemon answers: the PID comes from its `/status`.
@@ -29,8 +29,6 @@
 - A rejected pairing stays blocked across service worker restarts, and the popup's
   rejection notice clears once the daemon accepts the extension.
 - `text` results no longer carry a duplicate `ownText` field.
-
-## 2.6.0
 
 - Verified writes no longer clear the field: `type` is never retried, the clearing
   `fill` retry skips contenteditable targets, contenteditable readback ignores
