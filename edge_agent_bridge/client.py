@@ -343,6 +343,7 @@ class Edge:
                     continue
                 rung2[k] = v
             rung2["target"] = locator_text
+            rung2["exact"] = True
             second = self._send_once(action, rung2, timeout)
             tried.append({"step": "text", "outcome": "ok" if second.get("success") else second.get("code")})
             if second.get("success"):
@@ -416,7 +417,11 @@ class Edge:
         final = self._send_once("drag", rung, timeout)
         tried.append({"step": "coords", "outcome": "ok" if final.get("success") else final.get("code")})
         if final.get("success"):
-            final["ladder"] = {"rung": "coords", "tried": tried}
+            names = {k: m.get("text") or m.get("name") or "" for k, m in coords.items()}
+            final["ladder"] = {"rung": "coords", "tried": tried,
+                               "matched": {"name": f'{names["from"]} -> {names["to"]}',
+                                           "from": {"name": names["from"], "ref": coords["from"].get("ref")},
+                                           "to": {"name": names["to"], "ref": coords["to"].get("ref")}}}
             return final
         return {"success": False, "code": "exhausted_fallback",
                 "error": "drag endpoints could not be re-resolved", "tried": tried}

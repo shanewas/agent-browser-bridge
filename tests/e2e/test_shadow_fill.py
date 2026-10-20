@@ -46,6 +46,27 @@ def test_fill_nested_two_shadow_roots_deep(client):
     assert got == "carol", got
 
 
+def test_fill_replaces_prefilled_input_two_shadow_roots_deep(client):
+    deep = "document.getElementById('two').shadowRoot.querySelector('x-inner').shadowRoot.querySelector('input')"
+    _value(client, deep + ".value = 'old'")
+    r = client("fill", {"ref": _ref(client("snapshot")["text"], "deep name"), "text": "new"})
+    assert r["success"] and r["match"] is True, r
+    assert _value(client, deep + ".value") == "new"
+
+
+def test_fill_at_a_label_for_inside_a_shadow_root(client):
+    box = _value(client, "(() => { const r = document.getElementById('three').shadowRoot"
+                         ".getElementById('forLabel').getBoundingClientRect(); return [r.x + 5, r.y + r.height / 2]; })()")
+    r = client("fill", {"x": box[0], "y": box[1], "text": "erin"})
+    assert r["success"] and r["match"] is True, r
+    assert _value(client, "document.getElementById('three').shadowRoot.getElementById('f').value") == "erin"
+
+
+def test_type_into_combobox_that_focuses_its_listbox(client):
+    r = client("type", {"target": "#combo", "text": "ab", "delay": 60})
+    assert r.get("code") != "focus_stolen", r
+
+
 def test_type_into_shadow_input(client):
     snap = client("snapshot")["text"]
     ref = _ref(snap, "name")

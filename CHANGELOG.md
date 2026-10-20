@@ -14,6 +14,21 @@
 - `Doppelhand` returns `doppelhand_bad_response` for a body that isn't JSON,
   `doppelhand_timeout` for a server that doesn't answer in time, and keeps the
   server's own error message on an HTTP error.
+- `fill` replaces a pre-filled input two or more shadow roots deep instead of
+  appending to it, and a `<label for>` inside a shadow root resolves to its input.
+- `check-radio` treats a bare word such as `Option` or `Button` as label text, not
+  a tag name. `check-radio` and `select` run a framed ref given as `--target` in
+  its frame.
+- The fallback ladder's text rung matches exact names only, and a drag that
+  succeeds through the ladder reports `ladder.matched`.
+- Without the debugger, `scroll` with deltas and a target scrolls the element
+  under the target, not the window.
+- A screenshot that falls back to `captureVisibleTab` after `Page.captureScreenshot`
+  fails reports `native: false` and the error. Only Chromium's detach messages
+  count as `debugger_unavailable`.
+- A rejected pairing stays blocked across service worker restarts, and the popup's
+  rejection notice clears once the daemon accepts the extension.
+- `text` results no longer carry a duplicate `ownText` field.
 
 ## 2.6.0
 

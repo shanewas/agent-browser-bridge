@@ -43,6 +43,17 @@ def test_click_ref_inside_each_frame(client, frames_page):
     assert all(h[1] is True for h in hits), hits
 
 
+def test_check_and_select_take_a_framed_ref_as_target(client, frames_page):
+    t = client("snapshot")["text"]
+    r = client("check_radio", {"target": child_ref(t, "cross-origin", "checkbox", "Agree")})
+    assert r["success"] and r["checked"] is True, r
+    r = client("select", {"target": child_ref(t, "cross-origin", "combobox", "Pick"), "value": "b"})
+    assert r["success"] and r["value"] == "b", r
+    time.sleep(0.3)
+    notes = client("eval", {"code": "window.__notes"})["result"]
+    assert "cross:agree=true" in notes and "cross:pick=b" in notes, notes
+
+
 def test_fill_ref_in_cross_origin_frame(client, frames_page):
     t = client("snapshot")["text"]
     ref = child_ref(t, "cross-origin", "textbox", "Note")

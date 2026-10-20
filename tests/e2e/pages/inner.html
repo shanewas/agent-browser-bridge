@@ -8,6 +8,8 @@
 <body>
   <button type="button" id="ping">Ping</button>
   <label for="note">Note</label> <input id="note" type="text" autocomplete="off">
+  <label><input type="checkbox" id="agree"> Agree</label>
+  <select id="pick" aria-label="Pick"><option value="a">A</option><option value="b">B</option></select>
   <script>
     var tag = new URLSearchParams(location.search).get("tag") || "inner";
     document.title = "Inner " + tag;
@@ -16,6 +18,12 @@
     });
     document.getElementById("note").addEventListener("input", function () {
       window.parent.postMessage({ note: tag + ":" + this.value }, "*");
+    });
+    document.getElementById("agree").addEventListener("change", function () {
+      window.parent.postMessage({ note: tag + ":agree=" + this.checked }, "*");
+    });
+    document.getElementById("pick").addEventListener("change", function () {
+      window.parent.postMessage({ note: tag + ":pick=" + this.value }, "*");
     });
   </script>
 </body>
