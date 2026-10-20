@@ -38,10 +38,6 @@ class EdgeProcess:
             "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
             "--window-size=1280,900", "about:blank",
         ]
-        if sys.platform != "win32":
-            # Skip the OS keyring: on the Linux runner Edge waits about 25 s on it before
-            # DevTools comes up, past the connect deadline. macOS starts faster too.
-            args += ["--password-store=basic", "--use-mock-keychain"]
         if sys.platform.startswith("linux") or (hasattr(os, "geteuid") and os.geteuid() == 0):
             args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
         # A file, not a pipe: Edge on Linux logs dbus errors nonstop, and an undrained pipe
@@ -113,7 +109,8 @@ def edge(tmp_path_factory, e2e_daemon, staged_extension):
         pytest.skip("Microsoft Edge not found")
     profile = tmp_path_factory.mktemp("eab-profile")
     proc = EdgeProcess(binary, profile, staged_extension, e2e_daemon.port).start()
-    deadline = time.time() + 20
+    # The first Edge launch on a fresh Linux runner takes about 26 s before DevTools is up.
+    deadline = time.time() + 60
     while time.time() < deadline:
         if e2e_daemon.status().get("websocket_active"):
             break
