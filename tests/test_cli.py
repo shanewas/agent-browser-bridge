@@ -249,6 +249,22 @@ def test_cli_daemon_restart_fails_while_another_daemon_answers(daemon, bystander
     assert bystander.poll() is None
 
 
+def test_cli_daemon_restart_without_pid_file(daemon):
+    # bridge.pid is gone but the daemon answers: /status names its PID, so restart needs no --force.
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    old_pid = daemon.status()["pid"]
+    (daemon.home / "bridge.pid").unlink()
+    try:
+        code, out, err = run_cli(["daemon", "restart"], env=env)
+        assert code == 0, err
+        assert f"Stopped daemon (PID {old_pid})" in out
+        daemon.proc.wait(timeout=10)
+        new_pid = daemon.status()["pid"]
+        assert new_pid != old_pid
+    finally:
+        run_cli(["daemon", "stop"], env=env)
+
+
 def test_cli_status_session_line(daemon):
     def handler(action, params):
         tid = params.get("tabId", 7)

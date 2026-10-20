@@ -73,15 +73,19 @@ def _handle_daemon_cmd(args, port: int) -> int:
 
     if sub == "stop":
         if not pid_p.exists():
-            print("Daemon PID file not found")
-            return 0
-        try:
-            pid = int(pid_p.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError) as e:
-            print(f"Error stopping daemon: {e}")
-            pid_p.unlink(missing_ok=True)
-            return 0
-        if not getattr(args, "force", False):
+            # Without bridge.pid, the daemon answering on the port is the only source of its PID.
+            pid = _probe_status(port).get("pid")
+            if not pid:
+                print("Daemon PID file not found")
+                return 0
+        else:
+            try:
+                pid = int(pid_p.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError) as e:
+                print(f"Error stopping daemon: {e}")
+                pid_p.unlink(missing_ok=True)
+                return 0
+        if pid_p.exists() and not getattr(args, "force", False):
             st = _probe_status(port)
             if st.get("bridge_running") and "pid" not in st:
                 # An answer proves a bridge runs on the port, not that bridge.pid names it.
