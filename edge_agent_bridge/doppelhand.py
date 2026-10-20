@@ -48,7 +48,9 @@ class Doppelhand:
             return {"success": False, "code": f"doppelhand_http_{e.code}",
                     "error": error or f"doppelhand server answered HTTP {e.code}"}
         except (urllib.error.URLError, OSError) as e:
-            if isinstance(getattr(e, "reason", e), TimeoutError):
+            # urllib wraps connect failures (a timed-out connect included) in URLError; a bare
+            # TimeoutError comes from reading the answer of a server that took the request.
+            if isinstance(e, TimeoutError):
                 return {"success": False, "code": "doppelhand_timeout",
                         "error": f"doppelhand server at {self.base_url} did not answer {path} in time"}
             return {"success": False, "code": "doppelhand_unreachable",
