@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `daemon stop` and `daemon restart` work when `bridge.pid` is missing but a
+  daemon answers: the PID comes from its `/status`.
+- `session list`, `status`, `stop` and `prune` no longer start a daemon just to
+  report that it has no sessions; only `session start` auto-starts.
+- `run -` and `eval --file` accept input that starts with a UTF-8 BOM, and an
+  `eval --file` that isn't UTF-8 exits 3 with `bad_params` instead of a traceback.
+- `doctor` offers `daemon restart` for a daemon older than the CLI even while
+  the extension is disconnected.
+- `/status` drops `instance`, which duplicated `extension_instance`.
+- `Doppelhand` returns `doppelhand_bad_response` for a body that isn't JSON,
+  `doppelhand_timeout` for a server that doesn't answer in time, and keeps the
+  server's own error message on an HTTP error.
+
 ## 2.6.0
 
 - Verified writes no longer clear the field: `type` is never retried, the clearing
