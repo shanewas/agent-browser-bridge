@@ -301,7 +301,23 @@ export function pagePressKey(key) {
   return { success: true, key, target: el.tagName };
 }
 
-export function pageScroll(x, y) {
+// With a point, scrolls what a wheel there would: the nearest ancestor that can scroll
+// in the requested direction, else the window.
+export function pageScroll(x, y, cx, cy) {
+  const canScroll = (el) => {
+    const cs = window.getComputedStyle(el);
+    const open = (v) => v === "auto" || v === "scroll" || v === "overlay";
+    return (y !== 0 && open(cs.overflowY) && el.scrollHeight > el.clientHeight)
+      || (x !== 0 && open(cs.overflowX) && el.scrollWidth > el.clientWidth);
+  };
+  let el = cx === undefined ? null : document.elementFromPoint(cx, cy);
+  while (el && el !== document.body && el !== document.documentElement) {
+    if (el.nodeType === 1 && canScroll(el)) {
+      el.scrollBy(x, y);
+      return { success: true, scrollX: el.scrollLeft, scrollY: el.scrollTop, element: el.tagName.toLowerCase() };
+    }
+    el = el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+  }
   window.scrollBy(x, y);
   return { success: true, scrollX: window.scrollX, scrollY: window.scrollY };
 }

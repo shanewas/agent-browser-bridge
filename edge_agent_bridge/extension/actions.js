@@ -855,7 +855,8 @@ export async function execute(cmd) {
             await nativeScroll(tabId, r.x, r.y, dx, dy);
             return { success: true, scrollX: dx, scrollY: dy, native: true };
           }
-          return await execInTab(tabId, page.pageScroll, [dx, dy]);
+          const resT = await execInTab(tabId, page.pageScroll, [dx, dy, r.local.x, r.local.y], "ISOLATED", frameOfRef(target));
+          return resT && resT.success ? { ...resT, native: false, debuggerError: getDebuggerError(tabId) } : resT;
         }
         const hasDbg = await attach(tabId);
         if (hasDbg) {
