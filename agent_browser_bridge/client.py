@@ -1,4 +1,4 @@
-"""Client library for Edge Agent Bridge.
+"""Client library for Agent Browser Bridge.
 
 Provides the Edge class (and EdgeClient alias), session pinning, connection pooling,
 and convenience methods for all browser actions.
@@ -128,7 +128,7 @@ def ensure_bridge_running(port=None, wait_for_extension=True, timeout=12.0) -> b
 
 
 class Edge:
-    """Persistent client for Edge Agent Bridge with connection pooling and session pinning."""
+    """Persistent client for Agent Browser Bridge with connection pooling and session pinning."""
 
     def __init__(
         self,
@@ -435,7 +435,7 @@ class Edge:
             data["match"] = "unknown"
             if not self._degraded_warned:
                 self._degraded_warned = True
-                print("edge-bridge: extension predates verified writes (no readback); continuing unverified",
+                print("agent-bridge: extension predates verified writes (no readback); continuing unverified",
                       file=sys.stderr)
                 data["notice"] = "extension predates verified writes; match unknown"
             return data

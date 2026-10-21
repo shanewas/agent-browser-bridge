@@ -63,7 +63,7 @@ def test_mcp_initialize(mcp_proc):
     assert resp["id"] == 1
     assert resp["result"]["protocolVersion"] == "2025-11-25"
     assert resp["result"]["capabilities"]["tools"] == {}
-    assert resp["result"]["serverInfo"]["name"] == "edge-agent-bridge"
+    assert resp["result"]["serverInfo"]["name"] == "agent-browser-bridge"
 
 
 def test_mcp_notifications_and_ping(mcp_proc):
@@ -252,7 +252,7 @@ def test_request_id_zero_gets_a_response(mcp_proc):
     resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 0, "method": "initialize",
                                "params": {"protocolVersion": "2025-11-25"}})
     assert resp is not None and resp["id"] == 0
-    assert resp["result"]["serverInfo"]["name"] == "edge-agent-bridge"
+    assert resp["result"]["serverInfo"]["name"] == "agent-browser-bridge"
 
 
 def test_tools_list_matches_the_router(mcp_proc):

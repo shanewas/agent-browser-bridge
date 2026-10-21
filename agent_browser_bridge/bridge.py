@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Edge Agent Bridge daemon.
+Agent Browser Bridge daemon.
 Runs locally on 127.0.0.1:18999 (or configured port).
 Bridges commands between local agents and the Microsoft Edge extension over WebSocket.
 """
@@ -771,7 +771,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     live = False
         if not live:
             return ({"success": False, "code": "extension_offline",
-                     "error": "Edge extension is not connected. Open Edge and check the Edge Agent Bridge popup shows Connected."}, 504)
+                     "error": "Edge extension is not connected. Open Edge and check the Agent Browser Bridge popup shows Connected."}, 504)
         rem = max(0.01, deadline - time.time())
         finished = event.wait(timeout=rem)
         with state.lock:
@@ -947,7 +947,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     import atexit
     atexit.register(lambda: pid_file.unlink(missing_ok=True))
-    logger.info("Starting Edge Agent Bridge daemon v%s on %s:%d (pid %d)", state.daemon_version, host, port, os.getpid())
+    logger.info("Starting Agent Browser Bridge daemon v%s on %s:%d (pid %d)", state.daemon_version, host, port, os.getpid())
 
     try:
         server.serve_forever()
@@ -971,7 +971,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Edge Agent Bridge daemon")
+    parser = argparse.ArgumentParser(description="Agent Browser Bridge daemon")
     parser.add_argument("--port", type=int, default=None, help="Port to listen on")
     parser.add_argument("--require-pairing", action="store_true", help="Require pairing token")
     parser.add_argument("--no-pairing", action="store_true", help="Disable pairing token")

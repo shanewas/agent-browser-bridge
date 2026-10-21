@@ -1,4 +1,4 @@
-"""Model Context Protocol (MCP) server for Edge Agent Bridge.
+"""Model Context Protocol (MCP) server for Agent Browser Bridge.
 
 Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser automation tools.
 """
@@ -463,7 +463,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             "result": {
                 "protocolVersion": proto_ver,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "edge-agent-bridge", "version": __version__},
+                "serverInfo": {"name": "agent-browser-bridge", "version": __version__},
             },
         }
 
@@ -724,7 +724,7 @@ def serve(stdin=None, stdout=None) -> None:
     if mint.get("success") and mint.get("sessionToken"):
         edge.session_token = mint["sessionToken"]
     else:
-        print(f"edge-bridge-mcp: no daemon session ({mint.get('code')}); running tokenless",
+        print(f"agent-bridge-mcp: no daemon session ({mint.get('code')}); running tokenless",
               file=sys.stderr)
 
     try:

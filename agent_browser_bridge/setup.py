@@ -1,4 +1,4 @@
-"""Setup and configuration helpers for registering Edge Agent Bridge with agent clients.
+"""Setup and configuration helpers for registering Agent Browser Bridge with agent clients.
 
 Detects local agent clients (Claude Code, Gemini, Codex, Cursor, Windsurf, VS Code),
 manages mcpServers JSON configuration with automatic backups, and runs CLI registration.
@@ -193,7 +193,7 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
 
 
 def mcp_config_cli(client: str) -> int:
-    """CLI handler for `edge-bridge mcp-config --client <name>`."""
+    """CLI handler for `agent-bridge mcp-config --client <name>`."""
     print(get_mcp_config(client))
     return 0
 
@@ -203,7 +203,7 @@ HKCU_PATH_LIMIT = 2047
 
 
 def fix_path(yes: bool = False) -> int:
-    """CLI handler for `edge-bridge setup --fix-path`."""
+    """CLI handler for `agent-bridge setup --fix-path`."""
     if sys.platform != "win32":
         print("setup --fix-path is only supported on Windows")
         return 3
@@ -261,8 +261,8 @@ def fix_path(yes: bool = False) -> int:
 
 
 def setup_cli(yes: bool = False) -> int:
-    """CLI handler for `edge-bridge setup`."""
-    print("Edge Agent Bridge Setup — Client Auto-Detection")
+    """CLI handler for `agent-bridge setup`."""
+    print("Agent Browser Bridge Setup — Client Auto-Detection")
     detected = detect_clients()
 
     targets_cli = []
@@ -279,7 +279,7 @@ def setup_cli(yes: bool = False) -> int:
         print("\nNo supported agent clients detected automatically.")
         print("To configure manually, run:")
         for client in ("claude", "cursor", "windsurf", "gemini", "codex", "vscode"):
-            print(f"\n  edge-bridge mcp-config --client {client}")
+            print(f"\n  agent-bridge mcp-config --client {client}")
         return 0
 
     print("\nDetected clients:")
@@ -290,7 +290,7 @@ def setup_cli(yes: bool = False) -> int:
 
     if not yes:
         try:
-            resp = input("\nConfigure detected clients with Edge Agent Bridge MCP server? [y/N]: ").strip().lower()
+            resp = input("\nConfigure detected clients with Agent Browser Bridge MCP server? [y/N]: ").strip().lower()
             if resp not in ("y", "yes"):
                 print("Aborted.")
                 return 0
@@ -317,5 +317,5 @@ def setup_cli(yes: bool = False) -> int:
         else:
             print(f"  Error: {msg}")
 
-    print("\nSetup complete! You can verify daemon status with: edge-bridge status")
+    print("\nSetup complete! You can verify daemon status with: agent-bridge status")
     return 0

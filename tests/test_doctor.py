@@ -1,4 +1,4 @@
-"""Tests for edge-bridge doctor, logs, and MCP registration status."""
+"""Tests for agent-bridge doctor, logs, and MCP registration status."""
 import json
 import os
 import shutil
@@ -13,7 +13,7 @@ from tests.support import run_cli
 
 def _stub_env(tmp_path, daemon):
     """Staged PATH: tmp stub launcher first, scripts dir present, ambient kept."""
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir(exist_ok=True)
     stub = stub_dir / launcher_name
@@ -125,7 +125,7 @@ def test_doctor_daemon_down(tmp_path):
     assert body["success"] is False
     by_name = {c["name"]: c for c in body["checks"]}
     assert by_name["daemon"]["ok"] is False
-    assert "edge-bridge daemon start" in by_name["daemon"]["fix"]
+    assert "agent-bridge daemon start" in by_name["daemon"]["fix"]
     assert by_name["token"]["ok"] is False
     code, out, err = run_cli(["doctor"], env=env)
     assert code == 1 and "[FAIL] daemon:" in out
@@ -142,7 +142,7 @@ def test_doctor_stale_pid(tmp_path):
     by_name = {c["name"]: c for c in json.loads(out)["checks"]}
     assert by_name["pid"]["ok"] is False
     assert "stale pid file" in by_name["pid"]["detail"]
-    assert "edge-bridge daemon restart" in by_name["pid"]["fix"]
+    assert "agent-bridge daemon restart" in by_name["pid"]["fix"]
 
 
 def test_doctor_outdated_extension(daemon):
@@ -239,13 +239,13 @@ def test_doctor_mcp_check_fails_on_stale_registration(monkeypatch, tmp_path, cap
     assert rc == 1
     assert by_name["mcp"]["ok"] is False
     assert "cursor=stale" in by_name["mcp"]["detail"]
-    assert "run edge-bridge setup to re-register" in by_name["mcp"]["fix"]
+    assert "run agent-bridge setup to re-register" in by_name["mcp"]["fix"]
 
 
 
 def test_doctor_launcher_stale_install(tmp_path):
     scripts = sysconfig.get_path("scripts")
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     if os.path.exists(os.path.join(scripts, launcher_name)):
         pytest.skip("launcher installed in scripts dir; stale state unstaging")
     port = free_port()
@@ -258,14 +258,14 @@ def test_doctor_launcher_stale_install(tmp_path):
     by_name = {c["name"]: c for c in json.loads(out)["checks"]}
     assert by_name["launcher"]["ok"] is False
     assert "stale install" in by_name["launcher"]["detail"]
-    assert by_name["launcher"]["fix"] == "py -m pip install --force-reinstall edge-agent-bridge"
+    assert by_name["launcher"]["fix"] == "py -m pip install --force-reinstall agent-browser-bridge"
     assert by_name["path"]["ok"] is True
 
 
 def test_doctor_path_red_when_scripts_dir_off_path(tmp_path):
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir()
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     stub = stub_dir / launcher_name
     stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     stub.chmod(0o755)
@@ -280,7 +280,7 @@ def test_doctor_path_red_when_scripts_dir_off_path(tmp_path):
     assert by_name["launcher"]["ok"] is True
     assert by_name["path"]["ok"] is False
     assert sysconfig.get_path("scripts") in by_name["path"]["detail"]
-    assert by_name["path"]["fix"] == "edge-bridge setup --fix-path"
+    assert by_name["path"]["fix"] == "agent-bridge setup --fix-path"
 
 
 def test_doctor_path_green_with_trailing_separator(tmp_path):
@@ -337,7 +337,7 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
         code, out, err = run_cli(["--json", "doctor"], env=env)
         checks = {c["name"]: c for c in json.loads(out)["checks"]}
         assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
-        assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+        assert "agent-bridge daemon restart" in checks["versions"]["fix"]
 
         ext = FakeExtension(port, version="2.5.0", handler=_tabs_handler).connect().run()
         try:
@@ -345,14 +345,14 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
             code, out, err = run_cli(["status"], env=env)
             assert code == 0
             assert f"CLI {__version__}, daemon 2.4.0, extension 2.5.0" in out
-            assert "edge-bridge daemon restart" in out
+            assert "agent-bridge daemon restart" in out
 
             code, out, err = run_cli(["--json", "doctor"], env=env)
             assert code == 1
             checks = {c["name"]: c for c in json.loads(out)["checks"]}
             assert checks["versions"]["ok"] is False
             assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
-            assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+            assert "agent-bridge daemon restart" in checks["versions"]["fix"]
         finally:
             ext.close()
     finally:
@@ -360,7 +360,7 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
 
 
 def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
-    ext = FakeExtension(daemon.port, version="2.9.9", handler=_tabs_handler).connect().run()
+    ext = FakeExtension(daemon.port, version="3.9.9", handler=_tabs_handler).connect().run()
     time.sleep(0.3)
     env = _stub_env(tmp_path, daemon)
     code, out, err = run_cli(["--json", "doctor"], env=env)

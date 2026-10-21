@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "edge-agent-bridge"
+name = "agent-browser-bridge"
 dynamic = ["version"]
-description = "Let AI agents drive your open Microsoft Edge tabs by element reference, over MCP, a CLI, or Python."
+description = "Let AI agents drive the browser tabs you already have open, by element reference, over MCP, a CLI, or Python."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -15,7 +15,7 @@ maintainers = [
     { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
 requires-python = ">=3.10"
-keywords = ["edge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time", "mcp"]
+keywords = ["edge", "chrome", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time", "mcp"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -33,15 +33,16 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/shanewas/edge-agent-bridge"
-Repository = "https://github.com/shanewas/edge-agent-bridge"
-Issues = "https://github.com/shanewas/edge-agent-bridge/issues"
+Homepage = "https://github.com/shanewas/agent-browser-bridge"
+Repository = "https://github.com/shanewas/agent-browser-bridge"
+Issues = "https://github.com/shanewas/agent-browser-bridge/issues"
 Funding = "https://github.com/sponsors/shanewas"
 "Microsoft Edge Add-on" = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
+"Chrome Web Store" = "https://chromewebstore.google.com/detail/lknjdleggnheadkkjfngphdbcglalmmg"
+"Renamed from" = "https://pypi.org/project/edge-agent-bridge/"
 
 [project.scripts]
-edge-bridge = "agent_browser_bridge.cli:main"
-edge = "agent_browser_bridge.cli:main"
+agent-bridge = "agent_browser_bridge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Edge Agent Bridge CLI.
+Agent Browser Bridge CLI.
 Allows the agent or user to drive Microsoft Edge directly via command line.
 """
 import argparse
@@ -90,11 +90,11 @@ def _handle_daemon_cmd(args, port: int) -> int:
             if st.get("bridge_running") and "pid" not in st:
                 # An answer proves a bridge runs on the port, not that bridge.pid names it.
                 print(f"The daemon on 127.0.0.1:{port} predates pid reporting, so PID {pid} cannot be confirmed. "
-                      "Run: edge-bridge daemon stop --force", file=sys.stderr)
+                      "Run: agent-bridge daemon stop --force", file=sys.stderr)
                 return 1
             if not st.get("bridge_running") and _pid_alive(pid) and _port_listening(port):
                 print(f"PID {pid} is alive and 127.0.0.1:{port} accepts connections but does not answer /status. "
-                      "If that is a hung daemon, run: edge-bridge daemon stop --force", file=sys.stderr)
+                      "If that is a hung daemon, run: agent-bridge daemon stop --force", file=sys.stderr)
                 return 1
             if st.get("pid") != pid:
                 pid_p.unlink(missing_ok=True)
@@ -181,7 +181,7 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
     up = bool(st.get("bridge_running"))
     add("daemon", up,
         f"reachable on 127.0.0.1:{port}" if up else "not running",
-        "" if up else "edge-bridge daemon start")
+        "" if up else "agent-bridge daemon start")
 
     tok_p = config.token_path()
     if tok_p.exists():
@@ -191,10 +191,10 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
             mode = oct(os.stat(tok_p).st_mode & 0o777)
             ok = mode == "0o600"
             add("token", ok, f"{tok_p} mode {mode}",
-                "" if ok else f"delete {tok_p} and run: edge-bridge daemon start")
+                "" if ok else f"delete {tok_p} and run: agent-bridge daemon start")
     else:
         add("token", False, f"missing at {tok_p}",
-            "edge-bridge daemon start (creates it on first start)")
+            "agent-bridge daemon start (creates it on first start)")
 
     if up:
         connected = bool(st.get("websocket_active"))
@@ -207,7 +207,7 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
         if dae_v is not None and dae_v != __version__:
             add("versions", False, f"CLI {__version__} differs from daemon {dae_v}",
-                "edge-bridge daemon restart")
+                "agent-bridge daemon restart")
         elif ext_v is None:
             add("versions", False, "extension version unknown",
                 "open Edge and check the popup shows Connected")
@@ -249,32 +249,32 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
             add("pairing", True, "not required", "")
     else:
         for name in ("extension", "versions", "tabs", "file-access", "pairing"):
-            add(name, False, "skipped: daemon not running", "edge-bridge daemon start")
+            add(name, False, "skipped: daemon not running", "agent-bridge daemon start")
 
     pid_p = config.pid_path()
     if pid_p.exists() and not up:
-        add("pid", False, f"stale pid file at {pid_p}", "edge-bridge daemon restart")
+        add("pid", False, f"stale pid file at {pid_p}", "agent-bridge daemon restart")
     else:
         add("pid", True, "no stale pid file" if up else "no pid file", "")
 
     scripts_dir = sysconfig.get_path("scripts")
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     found = shutil.which(launcher_name)
     if found:
         add("launcher", True, f"resolved at {found}", "")
     elif (Path(scripts_dir) / launcher_name).exists():
         add("launcher", False, f"present at {scripts_dir} but that dir is not on PATH",
-            "edge-bridge setup --fix-path")
+            "agent-bridge setup --fix-path")
     else:
         add("launcher", False, f"missing from {scripts_dir} (stale install?)",
-            "py -m pip install --force-reinstall edge-agent-bridge")
+            "py -m pip install --force-reinstall agent-browser-bridge")
 
     # normpath drops the trailing separator the python.org installer writes into PATH.
     path_entries = [os.path.normcase(os.path.normpath(e)) for e in os.environ.get("PATH", "").split(os.pathsep) if e]
     if os.path.normcase(os.path.normpath(scripts_dir)) in path_entries:
         add("path", True, f"{scripts_dir} on PATH", "")
     else:
-        add("path", False, f"{scripts_dir} not on PATH", "edge-bridge setup --fix-path")
+        add("path", False, f"{scripts_dir} not on PATH", "agent-bridge setup --fix-path")
 
     if sys.platform != "win32":
         add("elevation", True, "not applicable", "")
@@ -291,7 +291,7 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         detail = ", ".join(f"{k}={v}" for k, v in sorted(reg.items()))
         has_stale = any(v == "stale" for v in reg.values())
         if has_stale:
-            add("mcp", False, detail or "no clients found", "run edge-bridge setup to re-register")
+            add("mcp", False, detail or "no clients found", "run agent-bridge setup to re-register")
         else:
             add("mcp", True, detail or "no clients found", "")
     except Exception as e:
@@ -314,7 +314,7 @@ def _handle_logs(args, opt_json: bool) -> int:
     p = config.log_path()
     if not p.exists():
         err = {"success": False, "code": "no_log",
-               "error": "No log file yet; the daemon has never started here. Run: edge-bridge daemon start"}
+               "error": "No log file yet; the daemon has never started here. Run: agent-bridge daemon start"}
         if opt_json:
             print(json.dumps(err))
         else:
@@ -389,7 +389,7 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool, opt_tab=None) -> 
             if args.stop_on_error:
                 break
     if opt_session and edge.session_token != opt_session:
-        print(f"edge-bridge: session expired; re-minted sessionToken={edge.session_token} "
+        print(f"agent-bridge: session expired; re-minted sessionToken={edge.session_token} "
               f"(export EDGE_BRIDGE_SESSION={edge.session_token})", file=sys.stderr)
     return worst
 
@@ -498,9 +498,9 @@ def main(argv=None) -> int:
     common.add_argument("--no-fallback", action="store_true", default=argparse.SUPPRESS, help="Disable ref→text→scan→coords fallback ladder")
 
     parser = argparse.ArgumentParser(
-        prog="edge-bridge",
+        prog="agent-bridge",
         parents=[common],
-        description="Edge Agent Bridge CLI for driving Microsoft Edge.",
+        description="Agent Browser Bridge CLI for driving the browser you already have open.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -819,7 +819,7 @@ def main(argv=None) -> int:
                 ext_v = res.get("extension_version") or "none"
                 print(f"CLI {__version__}, daemon {dae_v}, extension {ext_v}")
                 if dae_v != __version__:
-                    print("Fix: edge-bridge daemon restart")
+                    print("Fix: agent-bridge daemon restart")
                 elif ext_v != "none" and parse_version(ext_v) < parse_version(dae_v):
                     print(f"Fix: update extension from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
                 print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
@@ -835,7 +835,7 @@ def main(argv=None) -> int:
                         else:
                             print(f"Session {sst.get('name', '?')}: pinned to tab {sst.get('tabId')}")
                     else:
-                        print("Session: expired; mint a new one with: edge-bridge session start")
+                        print("Session: expired; mint a new one with: agent-bridge session start")
             else:
                 err_code = res.get("code", "error")
                 err_msg = res.get("error", "Action failed")
@@ -1048,7 +1048,7 @@ def main(argv=None) -> int:
     else:
         res = edge.send(action, params)
     if opt_session and edge.session_token != opt_session:
-        print(f"edge-bridge: session expired; re-minted sessionToken={edge.session_token} "
+        print(f"agent-bridge: session expired; re-minted sessionToken={edge.session_token} "
               f"(export EDGE_BRIDGE_SESSION={edge.session_token})", file=sys.stderr)
 
     # If screenshot with path, save file
