@@ -1,11 +1,11 @@
-"""Tests for edge_agent_bridge.doppelhand against a fake HTTP server."""
+"""Tests for agent_browser_bridge.doppelhand against a fake HTTP server."""
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from edge_agent_bridge.doppelhand import Doppelhand
+from agent_browser_bridge.doppelhand import Doppelhand
 
 
 class Handler(BaseHTTPRequestHandler):

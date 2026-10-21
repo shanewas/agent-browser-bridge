@@ -7,9 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from edge_agent_bridge import __version__  # noqa: E402
+from agent_browser_bridge import __version__  # noqa: E402
 
-EXT = ROOT / "edge_agent_bridge" / "extension"
+EXT = ROOT / "agent_browser_bridge" / "extension"
 MANIFEST = EXT / "manifest.json"
 
 # Chrome rejects a manifest description over 132 characters, and "Edge" in a Chrome Web Store

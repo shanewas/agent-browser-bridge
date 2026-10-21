@@ -5,8 +5,8 @@
 - `git config user.email` must print shanewasahmed@gmail.com before any commit.
 
 ## Layout
-- One source tree: `edge_agent_bridge/` (daemon, clients, `extension/`). There are no root copies to mirror.
-- Version lives in `edge_agent_bridge/__init__.py` only. `pyproject.toml` reads it; `scripts/build_extension.py` writes it into `manifest.json` and zips the extension.
+- One source tree: `agent_browser_bridge/` (daemon, clients, `extension/`). There are no root copies to mirror.
+- Version lives in `agent_browser_bridge/__init__.py` only. `pyproject.toml` reads it; `scripts/build_extension.py` writes it into `manifest.json` and zips the extension.
 - Design: `docs/superpowers/specs/2026-09-07-v2-design.md`. Plan: `docs/superpowers/plans/2026-09-07-v2-implementation.md`.
 
 ## Rules

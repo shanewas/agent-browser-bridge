@@ -1,4 +1,4 @@
-"""Tests for edge_agent_bridge.cli."""
+"""Tests for agent_browser_bridge.cli."""
 import io
 import json
 import socket
@@ -7,8 +7,8 @@ import sys
 import time
 from pathlib import Path
 import pytest
-from edge_agent_bridge import cli, client, config
-from edge_agent_bridge.client import Edge
+from agent_browser_bridge import cli, client, config
+from agent_browser_bridge.client import Edge
 from tests.fake_extension import FakeExtension
 from tests.support import free_port, run_cli
 
@@ -428,7 +428,7 @@ def test_cli_stdin_read_as_utf8_bytes(daemon):
     root = _P(__file__).resolve().parents[1]
 
     def run_bytes(args, payload):
-        r = _sp.run([_sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args,
+        r = _sp.run([_sys.executable, "-u", "-m", "agent_browser_bridge.cli"] + args,
                     cwd=root, env=env, input=payload, capture_output=True)
         return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
 

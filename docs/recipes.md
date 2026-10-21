@@ -30,7 +30,7 @@ cat probe.js | edge-bridge eval --file - --tab 1361124478
 When no DOM input exists at all (custom dropzone with no `<input type=file>`):
 
 ```python
-from edge_agent_bridge import Edge, Doppelhand
+from agent_browser_bridge import Edge, Doppelhand
 edge = Edge(tab_id=1361124478)
 edge.click("Upload resume")          # trusted click opens the OS dialog
 dh = Doppelhand(token="...")         # or DOPPELHAND_TOKEN env

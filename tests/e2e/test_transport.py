@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from edge_agent_bridge import config
+from agent_browser_bridge import config
 
 pytestmark = pytest.mark.e2e
 

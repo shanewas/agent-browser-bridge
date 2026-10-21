@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from edge_agent_bridge.client import Edge
+from agent_browser_bridge.client import Edge
 
 pytestmark = pytest.mark.e2e
 ROOT = Path(__file__).resolve().parents[2]
@@ -176,7 +176,7 @@ def test_scroll_deltas_with_target_scroll_the_element(client, pages):
 
 def test_scroll_fallback_scrolls_the_element_under_the_point(client, pages):
     # The no-debugger path can't be forced here, so run page.js's pageScroll in the page itself.
-    src = (ROOT / "edge_agent_bridge" / "extension" / "page.js").read_text(encoding="utf-8")
+    src = (ROOT / "agent_browser_bridge" / "extension" / "page.js").read_text(encoding="utf-8")
     fn = re.search(r"export function pageScroll\(.*?\n}\n", src, re.S).group(0).replace("export ", "")
     assert client("nav", {"url": pages + "/scroll.html"})["success"]
     code = ("(() => {" + fn + "const b = document.getElementById('box').getBoundingClientRect();"

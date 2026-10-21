@@ -32,11 +32,11 @@ Python 3.10 or newer, with no third-party packages at install time or runtime.
 When `edge-bridge` isn't recognized after install (Python's `Scripts` folder isn't on your PATH), run commands with `py -m`:
 
 ```powershell
-py -m edge_agent_bridge daemon start
-py -m edge_agent_bridge setup
+py -m agent_browser_bridge daemon start
+py -m agent_browser_bridge setup
 ```
 
-To add `Scripts` to your user PATH automatically, run `py -m edge_agent_bridge setup --fix-path` and reopen your terminal. If you're using `pipx`, run `pipx ensurepath`. To check launcher and environment health, run `py -m edge_agent_bridge doctor`.
+To add `Scripts` to your user PATH automatically, run `py -m agent_browser_bridge setup --fix-path` and reopen your terminal. If you're using `pipx`, run `pipx ensurepath`. To check launcher and environment health, run `py -m agent_browser_bridge doctor`.
 
 Then install the companion extension directly from the
 **[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Edge Agent Bridge**) or the **[Chrome Web Store](https://chromewebstore.google.com/detail/edge-agent-bridge/lknjdleggnheadkkjfngphdbcglalmmg?authuser=1&hl=en)**, or load the extension from the local folder while developing:
@@ -119,7 +119,7 @@ iframe a ref carries its frame, as in `f31e1`, including cross-origin frames.
 ## Python
 
 ```python
-from edge_agent_bridge import Edge
+from agent_browser_bridge import Edge
 
 with Edge() as browser:
     snap = browser.snapshot()

@@ -28,7 +28,7 @@ def _stub_env(tmp_path, daemon):
 
 def _doctor_json_in_process(monkeypatch, tmp_path, capsys):
     """Run _handle_doctor in-process (daemon down) for monkeypatched checks."""
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(home))
@@ -186,7 +186,7 @@ def test_logs_missing(tmp_path):
 
 
 def test_registration_status_reads_json_configs(tmp_path):
-    from edge_agent_bridge.setup import registration_status
+    from agent_browser_bridge.setup import registration_status
     cursor_cfg = tmp_path / "cursor-mcp.json"
     cursor_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": "edge-bridge", "args": ["mcp"]}}}),
                           encoding="utf-8")
@@ -206,12 +206,12 @@ def test_registration_status_reads_json_configs(tmp_path):
 
 
 def test_registration_status_new_entry_and_stale_interpreter(tmp_path):
-    from edge_agent_bridge.setup import registration_status
+    from agent_browser_bridge.setup import registration_status
     good_cfg = tmp_path / "cursor-mcp.json"
-    good_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+    good_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}}}),
                         encoding="utf-8")
     stale_cfg = tmp_path / "windsurf-mcp.json"
-    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_python"), "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_python"), "args": ["-m", "agent_browser_bridge", "mcp"]}}}),
                          encoding="utf-8")
     detected = {
         "cli": {},
@@ -224,16 +224,16 @@ def test_registration_status_new_entry_and_stale_interpreter(tmp_path):
 
 
 def test_doctor_mcp_check_fails_on_stale_registration(monkeypatch, tmp_path, capsys):
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     stale_cfg = tmp_path / "cursor-mcp.json"
-    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_venv" / "python"), "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_venv" / "python"), "args": ["-m", "agent_browser_bridge", "mcp"]}}}),
                          encoding="utf-8")
     detected = {
         "cli": {},
         "json": {"cursor": {"path": stale_cfg, "found": True}},
     }
-    monkeypatch.setattr("edge_agent_bridge.setup.registration_status", lambda: {"cursor": "stale"})
-    monkeypatch.setattr("edge_agent_bridge.cli._is_elevated", lambda: False)
+    monkeypatch.setattr("agent_browser_bridge.setup.registration_status", lambda: {"cursor": "stale"})
+    monkeypatch.setattr("agent_browser_bridge.cli._is_elevated", lambda: False)
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert rc == 1
@@ -296,7 +296,7 @@ def test_doctor_path_green_with_trailing_separator(tmp_path):
 
 
 def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_is_elevated", lambda: True)
@@ -309,7 +309,7 @@ def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
 
 
 def test_doctor_elevation_green_when_unelevated(monkeypatch, tmp_path, capsys):
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_is_elevated", lambda: False)
@@ -327,7 +327,7 @@ def test_doctor_elevation_not_applicable_off_windows(monkeypatch, tmp_path, caps
 
 def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
     from tests.support import DaemonHandle
-    from edge_agent_bridge import __version__
+    from agent_browser_bridge import __version__
     port = free_port()
     daemon = DaemonHandle(port, tmp_path).start(extra_env={"EDGE_BRIDGE_TEST_DAEMON_VERSION": "2.4.0"})
     try:

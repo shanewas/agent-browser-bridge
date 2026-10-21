@@ -38,7 +38,7 @@ jobs:
 
       - id: version
         run: |
-          v=$(python -c "import edge_agent_bridge; print(edge_agent_bridge.__version__)")
+          v=$(python -c "import agent_browser_bridge; print(agent_browser_bridge.__version__)")
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "version $v"
 
@@ -63,7 +63,7 @@ jobs:
             echo "changed=$FORCED" >> "$GITHUB_OUTPUT"
           elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- ':(exclude)edge_agent_bridge/extension/manifest.json' edge_agent_bridge/extension; then
+          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- ':(exclude)agent_browser_bridge/extension/manifest.json' agent_browser_bridge/extension; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -150,7 +150,7 @@ jobs:
           VERSION: ${{ needs.gate.outputs.version }}
         run: |
           gh release create "v$VERSION" \
-            dist/edge_agent_bridge-$VERSION*.whl \
-            dist/edge_agent_bridge-$VERSION*.tar.gz \
+            dist/agent_browser_bridge-$VERSION*.whl \
+            dist/agent_browser_bridge-$VERSION*.tar.gz \
             dist/edge-agent-bridge-extension-$VERSION.zip \
             --title "v$VERSION" --generate-notes

@@ -1,34 +1,34 @@
-"""Tests for edge_agent_bridge.setup."""
+"""Tests for agent_browser_bridge.setup."""
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
 import pytest
-from edge_agent_bridge import setup
+from agent_browser_bridge import setup
 
 def test_mcp_config_snippets():
     cursor_snip = setup.get_mcp_config("cursor")
     data = json.loads(cursor_snip)
     assert "edge" in data["mcpServers"]
     assert data["mcpServers"]["edge"]["command"] == sys.executable
-    assert data["mcpServers"]["edge"]["args"] == ["-m", "edge_agent_bridge", "mcp"]
+    assert data["mcpServers"]["edge"]["args"] == ["-m", "agent_browser_bridge", "mcp"]
 
     claude_snip = setup.get_mcp_config("claude")
-    assert claude_snip == f"claude mcp add --scope user edge -- {sys.executable} -m edge_agent_bridge mcp"
+    assert claude_snip == f"claude mcp add --scope user edge -- {sys.executable} -m agent_browser_bridge mcp"
 
     gemini_snip = setup.get_mcp_config("gemini")
-    assert gemini_snip == f"gemini mcp add --scope user edge {sys.executable} -m edge_agent_bridge mcp"
+    assert gemini_snip == f"gemini mcp add --scope user edge {sys.executable} -m agent_browser_bridge mcp"
 
     codex_snip = setup.get_mcp_config("codex")
-    assert codex_snip == f"codex mcp add edge -- {sys.executable} -m edge_agent_bridge mcp"
+    assert codex_snip == f"codex mcp add edge -- {sys.executable} -m agent_browser_bridge mcp"
 
 
 def test_vscode_uses_the_servers_key():
     # VS Code reads mcp.json under "servers"; writing "mcpServers" there registers nothing.
     data = json.loads(setup.get_mcp_config("vscode"))
     assert list(data) == ["servers"]
-    assert data["servers"]["edge"] == {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}
+    assert data["servers"]["edge"] == {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}
 
 
 def test_merge_into_vscode_keeps_its_own_key(tmp_path):
@@ -37,7 +37,7 @@ def test_merge_into_vscode_keeps_its_own_key(tmp_path):
     ok, _ = setup.merge_json_config(target, "vscode")
     assert ok
     data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["servers"]["edge"] == {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}
+    assert data["servers"]["edge"] == {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}
     assert data["servers"]["other"] == {"command": "x"}
     assert data["inputs"] == []
     assert "mcpServers" not in data
@@ -68,7 +68,7 @@ def test_merge_json_config_existing_and_backup(tmp_path):
     updated = json.loads(target.read_text(encoding="utf-8"))
     assert updated["theme"] == "dark"
     assert updated["mcpServers"]["existing"] == {"command": "other"}
-    assert updated["mcpServers"]["edge"] == {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}
+    assert updated["mcpServers"]["edge"] == {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}
 
 
 def test_merge_json_config_unparsable_left_untouched(tmp_path):
@@ -249,6 +249,6 @@ def test_setup_cli_runs_detected_path_and_user_scope(monkeypatch):
     rc = setup.setup_cli(yes=True)
     assert rc == 0
     assert len(executed) == 2
-    assert executed[0] == [claude_bin, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
-    assert executed[1] == [gemini_cmd, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+    assert executed[0] == [claude_bin, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"]
+    assert executed[1] == [gemini_cmd, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "agent_browser_bridge", "mcp"]
 

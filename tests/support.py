@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from edge_agent_bridge import config  # noqa: E402
-from edge_agent_bridge.client import Edge  # noqa: E402
+from agent_browser_bridge import config  # noqa: E402
+from agent_browser_bridge.client import Edge  # noqa: E402
 
 
 def edge_binary():
@@ -90,7 +90,7 @@ class DaemonHandle:
         if extra_env:
             env.update(extra_env)
         self.proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "edge_agent_bridge.bridge", "--port", str(self.port)],
+            [sys.executable, "-u", "-m", "agent_browser_bridge.bridge", "--port", str(self.port)],
             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         deadline = time.time() + 30
         while time.time() < deadline:
@@ -125,7 +125,7 @@ def run_cli(args, env=None, input_text=None):
     e = dict(os.environ)
     if env:
         e.update(env)
-    cmd = [sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args
+    cmd = [sys.executable, "-u", "-m", "agent_browser_bridge.cli"] + args
     res = subprocess.run(cmd, cwd=ROOT, env=e, capture_output=True, text=True,
                          input=input_text)
     return res.returncode, res.stdout.strip(), res.stderr.strip()

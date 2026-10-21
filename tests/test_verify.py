@@ -1,6 +1,6 @@
 import time
 
-from edge_agent_bridge.client import Edge
+from agent_browser_bridge.client import Edge
 from tests.fake_extension import FakeExtension
 from tests.test_ladder import ScriptedEdge
 
@@ -68,7 +68,7 @@ def test_click_ignores_missing_readback(capsys):
 
 def test_unknown_session_remints_once_and_retries(daemon, fake_ext, monkeypatch):
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
-    from edge_agent_bridge.client import Edge
+    from agent_browser_bridge.client import Edge
     edge = Edge(port=daemon.port, auto_start=False, session_token="stale-token")
     data = edge.send("ping")
     assert data["success"] is True

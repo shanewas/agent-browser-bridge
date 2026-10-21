@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-EXT = ROOT / "edge_agent_bridge" / "extension"
+EXT = ROOT / "agent_browser_bridge" / "extension"
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def test_build_syncs_manifest_and_zips(tmp_path, ext_copy):
 
     out = run_build("--ext", str(ext_copy), "--dist", str(tmp_path / "dist"))
     assert out.returncode == 0, out.stderr
-    from edge_agent_bridge import __version__
+    from agent_browser_bridge import __version__
     assert json.loads(manifest.read_text(encoding="utf-8"))["version"] == __version__
     z = tmp_path / "dist" / f"edge-agent-bridge-extension-{__version__}.zip"
     assert z.exists()
@@ -55,7 +55,7 @@ def test_repo_manifest_in_sync():
 
 
 def test_store_flag_sets_name_and_keeps_fields_within_limits(tmp_path, ext_copy):
-    from edge_agent_bridge import __version__
+    from agent_browser_bridge import __version__
     import sys as _sys
     _sys.path.insert(0, str(ROOT / "scripts"))
     import build_extension as be
@@ -108,7 +108,7 @@ def test_onboarding_page_and_install_hook_wired():
 
     html = html_path.read_text(encoding="utf-8")
     assert "onboarding.js" in html
-    assert "py -m edge_agent_bridge" in html
+    assert "py -m agent_browser_bridge" in html
 
     js = js_path.read_text(encoding="utf-8")
     assert "18999/status" in js

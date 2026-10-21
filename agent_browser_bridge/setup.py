@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 def _server_entry() -> dict:
-    return {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}
+    return {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}
 
 
 SERVER_ENTRY = _server_entry()
@@ -25,19 +25,19 @@ SERVER_KEY = {"cursor": "mcpServers", "windsurf": "mcpServers", "vscode": "serve
 def get_cli_command(client: str, binary_path: str | None = None) -> list[str]:
     base = binary_path or client
     if client == "claude":
-        return [base, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+        return [base, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"]
     if client == "gemini":
-        return [base, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+        return [base, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "agent_browser_bridge", "mcp"]
     if client == "codex":
-        return [base, "mcp", "add", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+        return [base, "mcp", "add", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"]
     return [base]
 
 
 # argv rather than a shell string: nothing here reaches a shell interpreter.
 CLI_COMMAND = {
-    "claude": ["claude", "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"],
-    "gemini": ["gemini", "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"],
-    "codex": ["codex", "mcp", "add", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"],
+    "claude": ["claude", "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"],
+    "gemini": ["gemini", "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "agent_browser_bridge", "mcp"],
+    "codex": ["codex", "mcp", "add", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"],
 }
 
 
@@ -171,7 +171,7 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
             args = entry.get("args") or []
             if cmd == "edge-bridge":
                 is_edge = True
-            elif isinstance(args, list) and len(args) >= 3 and args[:2] == ["-m", "edge_agent_bridge"] and args[2] == "mcp":
+            elif isinstance(args, list) and len(args) >= 3 and args[:2] == ["-m", "agent_browser_bridge"] and args[2] == "mcp":
                 is_edge = True
                 if cmd:
                     exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
