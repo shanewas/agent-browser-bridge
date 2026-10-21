@@ -26,6 +26,14 @@ def test_wait_selector_url_and_load(client, pages):
     assert r["success"], r
 
 
+def test_wait_text_matches_status_text_not_only_controls(client, pages):
+    assert client("nav", {"url": pages + "/slow.html"})["success"]
+    r = client("wait", {"text": "Done", "timeout": 8000})
+    assert r["success"] and r["found"] is True, r
+    r = client("wait", {"text": "no such words here", "timeout": 300})
+    assert r["success"] is False and r["code"] == "target_not_found" and r["waited"] >= 300, r
+
+
 def test_wait_missing_selector_reports_waited(client, pages):
     assert client("nav", {"url": pages + "/blank.html"})["success"]
     r = client("wait", {"selector": "#never", "timeout": 500})

@@ -318,6 +318,13 @@ export function pageScroll(x, y, cx, cy) {
   return { success: true, scrollX: window.scrollX, scrollY: window.scrollY };
 }
 
+// wait {text}: visible text anywhere in the document, not only an interactive target.
+// ponytail: body.innerText skips shadow roots; walk them if a wait on shadow text is needed.
+export function pageHasText(text) {
+  const hay = document.body ? document.body.innerText || "" : "";
+  return hay.includes(String(text)) ? { found: true, text: String(text) } : { found: false };
+}
+
 // Ref snapshot (spec 7.4). Needs window.__eabLib (page-lib.js); returns code "lib_missing"
 // so the worker injects the lib and retries.
 export async function pageSnapshot(opts) {

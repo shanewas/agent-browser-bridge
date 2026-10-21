@@ -269,12 +269,9 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("launcher", False, f"missing from {scripts_dir} (stale install?)",
             "py -m pip install --force-reinstall edge-agent-bridge")
 
-    path_entries = os.environ.get("PATH", "").split(os.pathsep)
-    if sys.platform == "win32":
-        on_path = os.path.normcase(scripts_dir) in [os.path.normcase(e) for e in path_entries]
-    else:
-        on_path = scripts_dir in path_entries
-    if on_path:
+    # normpath drops the trailing separator the python.org installer writes into PATH.
+    path_entries = [os.path.normcase(os.path.normpath(e)) for e in os.environ.get("PATH", "").split(os.pathsep) if e]
+    if os.path.normcase(os.path.normpath(scripts_dir)) in path_entries:
         add("path", True, f"{scripts_dir} on PATH", "")
     else:
         add("path", False, f"{scripts_dir} not on PATH", "edge-bridge setup --fix-path")

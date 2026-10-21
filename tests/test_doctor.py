@@ -283,6 +283,18 @@ def test_doctor_path_red_when_scripts_dir_off_path(tmp_path):
     assert by_name["path"]["fix"] == "edge-bridge setup --fix-path"
 
 
+def test_doctor_path_green_with_trailing_separator(tmp_path):
+    # The python.org installer writes the entry as "C:\Python313\Scripts\", with the separator.
+    port = free_port()
+    home = tmp_path / "trailing_home"
+    home.mkdir()
+    env = {"EDGE_BRIDGE_HOME": str(home), "EDGE_BRIDGE_PORT": str(port),
+           "PATH": sysconfig.get_path("scripts") + os.sep, "EDGE_BRIDGE_TEST_ELEVATED": "0"}
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    by_name = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert by_name["path"]["ok"] is True, by_name["path"]
+
+
 def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
     from edge_agent_bridge import cli
     monkeypatch.setattr(sys, "platform", "win32")
