@@ -4,6 +4,7 @@ Agent Browser Bridge CLI.
 Allows the agent or user to drive Microsoft Edge directly via command line.
 """
 import argparse
+import importlib.metadata
 import json
 import os
 import shutil
@@ -167,6 +168,19 @@ def _is_elevated() -> bool:
         return False
 
 
+RENAME_NOTICE = ("edge-agent-bridge is now agent-browser-bridge. The command is agent-bridge "
+                 "(edge-bridge still works); upgrade with: pip install -U agent-browser-bridge")
+
+
+def _rename_notice() -> str | None:
+    """The upgrade hint, only while the edge-agent-bridge compatibility shim is installed."""
+    try:
+        importlib.metadata.distribution("edge-agent-bridge")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    return RENAME_NOTICE
+
+
 def _handle_doctor(port: int, opt_json: bool) -> int:
     checks = []
 
@@ -268,6 +282,9 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
     else:
         add("launcher", False, f"missing from {scripts_dir} (stale install?)",
             "py -m pip install --force-reinstall agent-browser-bridge")
+
+    notice = _rename_notice()
+    add("package", True, f"agent-browser-bridge {__version__}" + (f"; {notice}" if notice else ""), "")
 
     # normpath drops the trailing separator the python.org installer writes into PATH.
     path_entries = [os.path.normcase(os.path.normpath(e)) for e in os.environ.get("PATH", "").split(os.pathsep) if e]
@@ -826,6 +843,8 @@ def main(argv=None) -> int:
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
                 if res.get("pin") is not None:
                     print(f"Pinned tab: {res['pin']}")
+                if notice := _rename_notice():
+                    print(notice)
                 if sst is not None:
                     if sst.get("success"):
                         if sst.get("tabClosed"):

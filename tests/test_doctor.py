@@ -1,4 +1,5 @@
 """Tests for agent-bridge doctor, logs, and MCP registration status."""
+import importlib.metadata
 import json
 import os
 import shutil
@@ -70,7 +71,7 @@ def test_doctor_json_shape_hides_token(daemon, tmp_path):
     assert body["success"] is True
     assert [c["name"] for c in body["checks"]] == [
         "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "pid",
-        "launcher", "path", "elevation", "mcp"]
+        "launcher", "package", "path", "elevation", "mcp"]
     token = (daemon.home / "token").read_text(encoding="utf-8").strip()
     assert token not in out
     ext.close()
@@ -232,6 +233,35 @@ def test_registration_status_accepts_legacy_entries(tmp_path, monkeypatch):
     detected = {"cli": {}, "json": {"cursor": {"path": str(legacy_module), "found": True},
                                      "windsurf": {"path": str(legacy_cmd), "found": True}}}
     assert registration_status(detected) == {"cursor": "registered", "windsurf": "registered"}
+
+
+def _no_shim(name):
+    raise importlib.metadata.PackageNotFoundError(name)
+
+
+def test_rename_notice_only_when_shim_installed(monkeypatch):
+    from agent_browser_bridge import cli
+    monkeypatch.setattr(importlib.metadata, "distribution", _no_shim)
+    assert cli._rename_notice() is None
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: object())
+    assert cli._rename_notice().endswith("pip install -U agent-browser-bridge")
+
+
+def test_doctor_package_check_present(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: object())
+    rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
+    assert by_name["package"]["ok"] is True
+    assert by_name["package"]["detail"].startswith("agent-browser-bridge 3.0.0; edge-agent-bridge is now")
+
+
+def test_status_json_has_no_rename_line(monkeypatch, capsys):
+    from agent_browser_bridge import cli
+    from agent_browser_bridge.client import Edge
+    monkeypatch.setattr(Edge, "status", lambda self: {"success": True, "bridge_running": True, "pid": 1})
+    monkeypatch.setattr(cli, "_rename_notice", lambda: "edge-agent-bridge is now agent-browser-bridge")
+    assert cli.main(["--json", "status"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["success"] is True
 
 
 def test_doctor_mcp_check_fails_on_stale_registration(monkeypatch, tmp_path, capsys):
