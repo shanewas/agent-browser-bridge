@@ -1,7 +1,7 @@
 # Edge Agent Bridge
 
 [![PyPI - Version](https://img.shields.io/pypi/v/edge-agent-bridge?color=0078D4&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/edge-agent-bridge/)
-[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v2.5.0-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
+[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v2.6.1-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/lknjdleggnheadkkjfngphdbcglalmmg?color=4285F4&logo=googlechrome&logoColor=white&label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/edge-agent-bridge/lknjdleggnheadkkjfngphdbcglalmmg?authuser=1&hl=en)
 [![GitHub Release](https://img.shields.io/github/v/release/shanewas/edge-agent-bridge?color=2ea44f&logo=github&label=Release)](https://github.com/shanewas/edge-agent-bridge/releases/latest)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/edge-agent-bridge?color=3776AB&logo=python&logoColor=white)](https://pypi.org/project/edge-agent-bridge/)
