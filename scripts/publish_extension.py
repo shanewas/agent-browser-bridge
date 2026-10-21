@@ -8,7 +8,7 @@ history and CI logs:
     EDGE_ADDONS_API_KEY      API key from the same page (v1.1 credentials)
     EDGE_ADDONS_PRODUCT_ID   Product ID GUID from the extension's overview page
 
-    python scripts/publish_extension.py dist/edge-agent-bridge-extension-<version>.zip
+    python scripts/publish_extension.py dist/agent-browser-bridge-extension-<version>.zip
 """
 
 import argparse

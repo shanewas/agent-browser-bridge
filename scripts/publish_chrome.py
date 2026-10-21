@@ -10,7 +10,7 @@ dashboard first. Credentials come from the environment, never from arguments:
     CHROME_PUBLISHER_ID    publisher the item belongs to
     CHROME_ITEM_ID         the extension's 32-character item id
 
-    python scripts/publish_chrome.py dist/edge-agent-bridge-extension-<version>.zip
+    python scripts/publish_chrome.py dist/agent-browser-bridge-extension-<version>.zip
 """
 
 import argparse
