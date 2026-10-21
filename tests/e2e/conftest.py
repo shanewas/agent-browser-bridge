@@ -22,9 +22,30 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tests.support import DaemonHandle, edge_binary, free_port  # noqa: E402
 from edge_agent_bridge import config  # noqa: E402
-from edge_agent_bridge.cli import _is_elevated  # noqa: E402
 
 PAGES = Path(__file__).resolve().parent / "pages"
+
+
+def _uac_elevated() -> bool:
+    """True only for a process elevated through UAC (TokenElevationTypeFull): the interactive admin
+    case Edge de-elevates out of. CI runners are admin without a split token and launch Edge fine."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    import ctypes.wintypes as w
+    adv, k32 = ctypes.windll.advapi32, ctypes.windll.kernel32
+    k32.GetCurrentProcess.restype = w.HANDLE
+    adv.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)]
+    adv.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
+    token, kind, size = w.HANDLE(), w.DWORD(), w.DWORD()
+    if not adv.OpenProcessToken(k32.GetCurrentProcess(), 8, ctypes.byref(token)):
+        return False
+    try:
+        if not adv.GetTokenInformation(token, 18, ctypes.byref(kind), 4, ctypes.byref(size)):
+            return False
+    finally:
+        k32.CloseHandle(token)
+    return kind.value == 2
 
 
 class EdgeProcess:
@@ -108,8 +129,8 @@ def edge(tmp_path_factory, e2e_daemon, staged_extension):
         if os.environ.get("EDGE_BRIDGE_E2E_REQUIRED"):
             pytest.fail("Microsoft Edge not found and EDGE_BRIDGE_E2E_REQUIRED is set")
         pytest.skip("Microsoft Edge not found")
-    if _is_elevated():
-        # Edge de-elevates itself on launch, so an elevated pytest never gets the browser it spawned.
+    if _uac_elevated():
+        # Edge de-elevates itself on launch, so a UAC-elevated pytest never gets the browser it spawned.
         pytest.fail("e2e needs an unelevated shell: run pytest from a normal non-admin PowerShell")
     profile = tmp_path_factory.mktemp("eab-profile")
     proc = EdgeProcess(binary, profile, staged_extension, e2e_daemon.port).start()
