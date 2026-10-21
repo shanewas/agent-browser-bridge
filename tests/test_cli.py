@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 import pytest
-from edge_agent_bridge import cli, config
+from edge_agent_bridge import cli, client, config
 from edge_agent_bridge.client import Edge
 from tests.fake_extension import FakeExtension
 from tests.support import free_port, run_cli
@@ -590,6 +590,8 @@ def test_cli_wait_asks_the_daemon_for_its_whole_timeout(tmp_path, monkeypatch):
         def close(self):
             pass
 
+    # Without this the CLI's auto-start spawns a real daemon on the free port and leaks it.
+    monkeypatch.setattr(client, "_probe_status", lambda port: {"bridge_running": True})
     monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
     assert cli.main(["--json", "wait", "--text", "X", "--timeout", "60000"]) == 0
     assert bodies[0]["timeout"] == 65, bodies
@@ -614,6 +616,7 @@ def test_cli_check_radio_dispatches_ref_selector_target(tmp_path, monkeypatch):
         def close(self):
             pass
 
+    monkeypatch.setattr(client, "_probe_status", lambda port: {"bridge_running": True})
     monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
 
     assert cli.main(["--json", "check-radio", "--ref", "e5"]) == 0
