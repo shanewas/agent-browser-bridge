@@ -683,7 +683,16 @@ export async function execute(cmd) {
           }
           return fail("timeout", `page did not finish loading within ${timeout}ms`, { waited: waited() });
         }
-        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector || p.text, timeout, { highlight: false, kind: targetKind(p) });
+        if (p.text && !p.ref && !p.target && !p.selector) {
+          // Status copy ("Saved", "Done") sits in a <p> or <span>, which the target resolver skips.
+          while (waited() < timeout) {
+            const hit = await execInTab(tabId, page.pageHasText, [String(p.text)]);
+            if (hit && hit.found) return { success: true, waited: waited(), ...hit };
+            await sleep(100);
+          }
+          return fail("target_not_found", `Text not found within ${timeout}ms: "${p.text}"`, { waited: waited() });
+        }
+        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector, timeout, { highlight: false, kind: targetKind(p) });
         if (r && r.found) return { success: true, waited: waited(), ...r };
         return fail(r ? r.code : "target_not_found", r ? r.error : "Target not found", { waited: waited() });
       }
