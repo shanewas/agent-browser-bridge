@@ -64,6 +64,7 @@ class StubUser32:
 
 
 def test_refused_input_is_retried_without_repeating_what_got_through(monkeypatch):
+    pytest.importorskip("PIL")
     stub = StubUser32(blocked=1)
     monkeypatch.setattr(inputs, "_user32", stub)
     monkeypatch.setattr("agent_browser_bridge.desktop.screen.attach_input_desktop", lambda: True)
@@ -75,6 +76,7 @@ def test_refused_input_is_retried_without_repeating_what_got_through(monkeypatch
 
 
 def test_input_that_stays_blocked_is_an_error(monkeypatch):
+    pytest.importorskip("PIL")
     monkeypatch.setattr(inputs, "_user32", StubUser32(blocked=99))
     monkeypatch.setattr("agent_browser_bridge.desktop.screen.attach_input_desktop", lambda: False)
     with pytest.raises(ActionError):

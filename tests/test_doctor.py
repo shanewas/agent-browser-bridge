@@ -28,6 +28,12 @@ def _stub_env(tmp_path, daemon):
             "EDGE_BRIDGE_TEST_ELEVATED": "0"}
 
 
+def _skip_unless_desktop_green():
+    """A FAIL-free doctor tree needs Pillow on Windows; elsewhere the desktop check is n/a."""
+    if sys.platform == "win32":
+        pytest.importorskip("PIL")
+
+
 def _doctor_json_in_process(monkeypatch, tmp_path, capsys):
     """Run _handle_doctor in-process (daemon down) for monkeypatched checks."""
     from agent_browser_bridge import cli
@@ -50,6 +56,7 @@ def _tabs_handler(action, params):
 
 
 def test_doctor_healthy_tree(daemon, tmp_path):
+    _skip_unless_desktop_green()
     ext = FakeExtension(daemon.port, handler=_tabs_handler).connect().run()
     time.sleep(0.3)
     env = _stub_env(tmp_path, daemon)
@@ -63,6 +70,7 @@ def test_doctor_healthy_tree(daemon, tmp_path):
 
 
 def test_doctor_json_shape_hides_token(daemon, tmp_path):
+    _skip_unless_desktop_green()
     ext = FakeExtension(daemon.port, handler=_tabs_handler).connect().run()
     time.sleep(0.3)
     env = _stub_env(tmp_path, daemon)
@@ -424,6 +432,7 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
 
 
 def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
+    _skip_unless_desktop_green()
     ext = FakeExtension(daemon.port, version="99.0.0", handler=_tabs_handler).connect().run()
     time.sleep(0.3)
     env = _stub_env(tmp_path, daemon)
@@ -452,6 +461,7 @@ def _wait_closed(ext, timeout=5):
 
 
 def test_doctor_reports_rejected_instance(daemon, tmp_path):
+    _skip_unless_desktop_green()
     ext1 = FakeExtension(daemon.port, instance="inst-1", handler=_tabs_handler).connect().run()
     assert _wait_active(daemon)
     ext2 = FakeExtension(daemon.port, instance="inst-2").connect().run()
