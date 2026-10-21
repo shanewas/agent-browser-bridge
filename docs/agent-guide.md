@@ -1,4 +1,4 @@
-# Driving Edge through Edge Agent Bridge: a guide for agents
+# Driving Edge through Agent Browser Bridge: a guide for agents
 
 You control the user's real Microsoft Edge, on the tab they are looking at, with their cookies
 and sessions. Every action you take is visible to them. Work the way a careful colleague
@@ -84,17 +84,17 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `extension_outdated` | the extension predates the daemon | tell the user to update it |
 | `dialog_open` | a native dialog is waiting | `edge_dialog` accept or dismiss |
 | `timeout` | the wait condition never held, or the browser didn't answer in time | after `edge_wait`, report what `inflight` or `url` shows; after anything else, check the page before retrying, because the action may have run |
-| `daemon_unreachable` | nothing answers on the daemon port | `edge-bridge daemon start`, then retry |
-| `connection_lost` | the daemon got the command, then the connection dropped before an answer came back (daemon restart or crash) | check the page before retrying, because the action may have run; run `edge-bridge status` if it keeps happening |
+| `daemon_unreachable` | nothing answers on the daemon port | `agent-bridge daemon start`, then retry |
+| `connection_lost` | the daemon got the command, then the connection dropped before an answer came back (daemon restart or crash) | check the page before retrying, because the action may have run; run `agent-bridge status` if it keeps happening |
 | `tab_busy` | another call holds the tab lock | backoff 250ms·2ⁿ+jitter ≤4×, then surface |
 | `tab_closed` | the session or tokenless pin points at a closed tab | `switch` or `new` to re-pin |
 | `stale_ref` | ref/frame no longer valid | ladder runs automatically; on `exhausted_fallback`, snapshot fresh |
 | `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once and re-pins your last tab; if repeated, `session start` |
 | `click_covered` | sticky overlay covers the target | dismiss it or scroll the target clear, then retry |
 | `file_not_found` | upload path missing | check the path; the error names both the given and translated form |
-| `file_access_required` | extension lacks file URL access | tell the user to turn on "Allow access to file URLs" for Edge Agent Bridge in edge://extensions > Details |
+| `file_access_required` | extension lacks file URL access | tell the user to turn on "Allow access to file URLs" for Agent Browser Bridge in edge://extensions > Details |
 | `bad_name` | session name outside `[A-Za-z0-9_-]{1,40}` | pick a conforming name |
-| `no_log` | daemon never started here | `edge-bridge daemon start` |
+| `no_log` | daemon never started here | `agent-bridge daemon start` |
 | `focus_lost` | target never took focus | snapshot, check overlays, coords click |
 | `focus_unverifiable` | frame context unresolvable | retry, coords-only click, or abort |
 | `focus_stolen` | focus moved mid-type | resume with `remaining` |
@@ -107,27 +107,27 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 ## Setup (once per machine)
 
 ```
-pip install edge-agent-bridge
-edge-bridge setup          # registers the MCP server with the agent clients it finds
-edge-bridge status         # daemon, extension, and pairing state
-edge-bridge doctor         # when anything fails: checks everything, prints fixes
+pip install agent-browser-bridge
+agent-bridge setup          # registers the MCP server with the agent clients it finds
+agent-bridge status         # daemon, extension, and pairing state
+agent-bridge doctor         # when anything fails: checks everything, prints fixes
 ```
 
-The extension comes from the Edge Add-ons store ("Edge Agent Bridge"); developers can load
-`edge-bridge extension path` unpacked instead.
+The extension comes from the Edge Add-ons store ("Agent Browser Bridge"); developers can load
+`agent-bridge extension path` unpacked instead.
 
 ## Sessions: one tab per agent (v2.1.0+)
 
 CLI invocations are stateless, so each agent holds a daemon-side session pinned to one tab:
 
 ```
-edge-bridge session list             # what exists before you mint another
-edge-bridge session start --name agent-a   # prints sessionToken=<uuid>
+agent-bridge session list             # what exists before you mint another
+agent-bridge session start --name agent-a   # prints sessionToken=<uuid>
 export EDGE_BRIDGE_SESSION=<uuid>    # or pass --session <uuid> per call
-edge-bridge switch 1459              # pin this session to your tab
-edge-bridge session status           # shows pin state
-edge-bridge session stop             # drop it server-side
-edge-bridge session prune            # drop closed-tab sessions
+agent-bridge switch 1459              # pin this session to your tab
+agent-bridge session status           # shows pin state
+agent-bridge session stop             # drop it server-side
+agent-bridge session prune            # drop closed-tab sessions
 ```
 
 Forgetting `--tab` is harmless inside a session: the daemon injects your pinned tab. An explicit `--tab` is a one-shot override and never changes the pin. Only `switch` and `new` re-pin. MCP clients get an implicit session per process automatically. If your tab closes, the session goes sticky `tab_closed` — every tab-scoped call fails until `switch`/`new`. A daemon restart no longer strands you: the client re-mints and re-pins your last tab (if that tab is gone, the next call resolves the active tab like a fresh session). There is no shared default session: two agents MUST use distinct tokens or they share one pin.
@@ -141,7 +141,7 @@ Multi-agent etiquette: own tab each. Per-tab locks serialize writers as defense-
 `edge_group_list {windowId?}` lists tab groups; `edge_group_move {tabIds, groupId?, title?, color?}`
 moves tabs into an existing group, or a new one when `groupId` is omitted;
 `edge_group_ungroup {tabIds}` removes tabs from their groups. CLI mirrors:
-`edge-bridge history search "query"`, `history delete <url>`, `group list [--window-id N]`,
+`agent-bridge history search "query"`, `history delete <url>`, `group list [--window-id N]`,
 `group move <tab ids> [--group-id N] [--title T] [--color C]`, `group ungroup <tab ids>`.
 
 ## Verified writes: `match`, `write_mismatch`, `focus_stolen`
@@ -151,7 +151,7 @@ moves tabs into an existing group, or a new one when `groupId` is omitted;
 - `match: true` — written value confirmed.
 - `match: false` — the readback differs from `written`. Results also carry `field` (`input`, `textarea`, `contenteditable`, ...). A `fill` is retried once as a clearing fill unless `field` is `contenteditable`; a second mismatch returns `write_mismatch` with `{expected, readback, attempts: 2}`. `type` and contenteditable fills are never retried: they return `match: false` with `written` and `readback` and leave the field alone, because `type` assumes the caret sat at the end and a clearing fill would wipe the editor's markup. The CLI prints `Warning (write_mismatch): wrote ..., read back ...` to stderr and exits 1, so `&&` chains stop. Compare the two values; if the text is wrong, report both and STOP.
 - Contenteditable comparisons ignore leading and trailing newlines and treat U+00A0 as a space.
-- `match: "unknown"` — the value could not be read back (element gone or not readable), or the extension predates readback (check `edge-bridge status`: old `extension_version` means expected degradation, new version means broken readback). A retry that comes back unknown is returned as unknown, not `write_mismatch`. The client warns once about an old extension and continues unverified; the CLI prints `Warning: write not verified` to stderr and exits 0.
+- `match: "unknown"` — the value could not be read back (element gone or not readable), or the extension predates readback (check `agent-bridge status`: old `extension_version` means expected degradation, new version means broken readback). A retry that comes back unknown is returned as unknown, not `write_mismatch`. The client warns once about an old extension and continues unverified; the CLI prints `Warning: write not verified` to stderr and exits 0.
 
 Focus is asserted before every write (≤3 tries) and rechecked after the 1st char and every 8 chars while typing:
 

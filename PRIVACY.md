@@ -1,8 +1,8 @@
-# Privacy Policy for Edge Agent Bridge
+# Privacy Policy for Agent Browser Bridge
 
 **Last updated:** September 7, 2026
 
-Edge Agent Bridge ("the Extension") is an open-source browser automation bridge for developers running local AI agents. This policy explains how information is handled by the Extension.
+Agent Browser Bridge (formerly Edge Agent Bridge, "the Extension") is an open-source browser automation bridge for developers running local AI agents. This policy explains how information is handled by the Extension.
 
 ---
 
@@ -15,7 +15,7 @@ Edge Agent Bridge ("the Extension") is an open-source browser automation bridge 
 
 ### 2. Localhost-Only Communication
 
-- All communication occurs strictly on your local machine (`127.0.0.1:18999`) between the browser extension and the locally executed Python bridge daemon (`edge-bridge`).
+- All communication occurs strictly on your local machine (`127.0.0.1:18999`) between the browser extension and the locally executed Python bridge daemon (`agent-bridge`).
 - No data is ever transmitted to external servers, cloud services, or third parties.
 - The local bridge daemon binds only to `127.0.0.1`, rejects requests whose `Host` header is not the local address, and requires a token stored in your user profile for every command it forwards to the Extension.
 
@@ -47,9 +47,9 @@ Every action below happens only in response to a command from your local agent t
 
 ### 5. Open Source Transparency
 
-The complete source code of Edge Agent Bridge is open source under the MIT License and available for independent public audit:
+The complete source code of Agent Browser Bridge is open source under the MIT License and available for independent public audit:
 
-- **Repository**: https://github.com/shanewas/edge-agent-bridge
+- **Repository**: https://github.com/shanewas/agent-browser-bridge
 
 ---
 
@@ -59,4 +59,4 @@ If you have any questions regarding this Privacy Policy, please open an issue on
 
 - **Author**: Shanewas Ahmed
 - **Email**: shanewasahmed@gmail.com
-- **GitHub Issues**: https://github.com/shanewas/edge-agent-bridge/issues
+- **GitHub Issues**: https://github.com/shanewas/agent-browser-bridge/issues

@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.0.0
+
+Edge Agent Bridge is now **Agent Browser Bridge**. Same daemon, same extension, same
+protocol; only the names changed.
+
+- PyPI: `pip install agent-browser-bridge`. `pip install -U edge-agent-bridge` still works:
+  it installs the new package plus a compatibility shim, after which
+  `pip install -U agent-browser-bridge` is the upgrade command.
+- Command: `agent-bridge`. `edge-bridge` and `edge` keep working wherever the shim is installed.
+- Python: `from agent_browser_bridge import Edge`. `import edge_agent_bridge` keeps working
+  through the shim.
+- MCP: new registrations run `python -m agent_browser_bridge mcp`; existing
+  `edge_agent_bridge` registrations keep working, and `agent-bridge setup` rewrites them. The
+  server key `edge` and the `edge_*` tool names are unchanged.
+- Extension: listed as Agent Browser Bridge on both stores; the IDs are unchanged and installed
+  copies update in place.
+- Unchanged: port 18999, the data directory, the `EDGE_BRIDGE_*` environment variables.
+- `status` and `doctor` print a one-line upgrade hint while the shim is installed.
+
 ## 2.6.1
 
 - `click`, `hover`, `type` and `drag` no longer miss a target near the bottom of the
