@@ -1,4 +1,4 @@
-// Edge Agent Bridge - chrome.debugger session cache, CDP input helpers, per-tab command queue.
+// Agent Browser Bridge - chrome.debugger session cache, CDP input helpers, per-tab command queue.
 
 const attachedTabs = new Set();
 const debuggerErrors = new Map();

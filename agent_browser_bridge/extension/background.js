@@ -1,4 +1,4 @@
-// Edge Agent Bridge - service worker transport.
+// Agent Browser Bridge - service worker transport.
 // One WebSocket to the local daemon; hello on open, pong on ping, commands go to dispatch().
 import { dispatch } from "./actions.js";
 

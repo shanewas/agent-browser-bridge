@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Edge Agent Bridge",
+  "name": "Agent Browser Bridge",
   "version": "3.0.0",
   "description": "Let an AI agent drive the browser tabs you already have open, using page snapshots with stable element refs and trusted input.",
   "permissions": [
@@ -38,7 +38,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Edge Agent Bridge",
+    "default_title": "Agent Browser Bridge",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

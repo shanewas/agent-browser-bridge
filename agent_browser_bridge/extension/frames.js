@@ -1,4 +1,4 @@
-// Edge Agent Bridge - frame offset handshake, service-worker side.
+// Agent Browser Bridge - frame offset handshake, service-worker side.
 
 import * as page from "./page.js";
 

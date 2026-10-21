@@ -1,4 +1,4 @@
-// Edge Agent Bridge - per-tab CDP event buffers: console/exception/log entries, in-flight
+// Agent Browser Bridge - per-tab CDP event buffers: console/exception/log entries, in-flight
 // network requests for idle detection, and JavaScript dialog policy.
 import { cdpSend } from "./cdp.js";
 

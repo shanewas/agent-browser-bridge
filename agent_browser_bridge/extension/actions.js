@@ -1,4 +1,4 @@
-// Edge Agent Bridge - command router. dispatch() resolves the tab and serializes per tab;
+// Agent Browser Bridge - command router. dispatch() resolves the tab and serializes per tab;
 // execute() is the action switch and is re-entrant (batch calls it directly).
 import { ensureDebugger, getDebuggerError, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles, isDetachError } from "./cdp.js";
 import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
@@ -310,7 +310,7 @@ export async function execute(cmd) {
         const url = p.url;
         if (!url) return fail("bad_params", "nav requires url");
         if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
-          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Agent Browser Bridge in edge://extensions > Details.");
         }
         const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
         let tab = await getTargetTab(tabId);
@@ -338,7 +338,7 @@ export async function execute(cmd) {
       case "tab_new": {
         const url = p.url || "about:blank";
         if (typeof url === "string" && url.startsWith("file://") && !await checkFileAccess()) {
-          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Agent Browser Bridge in edge://extensions > Details.");
         }
         const active = p.active !== false;
         let tab;
@@ -474,7 +474,7 @@ export async function execute(cmd) {
         const relative = files.filter(f => !/^([a-zA-Z]:[\\/]|\/|\\\\)/.test(f));
         if (relative.length) return fail("bad_params", `upload needs absolute paths, got: ${relative.join(", ")}`);
         if (!await checkFileAccess()) {
-          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.");
+          return fail("file_access_required", "Turn on 'Allow access to file URLs' for Agent Browser Bridge in edge://extensions > Details.");
         }
         const loc = await locate(tabId, p, "upload");
         if (!loc.ok) return loc.result;

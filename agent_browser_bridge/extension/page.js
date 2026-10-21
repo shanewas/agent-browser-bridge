@@ -1,4 +1,4 @@
-// Edge Agent Bridge - functions injected into pages with chrome.scripting.executeScript.
+// Agent Browser Bridge - functions injected into pages with chrome.scripting.executeScript.
 // Every export is self-contained: no references to module scope, because the function
 // body is serialized and runs in the tab's isolated world. Shared helpers live in
 // page-lib.js (window.__eabLib), injected once per document by the worker.
