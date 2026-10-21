@@ -6,6 +6,7 @@ import shutil
 import sys
 import sysconfig
 import time
+import types
 import pytest
 from tests.fake_extension import FakeExtension
 from tests.support import free_port
@@ -146,6 +147,19 @@ def test_doctor_stale_pid(tmp_path):
     assert "agent-bridge daemon restart" in by_name["pid"]["fix"]
 
 
+def test_doctor_and_status_accept_the_store_extension_during_review(daemon, tmp_path):
+    # 3.0.0 changes no protocol, so the stores' 2.6.1 extension must not read as outdated.
+    ext = FakeExtension(daemon.port, version="2.6.1", handler=_tabs_handler).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["versions"]["ok"] is True, checks["versions"]
+    code, out, err = run_cli(["status"], env=env)
+    assert code == 0 and "Fix: update extension" not in out, out
+    ext.close()
+
+
 def test_doctor_outdated_extension(daemon):
     ext = FakeExtension(daemon.port, version="1.0.0", handler=_tabs_handler).connect().run()
     time.sleep(0.3)
@@ -243,12 +257,20 @@ def test_rename_notice_only_when_shim_installed(monkeypatch):
     from agent_browser_bridge import cli
     monkeypatch.setattr(importlib.metadata, "distribution", _no_shim)
     assert cli._rename_notice() is None
-    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: object())
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="3.0.0"))
     assert cli._rename_notice().endswith("pip install -U agent-browser-bridge")
 
 
+def test_rename_notice_when_old_dist_sits_next_to_new(monkeypatch):
+    # pip install agent-browser-bridge into an env that still has 2.6.1 leaves both; edge-bridge then runs 2.6.1.
+    from agent_browser_bridge import cli
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="2.6.1"))
+    notice = cli._rename_notice()
+    assert "2.6.1 is still installed" in notice and "pip install -U edge-agent-bridge" in notice, notice
+
+
 def test_doctor_package_check_present(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: object())
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="3.0.0"))
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert by_name["package"]["ok"] is True
     assert by_name["package"]["detail"].startswith("agent-browser-bridge 3.0.0; edge-agent-bridge is now")

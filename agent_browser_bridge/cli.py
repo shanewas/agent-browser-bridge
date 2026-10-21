@@ -21,6 +21,9 @@ from .client import Edge, EdgeClient, send_cmd, ensure_bridge_running
 from .bridge import parse_version
 
 EDGE_STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
+# The oldest extension this daemon drives in full. Store review lags a release by days, so the
+# version check compares against this floor, not against the daemon's own version.
+MIN_EXTENSION_VERSION = "2.6.0"
 
 # Force UTF-8 on Windows
 if sys.platform == "win32":
@@ -173,11 +176,16 @@ RENAME_NOTICE = ("edge-agent-bridge is now agent-browser-bridge. The command is 
 
 
 def _rename_notice() -> str | None:
-    """The upgrade hint, only while the edge-agent-bridge compatibility shim is installed."""
+    """The upgrade hint, only while an edge-agent-bridge distribution (shim or older) is installed."""
     try:
-        importlib.metadata.distribution("edge-agent-bridge")
+        dist = importlib.metadata.distribution("edge-agent-bridge")
     except importlib.metadata.PackageNotFoundError:
         return None
+    old = getattr(dist, "version", "3.0.0")
+    if parse_version(old) < parse_version("3.0.0"):
+        # pip install agent-browser-bridge next to 2.x leaves both; edge-bridge then still runs the old code.
+        return (f"edge-agent-bridge {old} is still installed next to agent-browser-bridge; "
+                "run: pip install -U edge-agent-bridge (or pip uninstall edge-agent-bridge)")
     return RENAME_NOTICE
 
 
@@ -225,8 +233,8 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         elif ext_v is None:
             add("versions", False, "extension version unknown",
                 "open Edge and check the popup shows Connected")
-        elif dae_v is not None and parse_version(ext_v) < parse_version(dae_v):
-            add("versions", False, f"extension {ext_v} predates daemon {dae_v}",
+        elif parse_version(ext_v) < parse_version(MIN_EXTENSION_VERSION):
+            add("versions", False, f"extension {ext_v} predates the oldest supported {MIN_EXTENSION_VERSION}",
                 f"update from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
         elif dae_v is not None and parse_version(ext_v) > parse_version(dae_v):
             add("versions", True, f"daemon {dae_v}, extension {ext_v} (extension newer than daemon)", "")
@@ -837,7 +845,7 @@ def main(argv=None) -> int:
                 print(f"CLI {__version__}, daemon {dae_v}, extension {ext_v}")
                 if dae_v != __version__:
                     print("Fix: agent-bridge daemon restart")
-                elif ext_v != "none" and parse_version(ext_v) < parse_version(dae_v):
+                elif ext_v != "none" and parse_version(ext_v) < parse_version(MIN_EXTENSION_VERSION):
                     print(f"Fix: update extension from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
                 print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid', '?')})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
