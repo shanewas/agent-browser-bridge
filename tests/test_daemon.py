@@ -397,9 +397,9 @@ def _desktop_state(tmp_path):
 
 def test_desktop_actions_run_in_the_daemon_not_the_extension(tmp_path, monkeypatch):
     from agent_browser_bridge.bridge import BridgeRequestHandler
+    state, keyboard = _desktop_state(tmp_path)
     from agent_browser_bridge.desktop import executor
     monkeypatch.setattr(executor, "SETTLE_SECONDS", 0)
-    state, keyboard = _desktop_state(tmp_path)
     res, code = BridgeRequestHandler._dispatch_once(None, state, "desktop_click", {"at": [640, 360]},
                                                     time.time() + 5, False)
     assert code == 200 and res["success"] and ("move", 960, 540) in keyboard.calls
