@@ -12,6 +12,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+# Registrations written by 2.x name the old module and command; both still run the same server.
+MODULE_NAMES = ("agent_browser_bridge", "edge_agent_bridge")
+COMMAND_NAMES = ("agent-bridge", "edge-bridge")
+
+
 def _server_entry() -> dict:
     return {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}
 
@@ -169,15 +174,15 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
         if isinstance(entry, dict):
             cmd = entry.get("command")
             args = entry.get("args") or []
-            if cmd == "edge-bridge":
+            if cmd in COMMAND_NAMES:
                 is_edge = True
-            elif isinstance(args, list) and len(args) >= 3 and args[:2] == ["-m", "agent_browser_bridge"] and args[2] == "mcp":
+            elif isinstance(args, list) and len(args) >= 3 and args[0] == "-m" and args[1] in MODULE_NAMES and args[2] == "mcp":
                 is_edge = True
                 if cmd:
                     exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
                     if not exists:
                         is_stale = True
-            elif isinstance(cmd, str) and (cmd.endswith("edge-bridge") or cmd.endswith("edge-bridge.exe")):
+            elif isinstance(cmd, str) and any(cmd.endswith(n) or cmd.endswith(n + ".exe") for n in COMMAND_NAMES):
                 is_edge = True
                 exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
                 if not exists:

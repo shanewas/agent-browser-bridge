@@ -223,6 +223,17 @@ def test_registration_status_new_entry_and_stale_interpreter(tmp_path):
     assert registration_status(detected) == {"cursor": "registered", "windsurf": "stale"}
 
 
+def test_registration_status_accepts_legacy_entries(tmp_path, monkeypatch):
+    from agent_browser_bridge.setup import registration_status
+    legacy_module = tmp_path / "cursor.json"
+    legacy_module.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}}}), encoding="utf-8")
+    legacy_cmd = tmp_path / "windsurf.json"
+    legacy_cmd.write_text(json.dumps({"mcpServers": {"edge": {"command": "edge-bridge", "args": ["mcp"]}}}), encoding="utf-8")
+    detected = {"cli": {}, "json": {"cursor": {"path": str(legacy_module), "found": True},
+                                     "windsurf": {"path": str(legacy_cmd), "found": True}}}
+    assert registration_status(detected) == {"cursor": "registered", "windsurf": "registered"}
+
+
 def test_doctor_mcp_check_fails_on_stale_registration(monkeypatch, tmp_path, capsys):
     from agent_browser_bridge import cli
     stale_cfg = tmp_path / "cursor-mcp.json"
