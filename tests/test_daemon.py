@@ -382,3 +382,84 @@ def test_same_instance_replaces_old_socket(daemon):
     new.close()
     old.close()
 
+
+
+def _desktop_state(tmp_path):
+    pytest.importorskip("PIL")
+    from agent_browser_bridge.bridge import BridgeState
+    from agent_browser_bridge.desktop import Desktop
+    from tests.desktop_fakes import FakeKeyboard, FakeScreen, three_monitors
+    state = BridgeState(port=0, home=tmp_path, token="t")
+    keyboard = FakeKeyboard()
+    state.desktop = Desktop(screen=FakeScreen(layout=three_monitors()), inputs=keyboard)
+    return state, keyboard
+
+
+def test_desktop_actions_run_in_the_daemon_not_the_extension(tmp_path, monkeypatch):
+    from agent_browser_bridge.bridge import BridgeRequestHandler
+    from agent_browser_bridge.desktop import executor
+    monkeypatch.setattr(executor, "SETTLE_SECONDS", 0)
+    state, keyboard = _desktop_state(tmp_path)
+    res, code = BridgeRequestHandler._dispatch_once(None, state, "desktop_click", {"at": [640, 360]},
+                                                    time.time() + 5, False)
+    assert code == 200 and res["success"] and ("move", 960, 540) in keyboard.calls
+    assert state.pending == {}
+
+
+def test_desktop_busy_when_the_lock_is_held(tmp_path):
+    from agent_browser_bridge.bridge import BridgeRequestHandler
+    state, _ = _desktop_state(tmp_path)
+    state.desktop_lock.acquire()
+    try:
+        res, code = BridgeRequestHandler._dispatch_once(None, state, "desktop_screen", {}, time.time() + 0.2, False)
+    finally:
+        state.desktop_lock.release()
+    assert (code, res["code"]) == (200, "desktop_busy")
+
+
+def test_desktop_actions_are_not_tab_scoped():
+    from agent_browser_bridge.bridge import _is_tab_scoped
+    assert _is_tab_scoped("click") and not _is_tab_scoped("desktop_click") and not _is_tab_scoped("ping")
+
+
+def test_desktop_screen_through_the_real_daemon(daemon):
+    code, body = daemon.exec("desktop_screen")
+    assert code == 200
+    if body["success"]:
+        assert isinstance(body["monitors"], list) and body["space"] == "view"
+    else:
+        assert body["code"] in {"desktop_unsupported", "desktop_unavailable", "desktop_error"}, body
+
+
+def test_desktop_action_needs_the_token(daemon):
+    assert daemon.exec("desktop_click", {"at": [1, 1]}, token=None)[0] == 401
+
+
+def test_a_desktop_step_in_a_batch_runs_in_the_daemon(daemon, fake_ext):
+    code, body = daemon.exec("batch", {"steps": [{"action": "desktop_wait", "seconds": 0}, {"action": "ping"}]})
+    assert code == 200
+    first = body["results"][0]
+    if first.get("success"):
+        assert first["action"] == "wait" and body["results"][1]["message"] == "pong"
+    else:
+        assert first["code"].startswith("desktop_") and body["stoppedAt"] == "desktop_wait"
+
+
+def test_unknown_action_from_a_supported_extension_is_not_outdated(daemon):
+    # Daemon 4.0.0 with the 3.0.0 store extension: the floor is MIN_EXTENSION_VERSION, not the daemon version.
+    def handler(action, params):
+        return {"success": False, "code": "unknown_action", "error": "Unknown action: future_cmd"}
+
+    ext = FakeExtension(daemon.port, version="3.0.0", handler=handler).connect().run()
+    time.sleep(1.2)
+    code, body = daemon.exec("future_cmd", timeout=3)
+    assert code == 200 and body["code"] == "unknown_action", body
+    assert daemon.status()["extension_outdated"] is False
+    ext.close()
+
+
+def test_a_desktop_wait_past_the_call_deadline_is_refused(tmp_path):
+    from agent_browser_bridge.bridge import BridgeRequestHandler
+    state, keyboard = _desktop_state(tmp_path)
+    res, code = BridgeRequestHandler._dispatch_once(None, state, "desktop_wait", {"seconds": 5}, time.time() + 1, False)
+    assert (code, res["code"]) == (200, "timeout") and keyboard.calls == []

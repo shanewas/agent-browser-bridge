@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/shanewas/agent-browser-bridge/blob/main/LICENSE)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/shanewas)
 
-Let an AI agent drive the Microsoft Edge window you already have open, on the active tab on your screen.
+Let an AI agent drive the Microsoft Edge window you already have open, on the active tab on your screen. On Windows the same daemon also drives the desktop itself: screenshots, mouse and keyboard for the dialogs and native apps a browser extension cannot reach.
 
 Automating a clean browser profile drops existing cookies and auth state. Agent Browser Bridge attaches to your running browser instead, keeping active logins and extensions available while sending trusted Chrome DevTools Protocol events directly to the page.
 
@@ -24,7 +24,7 @@ Tested on Microsoft Edge. The extension uses standard MV3 and speaks CDP, so oth
 pip install agent-browser-bridge
 ```
 
-Python 3.10 or newer, with no third-party packages at install time or runtime.
+Python 3.10 or newer, with no third-party packages at install time or runtime. The optional `desktop` extra adds Pillow for the Windows desktop half (`pip install "agent-browser-bridge[desktop]"`).
 
 ### Windows
 
@@ -189,6 +189,50 @@ ring drawn around the element about to be acted on.
 
 Each CLI call pays roughly 600 ms of Python startup. For anything repetitive use MCP, the Python
 API, or `run` (one process for a whole step file).
+
+---
+
+## Desktop (Windows)
+
+```bash
+pip install "agent-browser-bridge[desktop]"
+```
+
+The daemon drives the Windows desktop through the same token and port as the browser. An agent
+takes a screenshot, reads it, acts with coordinates read off that image, then takes another
+screenshot to confirm. OS file dialogs, installers, native applications and pages the extension
+cannot attach to all become reachable.
+
+```bash
+agent-bridge desktop shot                  # writes <data dir>/shot.png, prints view/display/scale
+agent-bridge desktop shot look.png --monitor 2 --region 100,80,400,120   # one part, for small text
+agent-bridge desktop screen                # list displays (numbered left to right) without capturing
+agent-bridge desktop click 640,360 --button right --count 2 --modifiers ctrl
+agent-bridge desktop move 640,360          # reveal a hover state, then shot, then click
+agent-bridge desktop drag 100,100 400,300
+agent-bridge desktop scroll down 3 --at 640,360
+agent-bridge desktop type "hello"
+agent-bridge desktop key ctrl+s --repeat 2
+agent-bridge desktop hold shift 2
+agent-bridge desktop wait 1.5
+agent-bridge desktop cursor                # where the pointer is, in both spaces
+```
+
+MCP tools: `desktop_shot`, `desktop_screen`, `desktop_cursor`, `desktop_click`, `desktop_move`,
+`desktop_drag`, `desktop_scroll`, `desktop_type`, `desktop_key`, `desktop_hold`. `desktop_shot`
+returns the image inline plus the coordinate space. Python: `Edge().send("desktop_click", {"at": [640, 360]})`.
+
+Coordinates are **view pixels**: the pixel space of the last `shot` of that display, which is
+scaled down to a 1280 long edge by default. The daemon scales them back up; never convert
+yourself. A point outside the view is refused, not clamped. Every shot result carries `space`
+(`view`, `display`, or `region`); a region shot is a crop with its own origin and says not to
+click from it. Pass `--space display` to use real display pixels. Each display has its own view
+starting at 0,0; `--monitor all` captures every display as one wide image for finding things,
+then capture the one display before clicking.
+
+Windows only: elsewhere every desktop action answers `desktop_unsupported`, and without Pillow
+`desktop_unavailable`. An elevated daemon cannot send input into unelevated windows (Windows
+UIPI), so run the daemon from a normal shell; `agent-bridge doctor` reports both halves.
 
 ---
 

@@ -1,6 +1,6 @@
 """Model Context Protocol (MCP) server for Agent Browser Bridge.
 
-Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser automation tools.
+Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser tools and 10 Windows desktop tools.
 """
 import json
 import logging
@@ -444,6 +444,64 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+POINT = {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2,
+         "description": "[x, y] in view pixels of the last desktop_shot of this monitor."}
+DESKTOP_COMMON = {
+    "monitor": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "string", "enum": ["primary", "all"]}],
+                "description": "Display to act on: a number from desktop_screen, 'primary', or 'all' for one wide view. Default: the last shot's display, else primary."},
+    "space": {"type": "string", "enum": ["view", "display"],
+              "description": "Coordinate space of the arguments. 'view' (default) is the pixel space of the last shot; 'display' means real display pixels."},
+    "maxEdge": {"type": "integer", "minimum": 1, "description": "Long edge of the view space. Default: the last shot's, else 1280."},
+}
+MODIFIERS = {"type": "string", "description": "Keys to hold during the action, e.g. 'ctrl+shift'."}
+
+
+def _desktop_tool(name: str, description: str, properties: dict, required: list | None = None) -> dict:
+    schema = {"type": "object", "properties": {**properties, **DESKTOP_COMMON}}
+    if required:
+        schema["required"] = required
+    return {"name": name, "description": description, "inputSchema": schema}
+
+
+DESKTOP_TOOLS: list[dict[str, Any]] = [
+    _desktop_tool("desktop_shot",
+                  "Windows only. Capture a display and return the image plus its coordinate space (view, display, scale, monitor). Click coordinates are read off this image. A region shot comes back as space 'region': read it, never click from it.",
+                  {"region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
+                              "description": "[x, y, width, height] in view pixels to capture instead of the whole display, for small text."},
+                   "cursor": {"type": "boolean", "description": "Draw the pointer into the capture. Default true."},
+                   "fast": {"type": "boolean", "description": "JPEG and a cheaper resize: faster, slightly softer text. Default false."}}),
+    _desktop_tool("desktop_screen",
+                  "Windows only. List the displays (numbered from 1, left to right) and the current coordinate space without capturing.", {}),
+    _desktop_tool("desktop_cursor",
+                  "Windows only. Where the pointer is, in view and display pixels, and which display it is on.", {}),
+    _desktop_tool("desktop_click",
+                  "Windows only. Move the pointer to a view-pixel point and click. A point outside the view is refused, not clamped.",
+                  {"at": POINT, "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
+                   "count": {"type": "integer", "minimum": 1, "maximum": 3, "description": "2 double-clicks, 3 selects a line (left button only)."},
+                   "modifiers": MODIFIERS}, ["at"]),
+    _desktop_tool("desktop_move",
+                  "Windows only. Move the pointer without clicking, to reveal a hover state. Take a shot, then click the revealed control.",
+                  {"at": POINT}, ["at"]),
+    _desktop_tool("desktop_drag",
+                  "Windows only. Press at 'from', drag to 'to', release.",
+                  {"from": POINT, "to": POINT, "modifiers": MODIFIERS}, ["from", "to"]),
+    _desktop_tool("desktop_scroll",
+                  "Windows only. Scroll the surface under the pointer, or under 'at'.",
+                  {"direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+                   "amount": {"type": "integer", "minimum": 1, "description": "Wheel notches. Default 3."},
+                   "at": POINT, "modifiers": MODIFIERS}, ["direction"]),
+    _desktop_tool("desktop_type",
+                  "Windows only. Type literal text at the keyboard focus, as Unicode, independent of the keyboard layout.",
+                  {"text": {"type": "string"}}, ["text"]),
+    _desktop_tool("desktop_key",
+                  "Windows only. Press a key or combination: 'Return', 'Escape', 'Tab', 'ctrl+s', 'alt+Tab', 'ctrl+shift+Escape', 'F5', 'Page_Down'.",
+                  {"combo": {"type": "string"}, "repeat": {"type": "integer", "minimum": 1, "maximum": 100}}, ["combo"]),
+    _desktop_tool("desktop_hold",
+                  "Windows only. Hold a key or combination down for a number of seconds.",
+                  {"combo": {"type": "string"}, "seconds": {"type": "number", "minimum": 0, "maximum": 100}}, ["combo", "seconds"]),
+]
+TOOLS.extend(DESKTOP_TOOLS)
+
 
 def handle(msg: dict, edge: Edge) -> dict | None:
     """Handle a single JSON-RPC 2.0 message."""
@@ -671,6 +729,8 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             res = edge.group_ungroup(tab_ids=args.get("tabIds", []))
         elif tool_name == "edge_batch":
             res = edge.batch(steps=args.get("steps", []), tab_id=args.get("tabId"))
+        elif tool_name.startswith("desktop_"):
+            res = edge.send(tool_name, dict(args))
         else:
             return {
                 "jsonrpc": "2.0",
@@ -686,14 +746,20 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 t = res["tab"]
                 tab_line = f"tab {t.get('id')} \"{t.get('title', '')}\" {t.get('url', '')}\n"
             content = [{"type": "text", "text": tab_line + res.get("text", "")}]
-        elif tool_name == "edge_screenshot" and not is_error and res.get("dataUrl"):
+        elif tool_name in ("edge_screenshot", "desktop_shot") and not is_error and res.get("dataUrl"):
             data_str = res["dataUrl"]
             if "," in data_str:
                 data_str = data_str.split(",", 1)[1]
             mime_type = "image/png" if (res.get("format") or args.get("format")) == "png" else "image/jpeg"
+            if tool_name == "desktop_shot":
+                # The agent needs view, scale, space and monitor to click; the bytes are in the image block.
+                meta = {k: v for k, v in res.items() if k != "dataUrl"}
+                text = json.dumps(meta, indent=2)
+            else:
+                text = f"Screenshot: {len(data_str)} bytes base64"
             content = [
                 {"type": "image", "data": data_str, "mimeType": mime_type},
-                {"type": "text", "text": f"Screenshot: {len(data_str)} bytes base64"},
+                {"type": "text", "text": text},
             ]
         else:
             content = [{"type": "text", "text": json.dumps(res, indent=2)}]

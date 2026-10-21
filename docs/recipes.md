@@ -25,24 +25,24 @@ cat probe.js | agent-bridge eval --file - --tab 1361124478
 
 `--file` also avoids the 8 KiB CLI arg ceilings on some shells.
 
-## OS file dialog via doppelhand (last resort)
+## OS file dialog via the desktop tools (last resort, Windows)
 
-When no DOM input exists at all (custom dropzone with no `<input type=file>`):
+When no DOM input exists at all (custom dropzone with no `<input type=file>`), let the page open
+the OS dialog and drive it with the desktop half (`pip install "agent-browser-bridge[desktop]"`):
 
 ```python
-from agent_browser_bridge import Edge, Doppelhand
+from agent_browser_bridge import Edge
 edge = Edge(tab_id=1361124478)
-edge.click("Upload resume")          # trusted click opens the OS dialog
-dh = Doppelhand(token="...")         # or DOPPELHAND_TOKEN env
-dh.type_file_and_confirm("cv.docx")  # types name, presses Return
+edge.click("Upload resume")                                   # trusted click opens the OS dialog
+shot = edge.send("desktop_shot")                              # look: is the dialog up, where is the name box?
+edge.send("desktop_type", {"text": r"C:\Users\me\cv.docx"})  # the name box has focus when the dialog opens
+edge.send("desktop_key", {"combo": "Return"})
+shot = edge.send("desktop_shot")                              # confirm the dialog closed
 ```
 
-Windows only: the doppelhand server runs on Windows. Calls return a result
-dict and never raise; a missing server returns `doppelhand_unreachable`, a server
-that doesn't answer in time `doppelhand_timeout`.
-
-Doppelhand mutating calls require POST (the client does this); coords are in
-view space from `/screen`. Verify with `shot()` after any coord click.
+Results are plain dicts and never raise: off Windows the code is `desktop_unsupported`, without
+Pillow `desktop_unavailable`. Coordinates for any `desktop_click` are view pixels of the last
+`desktop_shot`; take a fresh shot after every change on screen.
 
 ## Tight captcha chains
 

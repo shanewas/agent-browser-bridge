@@ -21,9 +21,7 @@ from .client import Edge, EdgeClient, send_cmd, ensure_bridge_running
 from .bridge import parse_version
 
 EDGE_STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
-# The oldest extension this daemon drives in full. Store review lags a release by days, so the
-# version check compares against this floor, not against the daemon's own version.
-MIN_EXTENSION_VERSION = "2.6.0"
+MIN_EXTENSION_VERSION = config.MIN_EXTENSION_VERSION
 
 # Force UTF-8 on Windows
 if sys.platform == "win32":
@@ -158,6 +156,14 @@ def _handle_daemon_cmd(args, port: int) -> int:
     return 3
 
 
+def _pillow_version() -> str | None:
+    try:
+        import PIL
+    except ImportError:
+        return None
+    return getattr(PIL, "__version__", "unknown")
+
+
 def _is_elevated() -> bool:
     if sys.platform != "win32":
         return False
@@ -273,6 +279,13 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         for name in ("extension", "versions", "tabs", "file-access", "pairing"):
             add(name, False, "skipped: daemon not running", "agent-bridge daemon start")
 
+    if sys.platform != "win32":
+        add("desktop", True, "not applicable (Windows only)", "")
+    elif (pillow := _pillow_version()) is not None:
+        add("desktop", True, f"available (Pillow {pillow})", "")
+    else:
+        add("desktop", False, "Pillow is not installed", "pip install agent-browser-bridge[desktop]")
+
     pid_p = config.pid_path()
     if pid_p.exists() and not up:
         add("pid", False, f"stale pid file at {pid_p}", "agent-bridge daemon restart")
@@ -305,7 +318,8 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("elevation", True, "not applicable", "")
     elif _is_elevated():
         add("elevation", False,
-            "running elevated: the daemon pairs per OS user and Edge runs unelevated",
+            "running elevated: Edge and the desktop apps you drive run unelevated, "
+            "so pairing and SendInput into them fail silently",
             "use a normal non-admin PowerShell")
     else:
         add("elevation", True, "running unelevated", "")
@@ -511,6 +525,93 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
         else:
             print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
     return 0 if res.get("success") else 1
+
+
+def _coordinate(text: str) -> list:
+    try:
+        x, y = (part.strip() for part in text.split(","))
+        return [int(x), int(y)]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected X,Y but got {text!r}") from None
+
+
+def _region(text: str) -> list:
+    try:
+        left, top, width, height = (int(part.strip()) for part in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected X,Y,W,H but got {text!r}") from None
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError(f"region has no area: {width}x{height}")
+    return [left, top, width, height]
+
+
+def _monitor_choice(text: str):
+    wanted = text.strip().lower()
+    if wanted in ("all", "primary"):
+        return wanted
+    try:
+        number = int(wanted)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a monitor number, 'primary' or 'all', got {text!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("monitors are numbered from 1")
+    return number
+
+
+def _add_desktop_commands(parent, common):
+    desk = parent.add_subparsers(dest="desktop_action", required=True)
+
+    def verb(name, help_text):
+        sub = desk.add_parser(name, help=help_text, parents=[common])
+        sub.add_argument("--monitor", type=_monitor_choice, default=None, help="display: a number, 'primary' or 'all'")
+        sub.add_argument("--space", choices=("view", "display"), default=None, help="coordinate space of the arguments (default: view)")
+        sub.add_argument("--max-edge", type=int, default=None, help="long edge of the view space (default: the last shot's, else 1280)")
+        return sub
+
+    shot = verb("shot", "capture the display to a PNG (JPEG with --fast)")
+    shot.add_argument("out", nargs="?", default=None, help="where to write the image (default: <data dir>/shot.png)")
+    shot.add_argument("--region", type=_region, default=None, help="capture X,Y,W,H of the view instead of the whole display")
+    shot.add_argument("--no-cursor", dest="cursor", action="store_false", default=None, help="leave the pointer out")
+    shot.add_argument("--fast", action="store_true", default=None, help="JPEG and a cheaper resize")
+    verb("screen", "list the displays and the coordinate space without capturing")
+    verb("cursor", "report where the pointer is")
+    click = verb("click", "click at X,Y")
+    click.add_argument("at", type=_coordinate)
+    click.add_argument("--button", choices=("left", "right", "middle"), default=None)
+    click.add_argument("--count", type=int, default=None, help="2 double clicks, 3 selects a line")
+    click.add_argument("--modifiers", default=None, help="keys to hold, e.g. ctrl+shift")
+    verb("move", "move the pointer without clicking").add_argument("at", type=_coordinate)
+    drag = verb("drag", "press at X1,Y1, drag to X2,Y2, release")
+    drag.add_argument("from_at", metavar="start", type=_coordinate)
+    drag.add_argument("to_at", metavar="end", type=_coordinate)
+    drag.add_argument("--modifiers", default=None)
+    scroll = verb("scroll", "scroll the surface under the pointer")
+    scroll.add_argument("direction", choices=("up", "down", "left", "right"))
+    scroll.add_argument("amount", nargs="?", type=int, default=None)
+    scroll.add_argument("--at", type=_coordinate, default=None)
+    scroll.add_argument("--modifiers", default=None)
+    verb("type", "type literal text at the keyboard focus").add_argument("text")
+    key = verb("key", "press a key or combination, e.g. ctrl+s")
+    key.add_argument("combo")
+    key.add_argument("--repeat", type=int, default=None)
+    hold = verb("hold", "hold a key down for SECONDS")
+    hold.add_argument("combo")
+    hold.add_argument("seconds", type=float)
+    verb("wait", "pause and let the screen settle").add_argument("seconds", type=float)
+
+
+def _desktop_params(args) -> tuple[str, dict]:
+    """The daemon action and params for a `desktop` verb, carrying only what the user set."""
+    names = {"monitor": "monitor", "space": "space", "max_edge": "maxEdge", "region": "region",
+             "cursor": "cursor", "fast": "fast", "at": "at", "button": "button", "count": "count",
+             "modifiers": "modifiers", "from_at": "from", "to_at": "to", "direction": "direction",
+             "amount": "amount", "text": "text", "combo": "combo", "repeat": "repeat", "seconds": "seconds"}
+    params = {}
+    for attr, key in names.items():
+        value = getattr(args, attr, None)
+        if value is not None:
+            params[key] = value
+    return "desktop_" + args.desktop_action, params
 
 
 def main(argv=None) -> int:
@@ -744,6 +845,9 @@ def main(argv=None) -> int:
     p_setup.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
     p_setup.add_argument("--fix-path", action="store_true", help="Append the scripts dir to the user PATH (Windows)")
 
+    # desktop (Windows): shot, mouse and keyboard through the same daemon
+    _add_desktop_commands(add_cmd("desktop", help="Drive the Windows desktop: screenshot, mouse, keyboard"), common)
+
     args = parser.parse_args(argv)
     if not args.cmd:
         parser.print_help()
@@ -879,7 +983,10 @@ def main(argv=None) -> int:
     if getattr(args, "no_fallback", False):
         params["fallback"] = False
 
-    if action == "ping":
+    if action == "desktop":
+        action, desk_params = _desktop_params(args)
+        params.update(desk_params)
+    elif action == "ping":
         pass
     elif action == "tabs":
         pass
@@ -1078,17 +1185,25 @@ def main(argv=None) -> int:
         print(f"agent-bridge: session expired; re-minted sessionToken={edge.session_token} "
               f"(export EDGE_BRIDGE_SESSION={edge.session_token})", file=sys.stderr)
 
-    # If screenshot with path, save file
-    if action == "screenshot" and getattr(args, "path", None) and res.get("success") and (res.get("dataUrl") or res.get("data")):
+    # A screenshot with a path, and every desktop shot, lands on disk here
+    save_path = None
+    if action == "screenshot":
+        save_path = getattr(args, "path", None)
+    elif action == "desktop_shot":
+        save_path = args.out or config.home() / ("shot.jpg" if getattr(args, "fast", None) else "shot.png")
+    if save_path and res.get("success") and (res.get("dataUrl") or res.get("data")):
         data_str = res.get("dataUrl") or res["data"]
         if "," in data_str:
             data_str = data_str.split(",", 1)[1]
         import base64
         b = base64.b64decode(data_str)
-        out_p = Path(args.path)
+        out_p = Path(save_path)
         out_p.parent.mkdir(parents=True, exist_ok=True)
         out_p.write_bytes(b)
         res["path"] = str(out_p.resolve())
+        if action == "desktop_shot":
+            # The file is what the agent reads; a megabyte of base64 on stdout helps nobody.
+            res.pop("dataUrl", None)
 
     if opt_json:
         print(json.dumps(res))
@@ -1135,6 +1250,18 @@ def main(argv=None) -> int:
                 print(f"{len(entries)} console entry(ies):")
                 for item in entries:
                     print(f"  [{item.get('level')}] {item.get('text')}")
+            elif action == "desktop_shot":
+                view = res.get("view") or ["?", "?"]
+                print(f"Saved shot: {res.get('path')} (monitor {res.get('monitor')}, view {view[0]}x{view[1]}, space {res.get('space')})")
+            elif action == "desktop_screen":
+                for m in res.get("monitors", []):
+                    size, origin = m.get("size", ["?", "?"]), m.get("origin", ["?", "?"])
+                    print(f"  [{m.get('monitor')}] {size[0]}x{size[1]} at {origin[0]},{origin[1]}{' primary' if m.get('primary') else ''}")
+                view = res.get("view") or ["?", "?"]
+                print(f"view {view[0]}x{view[1]} of monitor {res.get('monitor')}, scale {res.get('scale')}")
+            elif action == "desktop_cursor":
+                v, d = res.get("view", ["?", "?"]), res.get("display", ["?", "?"])
+                print(f"view {v[0]},{v[1]} display {d[0]},{d[1]} on monitor {res.get('pointer_on_monitor')}")
             else:
                 tab_info = res.get("tab")
                 tab_str = f" (tab {tab_info['id']})" if isinstance(tab_info, dict) and "id" in tab_info else ""

@@ -78,12 +78,12 @@ def test_mcp_notifications_and_ping(mcp_proc):
     assert resp["result"] == {}
 
 
-def test_mcp_tools_list_34_tools(mcp_proc):
+def test_mcp_tools_list_44_tools(mcp_proc):
     resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = resp["result"]["tools"]
-    assert len(tools) == 34
+    assert len(tools) == 44
     for t in tools:
-        assert t["name"].startswith("edge_")
+        assert t["name"].startswith(("edge_", "desktop_"))
         assert t["description"]
         assert t["inputSchema"]["type"] == "object"
 
@@ -327,3 +327,56 @@ def test_mcp_session_is_named(daemon, mcp_proc):
             if "mcp" in names:
                 break
     assert "mcp" in names
+
+
+class _StubEdge:
+    def __init__(self, reply):
+        self.reply, self.sent = reply, []
+
+    def send(self, action, params=None, timeout=None):
+        self.sent.append((action, dict(params or {})))
+        return dict(self.reply)
+
+
+def _call(edge, name, args):
+    from agent_browser_bridge.mcp import handle
+    return handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": name, "arguments": args}}, edge)
+
+
+def test_desktop_tools_are_listed_with_point_schemas():
+    from agent_browser_bridge.mcp import TOOLS
+    names = {t["name"] for t in TOOLS}
+    assert {"desktop_shot", "desktop_screen", "desktop_cursor", "desktop_click", "desktop_move", "desktop_drag",
+            "desktop_scroll", "desktop_type", "desktop_key", "desktop_hold"} <= names
+    click = next(t for t in TOOLS if t["name"] == "desktop_click")
+    assert click["inputSchema"]["properties"]["at"]["minItems"] == 2 and click["inputSchema"]["required"] == ["at"]
+    drag = next(t for t in TOOLS if t["name"] == "desktop_drag")
+    assert drag["inputSchema"]["required"] == ["from", "to"]
+    assert "desktop_wait" not in names
+
+
+def test_desktop_click_forwards_its_arguments_verbatim():
+    edge = _StubEdge({"success": True, "action": "left_click", "at": [1, 2]})
+    resp = _call(edge, "desktop_click", {"at": [1, 2], "button": "left", "monitor": 2})
+    assert edge.sent == [("desktop_click", {"at": [1, 2], "button": "left", "monitor": 2})]
+    assert resp["result"]["isError"] is False
+
+
+def test_desktop_shot_returns_an_image_block_and_metadata_without_the_data_url():
+    edge = _StubEdge({"success": True, "dataUrl": "data:image/png;base64,QUJD", "format": "png",
+                      "monitor": 1, "view": [1280, 720], "display": [1920, 1080], "scale": 0.6667, "space": "view"})
+    content = _call(edge, "desktop_shot", {})["result"]["content"]
+    assert content[0] == {"type": "image", "data": "QUJD", "mimeType": "image/png"}
+    assert "dataUrl" not in content[1]["text"] and '"space": "view"' in content[1]["text"]
+
+
+def test_desktop_fast_shot_is_jpeg_content():
+    edge = _StubEdge({"success": True, "dataUrl": "data:image/jpeg;base64,QUJD", "format": "jpeg", "space": "view"})
+    content = _call(edge, "desktop_shot", {"fast": True})["result"]["content"]
+    assert content[0]["mimeType"] == "image/jpeg"
+
+
+def test_desktop_unsupported_is_an_error_result():
+    edge = _StubEdge({"success": False, "code": "desktop_unsupported", "error": "desktop control runs on Windows only"})
+    assert _call(edge, "desktop_screen", {})["result"]["isError"] is True

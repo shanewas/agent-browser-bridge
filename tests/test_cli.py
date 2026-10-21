@@ -630,3 +630,100 @@ def test_cli_check_radio_dispatches_ref_selector_target(tmp_path, monkeypatch):
     assert cli.main(["--json", "check-radio", "Option A"]) == 0
     assert calls[-1][1]["params"]["target"] == "Option A"
 
+
+
+def _recording_cli(monkeypatch, tmp_path, reply=b'{"success": true}'):
+    """Run cli.main against a fake daemon socket; returns the request bodies it sent."""
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setenv("EDGE_BRIDGE_PORT", str(free_port()))
+    monkeypatch.delenv("EDGE_BRIDGE_SESSION", raising=False)
+    config.ensure_token()
+    bodies = []
+
+    class RecordingConnection:
+        sock = None
+
+        def request(self, method, url, body=None, headers=None):
+            bodies.append(json.loads(body))
+
+        def getresponse(self):
+            return io.BytesIO(reply)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(client, "_probe_status", lambda port: {"bridge_running": True})
+    monkeypatch.setattr(Edge, "_get_connection", lambda self, timeout=None: RecordingConnection())
+    return bodies
+
+
+def test_cli_desktop_click_posts_the_action(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["desktop", "click", "640,360", "--button", "right", "--modifiers", "ctrl", "--json"]) == 0
+    assert bodies[0]["action"] == "desktop_click"
+    assert bodies[0]["params"] == {"at": [640, 360], "button": "right", "modifiers": "ctrl"}
+
+
+def test_cli_desktop_hold_asks_for_its_whole_timeout(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["desktop", "hold", "shift", "30", "--json"]) == 0
+    assert bodies[0]["params"] == {"combo": "shift", "seconds": 30.0} and bodies[0]["timeout"] == 35
+
+
+def _shot_reply(fmt="png", data=b"\x89PNG fake"):
+    import base64
+    return json.dumps({"success": True, "dataUrl": f"data:image/{fmt};base64," + base64.b64encode(data).decode(),
+                       "format": fmt, "monitor": 2, "view": [1280, 720], "display": [1920, 1080],
+                       "scale": 0.6667, "space": "view"}).encode()
+
+
+def test_cli_desktop_shot_writes_the_file(tmp_path, monkeypatch, capsys):
+    _recording_cli(monkeypatch, tmp_path, reply=_shot_reply())
+    out = tmp_path / "look.png"
+    assert cli.main(["desktop", "shot", str(out), "--json"]) == 0
+    assert out.read_bytes() == b"\x89PNG fake"
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["path"] == str(out.resolve()) and "dataUrl" not in printed and printed["view"] == [1280, 720]
+
+
+def test_cli_desktop_shot_failure_writes_nothing_and_exits_1(tmp_path, monkeypatch):
+    _recording_cli(monkeypatch, tmp_path, reply=b'{"success": false, "code": "desktop_unsupported", "error": "x"}')
+    out = tmp_path / "no.png"
+    assert cli.main(["desktop", "shot", str(out), "--json"]) == 1
+    assert not out.exists()
+
+
+def test_cli_desktop_shot_default_path_is_the_data_dir(tmp_path, monkeypatch, capsys):
+    bodies = _recording_cli(monkeypatch, tmp_path, reply=_shot_reply("jpeg", b"j"))
+    assert cli.main(["desktop", "shot", "--fast", "--no-cursor"]) == 0
+    assert bodies[0]["params"] == {"fast": True, "cursor": False}
+    assert (tmp_path / "shot.jpg").read_bytes() == b"j"
+    assert "Saved shot:" in capsys.readouterr().out
+
+
+def test_cli_desktop_usage_errors_exit_2(tmp_path, monkeypatch):
+    _recording_cli(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit) as e:
+        cli.main(["desktop", "click", "640"])
+    assert e.value.code == 2
+
+
+def test_cli_desktop_common_flags_forwarded(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["desktop", "scroll", "down", "5", "--at", "10,20", "--monitor", "all", "--space", "display",
+                     "--max-edge", "800", "--json"]) == 0
+    assert bodies[0]["params"] == {"direction": "down", "amount": 5, "at": [10, 20], "monitor": "all",
+                                   "space": "display", "maxEdge": 800}
+
+
+def test_cli_desktop_screen_and_cursor_print_human_lines(tmp_path, monkeypatch, capsys):
+    reply = json.dumps({"success": True, "monitors": [{"monitor": 1, "origin": [0, 0], "size": [1920, 1080], "primary": True}],
+                        "monitor": 1, "view": [1280, 720], "display": [1920, 1080], "scale": 0.6667, "space": "view"}).encode()
+    _recording_cli(monkeypatch, tmp_path, reply=reply)
+    assert cli.main(["desktop", "screen"]) == 0
+    assert "[1] 1920x1080 at 0,0 primary" in capsys.readouterr().out
+    reply = json.dumps({"success": True, "view": [1, 2], "display": [3, 4], "monitor": 1,
+                        "pointer_on_monitor": 1, "scale": 0.5}).encode()
+    _recording_cli(monkeypatch, tmp_path, reply=reply)
+    assert cli.main(["desktop", "cursor"]) == 0
+    assert "view 1,2 display 3,4 on monitor 1" in capsys.readouterr().out

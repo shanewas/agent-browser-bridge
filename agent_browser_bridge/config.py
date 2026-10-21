@@ -11,6 +11,9 @@ from pathlib import Path
 
 DEFAULT_PORT = 18999
 TOKEN_HEADER = "X-Bridge-Token"
+# The oldest extension this daemon drives in full. Store review lags a release by days, so version
+# checks compare against this floor, not against the daemon's own version.
+MIN_EXTENSION_VERSION = "2.6.0"
 MAX_CALL_TIMEOUT_SEC = 120.0
 
 

@@ -103,6 +103,12 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `exhausted_fallback` | ref→text→scan→coords all failed | read `tried`, snapshot, new approach |
 | `history_failed` | history query failed in the extension | report `error`, retry once |
 | `group_failed` | tab-group call failed in the extension | report `error`, check tab IDs |
+| `desktop_unsupported` | desktop action off Windows | use the browser tools; the desktop half is Windows only |
+| `desktop_unavailable` | Pillow missing | ask the user to run `pip install "agent-browser-bridge[desktop]"` |
+| `desktop_busy` | another desktop action holds the lock | retry after a short wait |
+| `desktop_error` | point outside the view, blocked input, capture failed, unknown key | read `error`; take a fresh shot before retrying a coordinate |
+| `desktop_aborted` | the user held Escape | stop and ask |
+| `bad_params` (desktop) | wrong shape or range | fix the param; nothing moved |
 
 ## Setup (once per machine)
 
@@ -165,3 +171,91 @@ Focus is asserted before every write (≤3 tries) and rechecked after the 1st ch
 Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the scan match (exact name, else case-insensitive name, and only when exactly one element matches; substring matches never click), with at most 2 extra scans per call. A scan success reports `ladder.matched: {name, ref}` for the element acted on. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
 
 `tab_busy` means another writer holds your tab's lock (the daemon waits up to 10s for it, never past the call's own timeout). Back off 250ms·2ⁿ with jitter, ≤4 retries, then surface or use another tab.
+
+# Driving the Windows desktop
+
+The same daemon gives you eyes and hands on the Windows desktop: `desktop_shot`, then real
+mouse and keyboard. You supply the judgement: take a screenshot, look at it, decide, act, look
+again. Use the browser tools whenever the target is a web page the extension can reach (refs,
+snapshots and verified writes are faster and safer); use the desktop tools for OS dialogs
+(file choosers, installers, UAC-free system prompts), native applications, and pages the
+extension cannot attach to.
+
+## The loop
+
+1. `desktop_shot` returns the image and its coordinate space:
+   `{"monitor": 2, "view": [1280, 720], "display": [1920, 1080], "scale": 0.6667, "space": "view", ...}`.
+   The CLI form, `agent-bridge desktop shot`, writes the PNG and prints the same fields plus `path`.
+2. Read the image. Decide. Run one action with coordinates read off that image.
+3. Take another shot to confirm the screen changed the way you expected.
+
+Take a screenshot before your first action, always. The desktop is not where you left it.
+
+## Coordinates
+
+**Use the pixel coordinates of the screenshot you were given.** The image is smaller than the
+real display and the daemon scales your coordinates back up. Never convert to display pixels
+yourself; if you hold real display coordinates from elsewhere, pass `space: "display"`.
+
+`view` in the result is the space you work in; its origin is the top left of that display,
+whichever display it is. A point outside the view is refused rather than clamped:
+`desktop_error` with "outside the 1280x720 view" means your coordinate was wrong, not that the
+screen moved. Take a fresh shot and read the position again instead of retrying the number.
+
+A region shot (`region: [x, y, w, h]` in view pixels) comes back with `space: "region"` and its
+pixels are display pixels of the crop, starting at the crop's own corner. Read it for small
+text, then take click coordinates from a full shot.
+
+## More than one display
+
+`desktop_screen` lists displays numbered from 1, left to right, each with its own view
+starting at 0,0, so coordinates never go negative. Every action takes `monitor`; without it the
+display of your last shot is used, falling back to the primary one. `monitor: "all"` captures
+every display as one wide image: use it to find where something is, then shoot that display on
+its own before clicking, because the combined image is too small to read. `desktop_cursor`
+reports `pointer_on_monitor`, which is where the user's pointer is right now.
+
+## Actions
+
+| MCP tool | CLI | What it does |
+|---|---|---|
+| `desktop_shot {region?, cursor?, fast?}` | `agent-bridge desktop shot [out] [--region X,Y,W,H] [--no-cursor] [--fast]` | capture; `fast` is JPEG and softer text |
+| `desktop_screen` | `agent-bridge desktop screen` | displays and the coordinate space, no capture |
+| `desktop_cursor` | `agent-bridge desktop cursor` | pointer position in both spaces |
+| `desktop_click {at, button?, count?, modifiers?}` | `agent-bridge desktop click X,Y [--button right] [--count 2] [--modifiers ctrl+shift]` | click; 2 double-clicks, 3 selects a line (left only) |
+| `desktop_move {at}` | `agent-bridge desktop move X,Y` | move without clicking, to reveal a hover state |
+| `desktop_drag {from, to, modifiers?}` | `agent-bridge desktop drag X1,Y1 X2,Y2` | press, drag, release |
+| `desktop_scroll {direction, amount?, at?}` | `agent-bridge desktop scroll down 3 [--at X,Y]` | wheel at the pointer or at `at` |
+| `desktop_type {text}` | `agent-bridge desktop type "text"` | literal text at the keyboard focus |
+| `desktop_key {combo, repeat?}` | `agent-bridge desktop key ctrl+s [--repeat N]` | press a key or combination |
+| `desktop_hold {combo, seconds}` | `agent-bridge desktop hold shift 2` | hold a key down |
+| (none) | `agent-bridge desktop wait 1.5` | pause; MCP agents take another shot instead |
+
+Every action also takes `monitor`, `space` and `maxEdge`. Key names follow the X11 style of the
+computer-use toolset: `Return`, `Escape`, `Tab`, `BackSpace`, `Delete`, `Up`, `Down`, `Left`,
+`Right`, `Home`, `End`, `Page_Up`, `Page_Down`, `F1` to `F24`, and combinations like `ctrl+s`,
+`alt+Tab`, `ctrl+shift+Escape`.
+
+## Working well
+
+- Prefer keyboard routes over clicking when one exists: `desktop_key "ctrl+s"` beats hunting for
+  a toolbar button; the Start menu is `key "super"`, `type "notepad"`, `key "Return"`.
+- Hover-only controls (a trash icon that appears on mouse-over): `desktop_move` to the row, wait
+  a moment, `desktop_shot`, then `desktop_click` at the revealed spot. Keep them as separate steps.
+- After clicking something that opens a window or menu, take another shot before acting again. A
+  click on a menu item that has not rendered yet lands on whatever was underneath.
+- When text is too small to read, capture just that part with `region` instead of guessing.
+- `success: false` means the action did not happen. Read `code` and `error`, fix the input and
+  try again rather than moving on as though it worked.
+
+## Care
+
+This moves the user's real pointer and types on their real keyboard, on the machine they are
+sitting at. It can click anything they can click. Ask before you start acting unless the user
+has already told you to go ahead, and say what you are about to do. Stay inside the task you
+were given: do not close windows, dismiss dialogs or save files the task did not mention. If the
+screen is not what you expected, stop and describe what you see rather than clicking to find
+out. The user can hold Escape to make the next action refuse with `desktop_aborted`.
+
+An elevated daemon (started from an admin shell) cannot send input into unelevated windows and
+the failure is silent; `agent-bridge doctor` shows the elevation state for both halves.

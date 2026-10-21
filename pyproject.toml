@@ -15,7 +15,7 @@ maintainers = [
     { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
 requires-python = ">=3.10"
-keywords = ["edge", "chrome", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time", "mcp"]
+keywords = ["edge", "chrome", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time", "mcp", "desktop", "computer-use", "screenshot"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -31,6 +31,10 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: Browsers",
 ]
 dependencies = []
+
+[project.optional-dependencies]
+# The Windows desktop half (agent-bridge desktop ..., desktop_* tools) needs Pillow for PNG/JPEG and resizing.
+desktop = ["pillow>=10"]
 
 [project.urls]
 Homepage = "https://github.com/shanewas/agent-browser-bridge"

@@ -1,5 +1,31 @@
 # Changelog
 
+## 4.0.0
+
+The daemon now drives the Windows desktop as well as the browser. `doppelhand` has been
+absorbed: its screenshot, mouse and keyboard layers live in `agent_browser_bridge.desktop`
+and run inside the bridge daemon, so one install, one token and one process cover both.
+
+- CLI: `agent-bridge desktop shot|screen|cursor|click|move|drag|scroll|type|key|hold|wait`,
+  with `--monitor`, `--space`, `--max-edge`, `--region`, `--fast`, `--no-cursor`, `--button`,
+  `--count`, `--modifiers`, `--repeat` and `--at` as doppelhand had them. `shot` writes the
+  image (default `<data dir>/shot.png`) and prints its coordinate space.
+- MCP: `desktop_shot`, `desktop_screen`, `desktop_cursor`, `desktop_click`, `desktop_move`,
+  `desktop_drag`, `desktop_scroll`, `desktop_type`, `desktop_key`, `desktop_hold`.
+  `desktop_shot` returns the image inline plus `view`, `display`, `scale`, `space`, `monitor`.
+- Daemon: `desktop_*` actions on `POST /exec`, behind the same token, Host and browser-context
+  checks as every browser action; they also work as `batch` steps. The DXGI duplication stays
+  open between calls. Codes: `desktop_unsupported` (not Windows), `desktop_unavailable`
+  (Pillow missing), `desktop_busy`, `desktop_error`, `desktop_aborted` (Escape held), `bad_params`.
+- Install: `pip install "agent-browser-bridge[desktop]"` adds Pillow, the one optional
+  dependency. Without it the browser half works as before and desktop actions say what to install.
+- `doctor` gains a `desktop` check and reports elevation for both halves: an elevated daemon
+  cannot pair with an unelevated Edge nor send input into unelevated windows.
+- An extension at or above the supported floor (2.6.0) that answers `unknown_action` is no
+  longer reported as outdated; only an older extension is.
+- Removed: the `Doppelhand` HTTP client, `DOPPELHAND_URL` and `DOPPELHAND_TOKEN`, and the
+  doppelhand recipe. The `doppelhand` package itself will point here from its next release.
+
 ## 3.0.0
 
 Edge Agent Bridge is now **Agent Browser Bridge**. Same daemon, same extension, same
