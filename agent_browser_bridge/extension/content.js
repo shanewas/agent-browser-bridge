@@ -1,4 +1,4 @@
-// Edge Agent Bridge - content script, runs in every frame.
+// Agent Browser Bridge - content script, runs in every frame.
 // 1. Frame offset handshake: a child frame posts {__eab:"whoami"} to its parent; the parent
 //    finds the <iframe> whose contentWindow is the sender (light DOM and shadow roots) and
 //    replies with that iframe's content-box origin in top-frame CSS pixels plus the child's

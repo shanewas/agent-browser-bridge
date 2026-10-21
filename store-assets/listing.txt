@@ -15,5 +15,5 @@ own mouse and keyboard.
 
 Everything runs on your own machine through a local bridge: no cloud
 relay, no accounts, no telemetry. Install the free companion package
-(pip install edge-agent-bridge) and the extension connects to it
+(pip install agent-browser-bridge) and the extension connects to it
 automatically.

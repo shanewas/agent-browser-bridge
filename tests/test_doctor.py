@@ -1,10 +1,12 @@
-"""Tests for edge-bridge doctor, logs, and MCP registration status."""
+"""Tests for agent-bridge doctor, logs, and MCP registration status."""
+import importlib.metadata
 import json
 import os
 import shutil
 import sys
 import sysconfig
 import time
+import types
 import pytest
 from tests.fake_extension import FakeExtension
 from tests.support import free_port
@@ -13,7 +15,7 @@ from tests.support import run_cli
 
 def _stub_env(tmp_path, daemon):
     """Staged PATH: tmp stub launcher first, scripts dir present, ambient kept."""
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir(exist_ok=True)
     stub = stub_dir / launcher_name
@@ -28,7 +30,7 @@ def _stub_env(tmp_path, daemon):
 
 def _doctor_json_in_process(monkeypatch, tmp_path, capsys):
     """Run _handle_doctor in-process (daemon down) for monkeypatched checks."""
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(home))
@@ -70,7 +72,7 @@ def test_doctor_json_shape_hides_token(daemon, tmp_path):
     assert body["success"] is True
     assert [c["name"] for c in body["checks"]] == [
         "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "pid",
-        "launcher", "path", "elevation", "mcp"]
+        "launcher", "package", "path", "elevation", "mcp"]
     token = (daemon.home / "token").read_text(encoding="utf-8").strip()
     assert token not in out
     ext.close()
@@ -125,7 +127,7 @@ def test_doctor_daemon_down(tmp_path):
     assert body["success"] is False
     by_name = {c["name"]: c for c in body["checks"]}
     assert by_name["daemon"]["ok"] is False
-    assert "edge-bridge daemon start" in by_name["daemon"]["fix"]
+    assert "agent-bridge daemon start" in by_name["daemon"]["fix"]
     assert by_name["token"]["ok"] is False
     code, out, err = run_cli(["doctor"], env=env)
     assert code == 1 and "[FAIL] daemon:" in out
@@ -142,7 +144,20 @@ def test_doctor_stale_pid(tmp_path):
     by_name = {c["name"]: c for c in json.loads(out)["checks"]}
     assert by_name["pid"]["ok"] is False
     assert "stale pid file" in by_name["pid"]["detail"]
-    assert "edge-bridge daemon restart" in by_name["pid"]["fix"]
+    assert "agent-bridge daemon restart" in by_name["pid"]["fix"]
+
+
+def test_doctor_and_status_accept_the_store_extension_during_review(daemon, tmp_path):
+    # 3.0.0 changes no protocol, so the stores' 2.6.1 extension must not read as outdated.
+    ext = FakeExtension(daemon.port, version="2.6.1", handler=_tabs_handler).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["versions"]["ok"] is True, checks["versions"]
+    code, out, err = run_cli(["status"], env=env)
+    assert code == 0 and "Fix: update extension" not in out, out
+    ext.close()
 
 
 def test_doctor_outdated_extension(daemon):
@@ -186,7 +201,7 @@ def test_logs_missing(tmp_path):
 
 
 def test_registration_status_reads_json_configs(tmp_path):
-    from edge_agent_bridge.setup import registration_status
+    from agent_browser_bridge.setup import registration_status
     cursor_cfg = tmp_path / "cursor-mcp.json"
     cursor_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": "edge-bridge", "args": ["mcp"]}}}),
                           encoding="utf-8")
@@ -206,12 +221,12 @@ def test_registration_status_reads_json_configs(tmp_path):
 
 
 def test_registration_status_new_entry_and_stale_interpreter(tmp_path):
-    from edge_agent_bridge.setup import registration_status
+    from agent_browser_bridge.setup import registration_status
     good_cfg = tmp_path / "cursor-mcp.json"
-    good_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+    good_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}}}),
                         encoding="utf-8")
     stale_cfg = tmp_path / "windsurf-mcp.json"
-    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_python"), "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_python"), "args": ["-m", "agent_browser_bridge", "mcp"]}}}),
                          encoding="utf-8")
     detected = {
         "cli": {},
@@ -223,29 +238,77 @@ def test_registration_status_new_entry_and_stale_interpreter(tmp_path):
     assert registration_status(detected) == {"cursor": "registered", "windsurf": "stale"}
 
 
+def test_registration_status_accepts_legacy_entries(tmp_path, monkeypatch):
+    from agent_browser_bridge.setup import registration_status
+    legacy_module = tmp_path / "cursor.json"
+    legacy_module.write_text(json.dumps({"mcpServers": {"edge": {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}}}), encoding="utf-8")
+    legacy_cmd = tmp_path / "windsurf.json"
+    legacy_cmd.write_text(json.dumps({"mcpServers": {"edge": {"command": "edge-bridge", "args": ["mcp"]}}}), encoding="utf-8")
+    detected = {"cli": {}, "json": {"cursor": {"path": str(legacy_module), "found": True},
+                                     "windsurf": {"path": str(legacy_cmd), "found": True}}}
+    assert registration_status(detected) == {"cursor": "registered", "windsurf": "registered"}
+
+
+def _no_shim(name):
+    raise importlib.metadata.PackageNotFoundError(name)
+
+
+def test_rename_notice_only_when_shim_installed(monkeypatch):
+    from agent_browser_bridge import cli
+    monkeypatch.setattr(importlib.metadata, "distribution", _no_shim)
+    assert cli._rename_notice() is None
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="3.0.0"))
+    assert cli._rename_notice().endswith("pip install -U agent-browser-bridge")
+
+
+def test_rename_notice_when_old_dist_sits_next_to_new(monkeypatch):
+    # pip install agent-browser-bridge into an env that still has 2.6.1 leaves both; edge-bridge then runs 2.6.1.
+    from agent_browser_bridge import cli
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="2.6.1"))
+    notice = cli._rename_notice()
+    assert "2.6.1 is still installed" in notice and "pip install -U edge-agent-bridge" in notice, notice
+
+
+def test_doctor_package_check_present(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="3.0.0"))
+    rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
+    assert by_name["package"]["ok"] is True
+    assert by_name["package"]["detail"].startswith("agent-browser-bridge 3.0.0; edge-agent-bridge is now")
+
+
+def test_status_json_has_no_rename_line(monkeypatch, capsys):
+    from agent_browser_bridge import cli
+    from agent_browser_bridge.client import Edge
+    monkeypatch.setattr(Edge, "status", lambda self: {"success": True, "bridge_running": True, "pid": 1})
+    monkeypatch.setattr(cli, "_rename_notice", lambda: "edge-agent-bridge is now agent-browser-bridge")
+    assert cli.main(["--json", "status"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["success"] is True
+
+
 def test_doctor_mcp_check_fails_on_stale_registration(monkeypatch, tmp_path, capsys):
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     stale_cfg = tmp_path / "cursor-mcp.json"
-    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_venv" / "python"), "args": ["-m", "edge_agent_bridge", "mcp"]}}}),
+    stale_cfg.write_text(json.dumps({"mcpServers": {"edge": {"command": str(tmp_path / "deleted_venv" / "python"), "args": ["-m", "agent_browser_bridge", "mcp"]}}}),
                          encoding="utf-8")
     detected = {
         "cli": {},
         "json": {"cursor": {"path": stale_cfg, "found": True}},
     }
-    monkeypatch.setattr("edge_agent_bridge.setup.registration_status", lambda: {"cursor": "stale"})
-    monkeypatch.setattr("edge_agent_bridge.cli._is_elevated", lambda: False)
+    monkeypatch.setattr("agent_browser_bridge.setup.registration_status", lambda: {"cursor": "stale"})
+    monkeypatch.setattr("agent_browser_bridge.cli._is_elevated", lambda: False)
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert rc == 1
     assert by_name["mcp"]["ok"] is False
     assert "cursor=stale" in by_name["mcp"]["detail"]
-    assert "run edge-bridge setup to re-register" in by_name["mcp"]["fix"]
+    assert "run agent-bridge setup to re-register" in by_name["mcp"]["fix"]
 
 
 
 def test_doctor_launcher_stale_install(tmp_path):
     scripts = sysconfig.get_path("scripts")
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     if os.path.exists(os.path.join(scripts, launcher_name)):
         pytest.skip("launcher installed in scripts dir; stale state unstaging")
     port = free_port()
@@ -258,14 +321,14 @@ def test_doctor_launcher_stale_install(tmp_path):
     by_name = {c["name"]: c for c in json.loads(out)["checks"]}
     assert by_name["launcher"]["ok"] is False
     assert "stale install" in by_name["launcher"]["detail"]
-    assert by_name["launcher"]["fix"] == "py -m pip install --force-reinstall edge-agent-bridge"
+    assert by_name["launcher"]["fix"] == "py -m pip install --force-reinstall agent-browser-bridge"
     assert by_name["path"]["ok"] is True
 
 
 def test_doctor_path_red_when_scripts_dir_off_path(tmp_path):
     stub_dir = tmp_path / "stubbin"
     stub_dir.mkdir()
-    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    launcher_name = "agent-bridge.exe" if sys.platform == "win32" else "agent-bridge"
     stub = stub_dir / launcher_name
     stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     stub.chmod(0o755)
@@ -280,7 +343,7 @@ def test_doctor_path_red_when_scripts_dir_off_path(tmp_path):
     assert by_name["launcher"]["ok"] is True
     assert by_name["path"]["ok"] is False
     assert sysconfig.get_path("scripts") in by_name["path"]["detail"]
-    assert by_name["path"]["fix"] == "edge-bridge setup --fix-path"
+    assert by_name["path"]["fix"] == "agent-bridge setup --fix-path"
 
 
 def test_doctor_path_green_with_trailing_separator(tmp_path):
@@ -296,7 +359,7 @@ def test_doctor_path_green_with_trailing_separator(tmp_path):
 
 
 def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_is_elevated", lambda: True)
@@ -309,7 +372,7 @@ def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
 
 
 def test_doctor_elevation_green_when_unelevated(monkeypatch, tmp_path, capsys):
-    from edge_agent_bridge import cli
+    from agent_browser_bridge import cli
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_is_elevated", lambda: False)
@@ -327,7 +390,7 @@ def test_doctor_elevation_not_applicable_off_windows(monkeypatch, tmp_path, caps
 
 def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
     from tests.support import DaemonHandle
-    from edge_agent_bridge import __version__
+    from agent_browser_bridge import __version__
     port = free_port()
     daemon = DaemonHandle(port, tmp_path).start(extra_env={"EDGE_BRIDGE_TEST_DAEMON_VERSION": "2.4.0"})
     try:
@@ -337,7 +400,7 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
         code, out, err = run_cli(["--json", "doctor"], env=env)
         checks = {c["name"]: c for c in json.loads(out)["checks"]}
         assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
-        assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+        assert "agent-bridge daemon restart" in checks["versions"]["fix"]
 
         ext = FakeExtension(port, version="2.5.0", handler=_tabs_handler).connect().run()
         try:
@@ -345,14 +408,14 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
             code, out, err = run_cli(["status"], env=env)
             assert code == 0
             assert f"CLI {__version__}, daemon 2.4.0, extension 2.5.0" in out
-            assert "edge-bridge daemon restart" in out
+            assert "agent-bridge daemon restart" in out
 
             code, out, err = run_cli(["--json", "doctor"], env=env)
             assert code == 1
             checks = {c["name"]: c for c in json.loads(out)["checks"]}
             assert checks["versions"]["ok"] is False
             assert "differs from daemon 2.4.0" in checks["versions"]["detail"]
-            assert "edge-bridge daemon restart" in checks["versions"]["fix"]
+            assert "agent-bridge daemon restart" in checks["versions"]["fix"]
         finally:
             ext.close()
     finally:
@@ -360,7 +423,7 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
 
 
 def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
-    ext = FakeExtension(daemon.port, version="2.9.9", handler=_tabs_handler).connect().run()
+    ext = FakeExtension(daemon.port, version="3.9.9", handler=_tabs_handler).connect().run()
     time.sleep(0.3)
     env = _stub_env(tmp_path, daemon)
     code, out, err = run_cli(["--json", "doctor"], env=env)

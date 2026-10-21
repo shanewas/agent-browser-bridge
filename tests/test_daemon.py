@@ -5,7 +5,7 @@ import threading
 import time
 import pytest
 from tests.fake_extension import FakeExtension
-from edge_agent_bridge import config
+from agent_browser_bridge import config
 from tests.support import DaemonHandle, free_port
 
 
@@ -28,7 +28,7 @@ def _wait_closed(ext, timeout=5):
 def test_result_arriving_after_timeout_is_dropped(tmp_path):
     # The result lands in state.results after the wait has already timed out: the daemon must
     # answer timeout and pop it, or every late result stays in memory for the daemon's lifetime.
-    from edge_agent_bridge.bridge import BridgeRequestHandler, BridgeState
+    from agent_browser_bridge.bridge import BridgeRequestHandler, BridgeState
 
     state = BridgeState(port=0, home=tmp_path, token="t")
 
@@ -59,7 +59,7 @@ def test_second_daemon_on_busy_port_exits_1(daemon):
     from tests.support import ROOT
     first_pid = (daemon.home / "bridge.pid").read_text(encoding="utf-8")
     env = dict(os.environ, EDGE_BRIDGE_HOME=str(daemon.home), EDGE_BRIDGE_PORT=str(daemon.port))
-    res = subprocess.run([sys.executable, "-u", "-m", "edge_agent_bridge.bridge", "--port", str(daemon.port)],
+    res = subprocess.run([sys.executable, "-u", "-m", "agent_browser_bridge.bridge", "--port", str(daemon.port)],
                          cwd=ROOT, env=env, capture_output=True, timeout=30)
     assert res.returncode == 1
     assert "Daemon crashed:" in (daemon.home / "bridge.log").read_text(encoding="utf-8")
@@ -118,7 +118,7 @@ def test_status_fields(daemon, fake_ext):
     for k in ("bridge_running", "daemon_version", "extension_version", "extension_outdated",
               "extension_connected", "websocket_active", "last_seen_seconds_ago", "pending", "pairing_required"):
         assert k in st
-    from edge_agent_bridge import __version__
+    from agent_browser_bridge import __version__
     assert st["extension_version"] == __version__ and st["extension_outdated"] is False and st["websocket_active"] is True
 
 

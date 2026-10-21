@@ -1,4 +1,4 @@
-"""Tests for edge_agent_bridge.client."""
+"""Tests for agent_browser_bridge.client."""
 import http.client
 import json
 import os
@@ -6,8 +6,8 @@ import threading
 import time
 from pathlib import Path
 import pytest
-from edge_agent_bridge import config
-from edge_agent_bridge.client import Edge, EdgeClient, send_cmd, ensure_bridge_running
+from agent_browser_bridge import config
+from agent_browser_bridge.client import Edge, EdgeClient, send_cmd, ensure_bridge_running
 from tests.fake_extension import FakeExtension
 from tests.support import DaemonHandle, free_port
 
@@ -227,7 +227,7 @@ def test_snapshot_sends_max_nodes(daemon, monkeypatch):
 
 
 def test_wsl_to_windows_table():
-    from edge_agent_bridge.client import _wsl_to_windows
+    from agent_browser_bridge.client import _wsl_to_windows
     assert _wsl_to_windows("/mnt/c/tmp/spec.pdf") == "C:\\tmp\\spec.pdf"
     assert _wsl_to_windows("/mnt/D/a/b") == "D:\\a\\b"
     assert _wsl_to_windows("C:\\tmp\\spec.pdf") == "C:\\tmp\\spec.pdf"
@@ -238,7 +238,7 @@ def test_wsl_to_windows_table():
 
 
 def test_upload_missing_file_errors_locally(tmp_path):
-    from edge_agent_bridge.client import _wsl_to_windows
+    from agent_browser_bridge.client import _wsl_to_windows
     edge = Edge(port=1, auto_start=False)
     missing = str(tmp_path / "nope.pdf")
     r = edge.upload(ref="e1", files=[missing])

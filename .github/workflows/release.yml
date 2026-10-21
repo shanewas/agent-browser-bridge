@@ -38,7 +38,7 @@ jobs:
 
       - id: version
         run: |
-          v=$(python -c "import edge_agent_bridge; print(edge_agent_bridge.__version__)")
+          v=$(python -c "import agent_browser_bridge; print(agent_browser_bridge.__version__)")
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "version $v"
 
@@ -46,7 +46,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          published=$(curl -fsSL https://pypi.org/pypi/edge-agent-bridge/json | python -c "import json,sys;print('\n'.join(json.load(sys.stdin)['releases']))" || true)
+          published=$(curl -fsSL https://pypi.org/pypi/agent-browser-bridge/json | python -c "import json,sys;print('\n'.join(json.load(sys.stdin)['releases']))" || true)
           if echo "$published" | grep -qx "$VERSION"; then
             echo "new=false" >> "$GITHUB_OUTPUT"
             echo "$VERSION is already on PyPI, nothing to release"
@@ -63,7 +63,7 @@ jobs:
             echo "changed=$FORCED" >> "$GITHUB_OUTPUT"
           elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- ':(exclude)edge_agent_bridge/extension/manifest.json' edge_agent_bridge/extension; then
+          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- ':(exclude)agent_browser_bridge/extension/manifest.json' agent_browser_bridge/extension; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -83,7 +83,11 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install build
       - run: python -m build --sdist --wheel
+      # The edge-agent-bridge shim is 3.0.0 forever; later runs rebuild it and PyPI ignores the duplicate.
+      - run: python -m build --sdist --wheel --outdir dist shim
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
   store:
     needs: gate
@@ -104,7 +108,7 @@ jobs:
           VERSION: ${{ needs.gate.outputs.version }}
         run: |
           python scripts/publish_extension.py \
-            "dist/edge-agent-bridge-extension-$VERSION.zip" \
+            "dist/agent-browser-bridge-extension-$VERSION.zip" \
             --notes "Automated submission of $VERSION from ${{ github.sha }}"
 
   chrome:
@@ -119,7 +123,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python scripts/build_extension.py --store chrome
+      - run: python scripts/build_extension.py
       - name: Submit to the Chrome Web Store
         env:
           CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
@@ -128,7 +132,7 @@ jobs:
           CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
           CHROME_ITEM_ID: ${{ secrets.CHROME_ITEM_ID }}
           VERSION: ${{ needs.gate.outputs.version }}
-        run: python scripts/publish_chrome.py "dist/edge-agent-bridge-extension-chrome-$VERSION.zip"
+        run: python scripts/publish_chrome.py "dist/agent-browser-bridge-extension-$VERSION.zip"
 
   github_release:
     needs: [gate, pypi]
@@ -150,7 +154,7 @@ jobs:
           VERSION: ${{ needs.gate.outputs.version }}
         run: |
           gh release create "v$VERSION" \
-            dist/edge_agent_bridge-$VERSION*.whl \
-            dist/edge_agent_bridge-$VERSION*.tar.gz \
-            dist/edge-agent-bridge-extension-$VERSION.zip \
+            dist/agent_browser_bridge-$VERSION*.whl \
+            dist/agent_browser_bridge-$VERSION*.tar.gz \
+            dist/agent-browser-bridge-extension-$VERSION.zip \
             --title "v$VERSION" --generate-notes

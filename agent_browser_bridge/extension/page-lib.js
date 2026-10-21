@@ -1,4 +1,4 @@
-// Edge Agent Bridge - shared page helpers, injected once per document into the extension's
+// Agent Browser Bridge - shared page helpers, injected once per document into the extension's
 // isolated world (chrome.scripting.executeScript with files). Functions in page.js reach
 // them through window.__eabLib. Idempotent: re-injection is a no-op.
 (function () {

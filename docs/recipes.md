@@ -8,7 +8,7 @@ Short playbooks for flows that cost real sessions. All assume a pinned
 `upload` pierces open shadow roots and temp-reveals hidden inputs itself:
 
 ```bash
-edge-bridge upload "Choose File" C:\path\cv.docx --tab 1361124478
+agent-bridge upload "Choose File" C:\path\cv.docx --tab 1361124478
 ```
 
 Rules that still hold: target the label or button near the input; JS
@@ -19,8 +19,8 @@ root or is created on click — click the button first, then retry.
 ## Long JS without shell quoting
 
 ```bash
-edge-bridge eval --file probe.js --tab 1361124478
-cat probe.js | edge-bridge eval --file - --tab 1361124478
+agent-bridge eval --file probe.js --tab 1361124478
+cat probe.js | agent-bridge eval --file - --tab 1361124478
 ```
 
 `--file` also avoids the 8 KiB CLI arg ceilings on some shells.
@@ -30,7 +30,7 @@ cat probe.js | edge-bridge eval --file - --tab 1361124478
 When no DOM input exists at all (custom dropzone with no `<input type=file>`):
 
 ```python
-from edge_agent_bridge import Edge, Doppelhand
+from agent_browser_bridge import Edge, Doppelhand
 edge = Edge(tab_id=1361124478)
 edge.click("Upload resume")          # trusted click opens the OS dialog
 dh = Doppelhand(token="...")         # or DOPPELHAND_TOKEN env
@@ -50,7 +50,7 @@ Captcha tokens expire in ~2 minutes. Chain solve→submit in one `run` call
 instead of separate CLI invocations:
 
 ```bash
-edge-bridge run steps.json --tab 1361124478
+agent-bridge run steps.json --tab 1361124478
 ```
 
 where `steps.json` is `[{action, params}, ...]` (use `-` for stdin).

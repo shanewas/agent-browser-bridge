@@ -1,4 +1,4 @@
-"""Setup and configuration helpers for registering Edge Agent Bridge with agent clients.
+"""Setup and configuration helpers for registering Agent Browser Bridge with agent clients.
 
 Detects local agent clients (Claude Code, Gemini, Codex, Cursor, Windsurf, VS Code),
 manages mcpServers JSON configuration with automatic backups, and runs CLI registration.
@@ -12,8 +12,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+# Registrations written by 2.x name the old module and command; both still run the same server.
+MODULE_NAMES = ("agent_browser_bridge", "edge_agent_bridge")
+COMMAND_NAMES = ("agent-bridge", "edge-bridge")
+
+
 def _server_entry() -> dict:
-    return {"command": sys.executable, "args": ["-m", "edge_agent_bridge", "mcp"]}
+    return {"command": sys.executable, "args": ["-m", "agent_browser_bridge", "mcp"]}
 
 
 SERVER_ENTRY = _server_entry()
@@ -25,19 +30,19 @@ SERVER_KEY = {"cursor": "mcpServers", "windsurf": "mcpServers", "vscode": "serve
 def get_cli_command(client: str, binary_path: str | None = None) -> list[str]:
     base = binary_path or client
     if client == "claude":
-        return [base, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+        return [base, "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"]
     if client == "gemini":
-        return [base, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+        return [base, "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "agent_browser_bridge", "mcp"]
     if client == "codex":
-        return [base, "mcp", "add", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"]
+        return [base, "mcp", "add", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"]
     return [base]
 
 
 # argv rather than a shell string: nothing here reaches a shell interpreter.
 CLI_COMMAND = {
-    "claude": ["claude", "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"],
-    "gemini": ["gemini", "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "edge_agent_bridge", "mcp"],
-    "codex": ["codex", "mcp", "add", "edge", "--", sys.executable, "-m", "edge_agent_bridge", "mcp"],
+    "claude": ["claude", "mcp", "add", "--scope", "user", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"],
+    "gemini": ["gemini", "mcp", "add", "--scope", "user", "edge", sys.executable, "-m", "agent_browser_bridge", "mcp"],
+    "codex": ["codex", "mcp", "add", "edge", "--", sys.executable, "-m", "agent_browser_bridge", "mcp"],
 }
 
 
@@ -169,15 +174,15 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
         if isinstance(entry, dict):
             cmd = entry.get("command")
             args = entry.get("args") or []
-            if cmd == "edge-bridge":
+            if cmd in COMMAND_NAMES:
                 is_edge = True
-            elif isinstance(args, list) and len(args) >= 3 and args[:2] == ["-m", "edge_agent_bridge"] and args[2] == "mcp":
+            elif isinstance(args, list) and len(args) >= 3 and args[0] == "-m" and args[1] in MODULE_NAMES and args[2] == "mcp":
                 is_edge = True
                 if cmd:
                     exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
                     if not exists:
                         is_stale = True
-            elif isinstance(cmd, str) and (cmd.endswith("edge-bridge") or cmd.endswith("edge-bridge.exe")):
+            elif isinstance(cmd, str) and any(cmd.endswith(n) or cmd.endswith(n + ".exe") for n in COMMAND_NAMES):
                 is_edge = True
                 exists = Path(cmd).exists() if Path(cmd).is_absolute() else bool(shutil.which(cmd))
                 if not exists:
@@ -193,7 +198,7 @@ def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str
 
 
 def mcp_config_cli(client: str) -> int:
-    """CLI handler for `edge-bridge mcp-config --client <name>`."""
+    """CLI handler for `agent-bridge mcp-config --client <name>`."""
     print(get_mcp_config(client))
     return 0
 
@@ -203,7 +208,7 @@ HKCU_PATH_LIMIT = 2047
 
 
 def fix_path(yes: bool = False) -> int:
-    """CLI handler for `edge-bridge setup --fix-path`."""
+    """CLI handler for `agent-bridge setup --fix-path`."""
     if sys.platform != "win32":
         print("setup --fix-path is only supported on Windows")
         return 3
@@ -261,8 +266,8 @@ def fix_path(yes: bool = False) -> int:
 
 
 def setup_cli(yes: bool = False) -> int:
-    """CLI handler for `edge-bridge setup`."""
-    print("Edge Agent Bridge Setup — Client Auto-Detection")
+    """CLI handler for `agent-bridge setup`."""
+    print("Agent Browser Bridge Setup — Client Auto-Detection")
     detected = detect_clients()
 
     targets_cli = []
@@ -279,7 +284,7 @@ def setup_cli(yes: bool = False) -> int:
         print("\nNo supported agent clients detected automatically.")
         print("To configure manually, run:")
         for client in ("claude", "cursor", "windsurf", "gemini", "codex", "vscode"):
-            print(f"\n  edge-bridge mcp-config --client {client}")
+            print(f"\n  agent-bridge mcp-config --client {client}")
         return 0
 
     print("\nDetected clients:")
@@ -290,7 +295,7 @@ def setup_cli(yes: bool = False) -> int:
 
     if not yes:
         try:
-            resp = input("\nConfigure detected clients with Edge Agent Bridge MCP server? [y/N]: ").strip().lower()
+            resp = input("\nConfigure detected clients with Agent Browser Bridge MCP server? [y/N]: ").strip().lower()
             if resp not in ("y", "yes"):
                 print("Aborted.")
                 return 0
@@ -317,5 +322,5 @@ def setup_cli(yes: bool = False) -> int:
         else:
             print(f"  Error: {msg}")
 
-    print("\nSetup complete! You can verify daemon status with: edge-bridge status")
+    print("\nSetup complete! You can verify daemon status with: agent-bridge status")
     return 0

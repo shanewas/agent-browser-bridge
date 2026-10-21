@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Welcome to Edge Agent Bridge</title>
+  <title>Welcome to Agent Browser Bridge</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -179,7 +179,7 @@
     <div class="header">
       <img src="icons/icon48.png" alt="Icon">
       <div>
-        <h1>Edge Agent Bridge Setup</h1>
+        <h1>Agent Browser Bridge Setup</h1>
         <div style="font-size: 13px; color: #888;">Connect your browser to AI coding agents</div>
       </div>
     </div>
@@ -195,7 +195,7 @@
     <!-- Success state -->
     <div class="success-panel" id="successPanel">
       <h2>Connected & Ready</h2>
-      <p>The extension is successfully paired with the local Edge Agent Bridge daemon.</p>
+      <p>The extension is successfully paired with the local Agent Browser Bridge daemon.</p>
       <p style="font-size: 13px; color: #ccc;">You can now use your agent (Claude Code, Gemini, Cursor, Codex, etc.) to drive open Edge tabs. Click the extension toolbar icon anytime to view live tabs or inspect logs.</p>
     </div>
 
@@ -204,8 +204,8 @@
       <h2>Version Mismatch</h2>
       <p id="outdatedDesc">The local daemon and browser extension are on different versions.</p>
       <div class="cmd-box">
-        <div class="cmd-text">py -m pip install -U edge-agent-bridge</div>
-        <button class="copy-btn" data-copy="py -m pip install -U edge-agent-bridge">Copy</button>
+        <div class="cmd-text">py -m pip install -U agent-browser-bridge</div>
+        <button class="copy-btn" data-copy="py -m pip install -U agent-browser-bridge">Copy</button>
       </div>
     </div>
 
@@ -217,37 +217,37 @@
       <div class="step">
         <div class="step-title">1. Install or update the Python package</div>
         <div class="cmd-box">
-          <div class="cmd-text">py -m pip install -U edge-agent-bridge</div>
-          <button class="copy-btn" data-copy="py -m pip install -U edge-agent-bridge">Copy</button>
+          <div class="cmd-text">py -m pip install -U agent-browser-bridge</div>
+          <button class="copy-btn" data-copy="py -m pip install -U agent-browser-bridge">Copy</button>
         </div>
       </div>
 
       <div class="step">
         <div class="step-title">2. Start the bridge daemon</div>
         <div class="cmd-box">
-          <div class="cmd-text">py -m edge_agent_bridge daemon start</div>
-          <button class="copy-btn" data-copy="py -m edge_agent_bridge daemon start">Copy</button>
+          <div class="cmd-text">py -m agent_browser_bridge daemon start</div>
+          <button class="copy-btn" data-copy="py -m agent_browser_bridge daemon start">Copy</button>
         </div>
       </div>
 
       <div class="step">
         <div class="step-title">3. Configure your AI agent client (optional)</div>
         <div class="cmd-box">
-          <div class="cmd-text">py -m edge_agent_bridge setup</div>
-          <button class="copy-btn" data-copy="py -m edge_agent_bridge setup">Copy</button>
+          <div class="cmd-text">py -m agent_browser_bridge setup</div>
+          <button class="copy-btn" data-copy="py -m agent_browser_bridge setup">Copy</button>
         </div>
       </div>
 
       <div class="step">
         <div class="step-title">Troubleshooting & Health Check</div>
         <div class="cmd-box">
-          <div class="cmd-text">py -m edge_agent_bridge doctor</div>
-          <button class="copy-btn" data-copy="py -m edge_agent_bridge doctor">Copy</button>
+          <div class="cmd-text">py -m agent_browser_bridge doctor</div>
+          <button class="copy-btn" data-copy="py -m agent_browser_bridge doctor">Copy</button>
         </div>
       </div>
 
       <div class="tip">
-        <strong>PATH-proof commands:</strong> Leading with <code>py -m</code> works even if <code>edge-bridge</code> is not recognized in your terminal. Once the daemon starts, this page will update automatically.
+        <strong>PATH-proof commands:</strong> Leading with <code>py -m</code> works even if <code>agent-bridge</code> is not recognized in your terminal. Once the daemon starts, this page will update automatically.
       </div>
     </div>
   </div>

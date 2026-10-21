@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edge-agent-bridge"
+version = "3.0.0"
+description = "Renamed to agent-browser-bridge. Keeps the edge_agent_bridge import, python -m edge_agent_bridge and the edge-bridge command working."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = ["agent-browser-bridge>=3.0.0"]
+classifiers = ["Development Status :: 7 - Inactive"]
+
+[project.urls]
+"Renamed to" = "https://pypi.org/project/agent-browser-bridge/"
+Repository = "https://github.com/shanewas/agent-browser-bridge"
+
+[project.scripts]
+edge-bridge = "agent_browser_bridge.cli:main"
+edge = "agent_browser_bridge.cli:main"
+
+[tool.setuptools]
+packages = ["edge_agent_bridge"]

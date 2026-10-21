@@ -1,4 +1,4 @@
-// Edge Agent Bridge onboarding: probe daemon status, provide copyable commands.
+// Agent Browser Bridge onboarding: probe daemon status, provide copyable commands.
 
 async function fetchStatus() {
   try {

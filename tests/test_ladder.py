@@ -1,4 +1,4 @@
-from edge_agent_bridge.client import Edge, LADDER_ACTIONS, LADDER_RETRY_CODES, score_element_match
+from agent_browser_bridge.client import Edge, LADDER_ACTIONS, LADDER_RETRY_CODES, score_element_match
 
 
 class ScriptedEdge(Edge):

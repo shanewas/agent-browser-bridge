@@ -21,7 +21,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tests.support import DaemonHandle, edge_binary, free_port  # noqa: E402
-from edge_agent_bridge import config  # noqa: E402
+from agent_browser_bridge import config  # noqa: E402
 
 PAGES = Path(__file__).resolve().parent / "pages"
 

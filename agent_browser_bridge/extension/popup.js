@@ -1,17 +1,17 @@
-// Edge Agent Bridge popup: shows daemon/extension state and the pairing field when the daemon asks for it.
+// Agent Browser Bridge popup: shows daemon/extension state and the pairing field when the daemon asks for it.
 
 const FIXES = {
   extension_offline: "Open Edge and check this popup shows Connected.",
   extension_outdated: "Update the extension from the Edge Add-ons store, or reload it unpacked.",
   tab_not_found: "The tab was closed. Switch to an open tab.",
-  tab_closed: "The session tab closed. Run: edge-bridge switch <tabId>",
-  dialog_open: "A page dialog is waiting. Answer it with: edge-bridge dialog accept|dismiss",
+  tab_closed: "The session tab closed. Run: agent-bridge switch <tabId>",
+  dialog_open: "A page dialog is waiting. Answer it with: agent-bridge dialog accept|dismiss",
   timeout: "The page never settled. Check what is still loading, then retry.",
   tab_busy: "Another command holds this tab. Wait a moment and retry.",
   click_covered: "A sticky overlay covers the target. Dismiss it or scroll the target clear.",
   file_not_found: "The upload path does not exist. Pass an existing file.",
-  file_access_required: "Turn on 'Allow access to file URLs' for Edge Agent Bridge in edge://extensions > Details.",
-  unknown_session: "The session expired (daemon restarted). Run: edge-bridge session start",
+  file_access_required: "Turn on 'Allow access to file URLs' for Agent Browser Bridge in edge://extensions > Details.",
+  unknown_session: "The session expired (daemon restarted). Run: agent-bridge session start",
 };
 
 let lastStatus = null;

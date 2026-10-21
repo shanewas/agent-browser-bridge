@@ -1,6 +1,6 @@
 import threading
 import time
-from edge_agent_bridge import bridge
+from agent_browser_bridge import bridge
 from tests.fake_extension import FakeExtension
 from tests.support import DaemonHandle, free_port
 

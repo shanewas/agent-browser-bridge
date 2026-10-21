@@ -3,7 +3,7 @@ import stat
 import sys
 from pathlib import Path
 
-from edge_agent_bridge import config
+from agent_browser_bridge import config
 
 
 def test_home_override(monkeypatch, tmp_path):

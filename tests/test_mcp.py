@@ -1,4 +1,4 @@
-"""Tests for edge_agent_bridge.mcp server."""
+"""Tests for agent_browser_bridge.mcp server."""
 import json
 import os
 import subprocess
@@ -21,7 +21,7 @@ def mcp_proc(daemon, fake_ext):
         PYTHONUNBUFFERED="1",
     )
     proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "edge_agent_bridge.mcp"],
+        [sys.executable, "-u", "-m", "agent_browser_bridge.mcp"],
         cwd=ROOT,
         env=env,
         stdin=subprocess.PIPE,
@@ -63,7 +63,7 @@ def test_mcp_initialize(mcp_proc):
     assert resp["id"] == 1
     assert resp["result"]["protocolVersion"] == "2025-11-25"
     assert resp["result"]["capabilities"]["tools"] == {}
-    assert resp["result"]["serverInfo"]["name"] == "edge-agent-bridge"
+    assert resp["result"]["serverInfo"]["name"] == "agent-browser-bridge"
 
 
 def test_mcp_notifications_and_ping(mcp_proc):
@@ -123,7 +123,7 @@ def test_mcp_tools_call_pinning(daemon):
         PYTHONUNBUFFERED="1",
     )
     proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "edge_agent_bridge.mcp"],
+        [sys.executable, "-u", "-m", "agent_browser_bridge.mcp"],
         cwd=ROOT,
         env=env,
         stdin=subprocess.PIPE,
@@ -208,7 +208,7 @@ def test_mcp_tool_failure_is_error(daemon):
         PYTHONUNBUFFERED="1",
     )
     proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "edge_agent_bridge.mcp"],
+        [sys.executable, "-u", "-m", "agent_browser_bridge.mcp"],
         cwd=ROOT,
         env=env,
         stdin=subprocess.PIPE,
@@ -252,7 +252,7 @@ def test_request_id_zero_gets_a_response(mcp_proc):
     resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 0, "method": "initialize",
                                "params": {"protocolVersion": "2025-11-25"}})
     assert resp is not None and resp["id"] == 0
-    assert resp["result"]["serverInfo"]["name"] == "edge-agent-bridge"
+    assert resp["result"]["serverInfo"]["name"] == "agent-browser-bridge"
 
 
 def test_tools_list_matches_the_router(mcp_proc):
@@ -292,7 +292,7 @@ def test_snapshot_forwards_mode_and_max_nodes(daemon):
         PYTHONUNBUFFERED="1",
     )
     proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "edge_agent_bridge.mcp"],
+        [sys.executable, "-u", "-m", "agent_browser_bridge.mcp"],
         cwd=ROOT,
         env=env,
         stdin=subprocess.PIPE,

@@ -8,7 +8,7 @@ import threading
 import time
 
 
-from edge_agent_bridge import __version__
+from agent_browser_bridge import __version__
 
 
 class FakeExtension:
