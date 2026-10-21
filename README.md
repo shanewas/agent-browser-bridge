@@ -7,7 +7,6 @@
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/agent-browser-bridge?color=3776AB&logo=python&logoColor=white)](https://pypi.org/project/agent-browser-bridge/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/shanewas/agent-browser-bridge/blob/main/LICENSE)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/shanewas)
-[![Buy Me A Coffee](https://img.shields.io/badge/Donate-Buy%20Me%20A%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/shanewas)
 
 Let an AI agent drive the Microsoft Edge window you already have open, on the active tab on your screen.
 
@@ -265,8 +264,6 @@ Built by Shanewas Ahmed. If it saves you time, sponsorship funds keeping the CDP
 with Chromium releases:
 
 - [GitHub Sponsors](https://github.com/sponsors/shanewas)
-- [Buy Me a Coffee](https://buymeacoffee.com/shanewas)
-- [Ko-fi](https://ko-fi.com/shanewas)
 
 ---
 
