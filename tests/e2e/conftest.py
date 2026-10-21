@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tests.support import DaemonHandle, edge_binary, free_port  # noqa: E402
 from edge_agent_bridge import config  # noqa: E402
+from edge_agent_bridge.cli import _is_elevated  # noqa: E402
 
 PAGES = Path(__file__).resolve().parent / "pages"
 
@@ -107,6 +108,9 @@ def edge(tmp_path_factory, e2e_daemon, staged_extension):
         if os.environ.get("EDGE_BRIDGE_E2E_REQUIRED"):
             pytest.fail("Microsoft Edge not found and EDGE_BRIDGE_E2E_REQUIRED is set")
         pytest.skip("Microsoft Edge not found")
+    if _is_elevated():
+        # Edge de-elevates itself on launch, so an elevated pytest never gets the browser it spawned.
+        pytest.fail("e2e needs an unelevated shell: run pytest from a normal non-admin PowerShell")
     profile = tmp_path_factory.mktemp("eab-profile")
     proc = EdgeProcess(binary, profile, staged_extension, e2e_daemon.port).start()
     # The first Edge launch on a fresh Linux runner takes about 26 s before DevTools is up.
