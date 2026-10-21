@@ -540,3 +540,11 @@ def test_status_uses_the_client_timeout_after_a_long_call(daemon, fake_ext, monk
         assert edge.send("ping", {"timeout": 60000}).get("success") is True
         assert edge.status().get("success") is True
         assert edge._conn.sock.gettimeout() == 7
+
+
+def test_desktop_wait_hold_and_type_count_toward_the_call_timeout():
+    from agent_browser_bridge.client import _browser_wait_ms
+    assert _browser_wait_ms("desktop_hold", {"combo": "shift", "seconds": 30}) == 30000
+    assert _browser_wait_ms("desktop_wait", {"seconds": 2.5}) == 2500
+    assert _browser_wait_ms("desktop_type", {"text": "x" * 4000}) == 80000
+    assert _browser_wait_ms("desktop_click", {"at": [1, 1]}) == 0

@@ -56,7 +56,7 @@ def test_doctor_healthy_tree(daemon, tmp_path):
     code, out, err = run_cli(["doctor"], env=env)
     assert code == 0, out
     assert "FAIL" not in out
-    for name in ("daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "pid",
+    for name in ("daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "desktop", "pid",
                  "launcher", "path", "elevation", "mcp"):
         assert f"[ok  ] {name}:" in out
     ext.close()
@@ -71,7 +71,7 @@ def test_doctor_json_shape_hides_token(daemon, tmp_path):
     body = json.loads(out)
     assert body["success"] is True
     assert [c["name"] for c in body["checks"]] == [
-        "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "pid",
+        "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "desktop", "pid",
         "launcher", "package", "path", "elevation", "mcp"]
     token = (daemon.home / "token").read_text(encoding="utf-8").strip()
     assert token not in out
@@ -273,7 +273,8 @@ def test_doctor_package_check_present(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: types.SimpleNamespace(version="3.0.0"))
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert by_name["package"]["ok"] is True
-    assert by_name["package"]["detail"].startswith("agent-browser-bridge 3.0.0; edge-agent-bridge is now")
+    from agent_browser_bridge import __version__
+    assert by_name["package"]["detail"].startswith(f"agent-browser-bridge {__version__}; edge-agent-bridge is now")
 
 
 def test_status_json_has_no_rename_line(monkeypatch, capsys):
@@ -366,7 +367,7 @@ def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert rc == 1
     assert by_name["elevation"]["ok"] is False
-    assert "per OS user" in by_name["elevation"]["detail"]
+    assert "SendInput" in by_name["elevation"]["detail"]
     assert "unelevated" in by_name["elevation"]["detail"]
     assert by_name["elevation"]["fix"] == "use a normal non-admin PowerShell"
 
@@ -423,7 +424,7 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
 
 
 def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
-    ext = FakeExtension(daemon.port, version="3.9.9", handler=_tabs_handler).connect().run()
+    ext = FakeExtension(daemon.port, version="99.0.0", handler=_tabs_handler).connect().run()
     time.sleep(0.3)
     env = _stub_env(tmp_path, daemon)
     code, out, err = run_cli(["--json", "doctor"], env=env)
@@ -462,3 +463,28 @@ def test_doctor_reports_rejected_instance(daemon, tmp_path):
     ext1.close()
     ext2.close()
 
+
+
+def test_doctor_desktop_green_with_pillow_on_windows(monkeypatch, tmp_path, capsys):
+    from agent_browser_bridge import cli
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_pillow_version", lambda: "10.4.0")
+    rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
+    assert by_name["desktop"] == {"name": "desktop", "ok": True, "detail": "available (Pillow 10.4.0)", "fix": ""}
+
+
+def test_doctor_desktop_red_without_pillow_on_windows(monkeypatch, tmp_path, capsys):
+    from agent_browser_bridge import cli
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_pillow_version", lambda: None)
+    rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
+    assert by_name["desktop"]["ok"] is False
+    assert by_name["desktop"]["fix"] == "pip install agent-browser-bridge[desktop]"
+
+
+def test_doctor_desktop_not_applicable_off_windows(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sys, "platform", "linux")
+    rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
+    assert by_name["desktop"] == {"name": "desktop", "ok": True, "detail": "not applicable (Windows only)", "fix": ""}

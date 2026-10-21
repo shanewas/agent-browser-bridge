@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 
 from . import __version__, config
+from .desktop import Desktop
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_BODY_BYTES = 16 * 1024 * 1024  # 16 MB
@@ -40,6 +41,10 @@ PIN_MUTATING_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
 CLOSING_ACTIONS = frozenset({"tab_close", "close_tab"})
 DEADLINE_MARGIN_SEC = 0.5
 LOCK_IDLE_EVICT_SEC = 3600.0
+
+
+def _is_tab_scoped(action: str) -> bool:
+    return action not in LOCK_EXEMPT_ACTIONS and not action.startswith("desktop_")
 
 logger = logging.getLogger("edge_bridge")
 
@@ -167,6 +172,9 @@ class BridgeState:
         self.cli_pin: int | None = None
         self.cli_pin_closed: bool = False
         self.tab_locks: dict[int, list] = {}
+        # One pointer, one keyboard: desktop actions run one at a time whatever arrives.
+        self.desktop = Desktop()
+        self.desktop_lock = threading.Lock()
 
         self.last_seen: float = 0.0
         self.last_pong: float = 0.0
@@ -577,12 +585,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     err = result.get("error") if isinstance(result, dict) else ""
                     code = result.get("code") if isinstance(result, dict) else ""
                     is_unknown = (isinstance(err, str) and err.startswith("Unknown action")) or code == "unknown_action"
-                    if is_unknown and (state.ext_version is None or parse_version(state.ext_version) < parse_version(state.daemon_version)):
+                    if is_unknown and (state.ext_version is None or parse_version(state.ext_version) < parse_version(config.MIN_EXTENSION_VERSION)):
                         state.extension_outdated = True
                         result = {
                             "success": False,
                             "code": "extension_outdated",
-                            "error": f"Extension {state.ext_version or 'older than 2.0.0'} is connected; daemon {state.daemon_version} needs extension {state.daemon_version} or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."
+                            "error": f"Extension {state.ext_version or 'older than 2.0.0'} is connected; daemon {state.daemon_version} needs extension {config.MIN_EXTENSION_VERSION} or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."
                         }
                     state.results[cmd_id] = result
                     ev = state.pending.pop(cmd_id)
@@ -679,7 +687,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         "error": "Unknown or expired sessionToken. Mint one with session_start."})
                     return
 
-            tab_scoped = action not in LOCK_EXEMPT_ACTIONS
+            tab_scoped = _is_tab_scoped(action)
             if session is not None and tab_scoped and action not in PIN_MUTATING_ACTIONS:
                 with state.lock:
                     closed = session["tabClosed"]
@@ -755,7 +763,20 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if tab_lock is not None:
                 tab_lock.release()
 
+    @staticmethod
+    def _dispatch_desktop(state, action, params, deadline):
+        wait = max(0.0, min(state.lock_timeout_sec, deadline - time.time()))
+        if not state.desktop_lock.acquire(timeout=wait):
+            return ({"success": False, "code": "desktop_busy",
+                     "error": "another desktop action is running; retry shortly"}, 200)
+        try:
+            return (state.desktop.handle(action, params, remaining=deadline - time.time()), 200)
+        finally:
+            state.desktop_lock.release()
+
     def _dispatch_once(self, state, action, params, deadline, tab_scoped):
+        if action.startswith("desktop_"):
+            return BridgeRequestHandler._dispatch_desktop(state, action, params, deadline)
         fwd_params = dict(params)
         if tab_scoped:
             fwd_params["deadlineMs"] = int(max(time.time(), deadline - DEADLINE_MARGIN_SEC) * 1000)
@@ -884,7 +905,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 s_params = merged
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
-            s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS
+            s_tab_scoped = _is_tab_scoped(s_action)
             forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
@@ -957,6 +978,10 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
             server.server_close()
         except Exception:
             pass
+        try:
+            state.desktop.close()
+        except Exception as e:
+            logger.warning("Desktop layer did not close cleanly: %s", e)
         with state.lock:
             if state.ext:
                 try:
