@@ -44,6 +44,26 @@ Results are plain dicts and never raise: off Windows the code is `desktop_unsupp
 Pillow `desktop_unavailable`. Coordinates for any `desktop_click` are view pixels of the last
 `desktop_shot`; take a fresh shot after every change on screen.
 
+## Learn a desktop workflow from the person, then replay it (Windows)
+
+Let the person show the task once; the recorder turns it into steps with pictures.
+
+```python
+from agent_browser_bridge import Edge
+edge = Edge()
+edge.send("desktop_notify", {"text": "recording starts now: do the expense claim once, slowly", "seconds": 6})
+edge.send("desktop_record", {"op": "start", "name": "expense-claim", "describe": "file one expense in the finance app"})
+# ... the person works; poll edge.send("desktop_record", {"op": "status"}) or wait for them to say done ...
+done = edge.send("desktop_record", {"op": "stop"})
+print(open(done["skill"], encoding="utf-8").read())    # numbered steps, each click with its image
+```
+
+To replay, read `SKILL.md`, then for every step: `desktop_shot`, check that `window` names the
+same application as the step, run it with the matching tool (`desktop_click` at the step's view
+coordinates, `desktop_type`, `desktop_key`), and shoot again. Coordinates in the skill are view
+pixels of a 1280-wide view, the default `desktop_shot` space. The keyboard hook records everything
+typed, so tell the person before starting and delete the folder once the skill is written up.
+
 ## Tight captcha chains
 
 Captcha tokens expire in ~2 minutes. Chain solve→submit in one `run` call

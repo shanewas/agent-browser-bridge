@@ -727,3 +727,34 @@ def test_cli_desktop_screen_and_cursor_print_human_lines(tmp_path, monkeypatch, 
     _recording_cli(monkeypatch, tmp_path, reply=reply)
     assert cli.main(["desktop", "cursor"]) == 0
     assert "view 1,2 display 3,4 on monitor 1" in capsys.readouterr().out
+
+
+def test_cli_desktop_drag_through_sends_the_waypoints(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["desktop", "drag", "1,1", "9,9", "--through", "2,2;3,3", "--json"]) == 0
+    assert bodies[0]["params"] == {"from": [1, 1], "to": [9, 9], "through": [[2, 2], [3, 3]]}
+
+
+def test_cli_desktop_notify_sends_text_and_seconds(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["desktop", "notify", "done with the form", "--seconds", "3", "--json"]) == 0
+    assert bodies[0]["action"] == "desktop_notify"
+    assert bodies[0]["params"] == {"text": "done with the form", "seconds": 3.0}
+
+
+def test_cli_desktop_record_sends_op_name_and_describe(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["desktop", "record", "start", "--name", "demo", "--describe", "fill the form", "--json"]) == 0
+    assert bodies[0]["action"] == "desktop_record"
+    assert bodies[0]["params"] == {"op": "start", "name": "demo", "describe": "fill the form"}
+    assert cli.main(["desktop", "record", "stop", "--json"]) == 0
+    assert bodies[1]["params"] == {"op": "stop"}
+
+
+def test_cli_desktop_window_posts_and_prints_the_title(tmp_path, monkeypatch, capsys):
+    reply = json.dumps({"success": True, "action": "window",
+                        "window": {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe"}}).encode()
+    bodies = _recording_cli(monkeypatch, tmp_path, reply=reply)
+    assert cli.main(["desktop", "window"]) == 0
+    assert bodies[0]["action"] == "desktop_window" and bodies[0]["params"] == {}
+    assert "window: Untitled - Paint (mspaint.exe)" in capsys.readouterr().out

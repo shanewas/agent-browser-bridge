@@ -375,7 +375,8 @@ def test_doctor_elevation_red_when_elevated(monkeypatch, tmp_path, capsys):
     rc, by_name = _doctor_json_in_process(monkeypatch, tmp_path, capsys)
     assert rc == 1
     assert by_name["elevation"]["ok"] is False
-    assert "SendInput" in by_name["elevation"]["detail"]
+    assert "pairing fails" in by_name["elevation"]["detail"]
+    assert "desktop actions still reach" in by_name["elevation"]["detail"]
     assert "unelevated" in by_name["elevation"]["detail"]
     assert by_name["elevation"]["fix"] == "use a normal non-admin PowerShell"
 

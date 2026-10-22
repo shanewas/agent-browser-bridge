@@ -137,6 +137,28 @@ class Monitor:
                 "size": list(self.size), "primary": self.primary}
 
 
+def foreground() -> dict:
+    """The window that has the keyboard: title, process id and image name (None when the
+    process cannot be opened, which is what an elevated one answers)."""
+    hwnd = _user32.GetForegroundWindow()
+    title = ctypes.create_unicode_buffer(512)
+    _user32.GetWindowTextW(hwnd, title, 512)
+    pid = wintypes.DWORD()
+    _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    process = None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if handle:
+        try:
+            path = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+                process = path.value.rsplit("\\", 1)[-1]
+        finally:
+            kernel32.CloseHandle(handle)
+    return {"title": title.value, "pid": pid.value, "process": process}
+
+
 def attach_input_desktop() -> bool:
     """Attach the calling thread to the active input desktop.
 

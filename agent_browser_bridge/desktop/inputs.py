@@ -17,6 +17,10 @@ except (AttributeError, OSError):  # not Windows: the module still imports, the 
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_ABSOLUTE = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
@@ -146,6 +150,22 @@ def _mouse_event(flags: int, data: int = 0) -> INPUT:
     return event
 
 
+def _move_event(x: int, y: int) -> INPUT:
+    """A pointer move as real input, in the 0..65535 space of the virtual desktop.
+
+    SetCursorPos moves the pointer but applications that read raw pointer input (WinUI ones
+    such as Paint) never see it, so a stroke made of cursor jumps draws a straight line from
+    press to release. These moves they do see.
+    """
+    left, top = _user32.GetSystemMetrics(SM_XVIRTUALSCREEN), _user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    width, height = _user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), _user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+    event = INPUT(type=INPUT_MOUSE)
+    event.mi = MOUSEINPUT(round((x - left) * 65535 / max(1, width - 1)),
+                          round((y - top) * 65535 / max(1, height - 1)), 0,
+                          MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, 0)
+    return event
+
+
 def _key_event(vk: int, up: bool) -> INPUT:
     flags = KEYEVENTF_KEYUP if up else 0
     if vk in _EXTENDED:
@@ -260,7 +280,8 @@ def move(x: int, y: int) -> None:
         from .screen import attach_input_desktop
         attach_input_desktop()
         if not _user32.SetCursorPos(int(x), int(y)):
-            raise ActionError(f"could not move the cursor to ({x}, {y})")
+            raise ActionError(f"could not move the cursor to ({x}, {y}); a daemon started by a "
+                              "scheduled task or a service cannot drive input, start it from your own shell")
 
 
 _BUTTONS = {
@@ -290,16 +311,21 @@ def click(button: str = "left", count: int = 1) -> None:
     _send(*[event for _ in range(count) for event in (_mouse_event(down), _mouse_event(up))])
 
 
-def drag(start: tuple[int, int], end: tuple[int, int], button: str = "left") -> None:
+def drag(start: tuple[int, int], end: tuple[int, int], button: str = "left",
+         through=()) -> None:
     move(*start)
     mouse_down(button)
     try:
         # A single jump is ignored by drag targets that track mouse movement.
         steps = 8
-        for step in range(1, steps + 1):
-            move(start[0] + (end[0] - start[0]) * step // steps,
-                 start[1] + (end[1] - start[1]) * step // steps)
-            time.sleep(0.01)
+        here = start
+        for there in (*through, end):
+            for step in range(1, steps + 1):
+                _send(_move_event(here[0] + (there[0] - here[0]) * step // steps,
+                                  here[1] + (there[1] - here[1]) * step // steps))
+                time.sleep(0.01)
+            here = there
+        move(*end)  # absolute moves round to the 65535 grid; the release lands on the exact pixel
     finally:
         mouse_up(button)
 

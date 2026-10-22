@@ -318,8 +318,8 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("elevation", True, "not applicable", "")
     elif _is_elevated():
         add("elevation", False,
-            "running elevated: Edge and the desktop apps you drive run unelevated, "
-            "so pairing and SendInput into them fail silently",
+            "running elevated: Edge de-elevates itself, so pairing fails until the daemon "
+            "runs unelevated; desktop actions still reach unelevated apps",
             "use a normal non-admin PowerShell")
     else:
         add("elevation", True, "running unelevated", "")
@@ -535,6 +535,10 @@ def _coordinate(text: str) -> list:
         raise argparse.ArgumentTypeError(f"expected X,Y but got {text!r}") from None
 
 
+def _waypoints(text: str) -> list:
+    return [_coordinate(part) for part in text.split(";") if part.strip()]
+
+
 def _region(text: str) -> list:
     try:
         left, top, width, height = (int(part.strip()) for part in text.split(","))
@@ -580,10 +584,12 @@ def _add_desktop_commands(parent, common):
     click.add_argument("--button", choices=("left", "right", "middle"), default=None)
     click.add_argument("--count", type=int, default=None, help="2 double clicks, 3 selects a line")
     click.add_argument("--modifiers", default=None, help="keys to hold, e.g. ctrl+shift")
+    verb("window", "report the foreground window (title, pid, process) without capturing")
     verb("move", "move the pointer without clicking").add_argument("at", type=_coordinate)
     drag = verb("drag", "press at X1,Y1, drag to X2,Y2, release")
     drag.add_argument("from_at", metavar="start", type=_coordinate)
     drag.add_argument("to_at", metavar="end", type=_coordinate)
+    drag.add_argument("--through", type=_waypoints, default=None, help="waypoints for one continuous stroke, e.g. \"2,2;3,3\"")
     drag.add_argument("--modifiers", default=None)
     scroll = verb("scroll", "scroll the surface under the pointer")
     scroll.add_argument("direction", choices=("up", "down", "left", "right"))
@@ -598,14 +604,22 @@ def _add_desktop_commands(parent, common):
     hold.add_argument("combo")
     hold.add_argument("seconds", type=float)
     verb("wait", "pause and let the screen settle").add_argument("seconds", type=float)
+    notify = verb("notify", "show a short notice on the overlay for the person at the keyboard")
+    notify.add_argument("text")
+    notify.add_argument("--seconds", type=float, default=None, help="how long it stays (0.5 to 30, default 4)")
+    record = verb("record", "record your own clicks and keys into a skill: start, stop or status")
+    record.add_argument("op", choices=("start", "stop", "status"))
+    record.add_argument("--name", default=None, help="recording name (letters, digits, _ or -; default rec-<timestamp>)")
+    record.add_argument("--describe", default=None, help="one line for the skill's description")
 
 
 def _desktop_params(args) -> tuple[str, dict]:
     """The daemon action and params for a `desktop` verb, carrying only what the user set."""
     names = {"monitor": "monitor", "space": "space", "max_edge": "maxEdge", "region": "region",
              "cursor": "cursor", "fast": "fast", "at": "at", "button": "button", "count": "count",
-             "modifiers": "modifiers", "from_at": "from", "to_at": "to", "direction": "direction",
-             "amount": "amount", "text": "text", "combo": "combo", "repeat": "repeat", "seconds": "seconds"}
+             "modifiers": "modifiers", "from_at": "from", "to_at": "to", "through": "through", "direction": "direction",
+             "amount": "amount", "text": "text", "combo": "combo", "repeat": "repeat", "seconds": "seconds",
+             "op": "op", "name": "name", "describe": "describe"}
     params = {}
     for attr, key in names.items():
         value = getattr(args, attr, None)
@@ -1262,6 +1276,9 @@ def main(argv=None) -> int:
             elif action == "desktop_cursor":
                 v, d = res.get("view", ["?", "?"]), res.get("display", ["?", "?"])
                 print(f"view {v[0]},{v[1]} display {d[0]},{d[1]} on monitor {res.get('pointer_on_monitor')}")
+            elif action == "desktop_window":
+                w = res.get("window") or {}
+                print(f"window: {w.get('title')} ({w.get('process') or 'pid ' + str(w.get('pid'))})")
             else:
                 tab_info = res.get("tab")
                 tab_str = f" (tab {tab_info['id']})" if isinstance(tab_info, dict) and "id" in tab_info else ""
