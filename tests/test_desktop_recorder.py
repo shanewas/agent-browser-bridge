@@ -137,15 +137,13 @@ def test_the_event_limit_stops_the_recording(parts):
 
 
 def test_the_time_limit_stops_the_recording_without_an_event(parts, monkeypatch):
-    import time
     from agent_browser_bridge.desktop import recorder as mod
     monkeypatch.setattr(mod, "POLL_SECONDS", 0.01, raising=False)
     rec, _, overlay, clock, home = parts
     rec.start("demo", None)
     clock.now += mod.MAX_SECONDS
-    deadline = time.time() + 2
-    while rec.status()["recording"] and time.time() < deadline:
-        time.sleep(0.01)
+    rec._worker.join(2.0)  # the worker finishes the recording on its next poll, then ends
+    assert not rec._worker.is_alive()
     assert rec.status() == {"recording": False} and not _hooks().running
     assert (home / "recordings" / "demo" / "SKILL.md").exists()
     assert any(c[0] == "show" and "minutes" in c[1] for c in overlay.calls)
