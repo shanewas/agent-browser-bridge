@@ -276,7 +276,7 @@ your browser profile, so the daemon doesn't try to defend against it.
 `desktop record` installs keyboard and mouse hooks for as long as it runs, so everything you
 type, passwords included, lands in `events.jsonl` and, as `Type "..."` steps, in `SKILL.md` in
 your data directory. It starts only on an explicit `record start`, the red strip stays up until
-`record stop` (a notice from the agent can cover it for up to 30 s), and nothing is uploaded.
+`record stop` (an agent's notices appear inside that red strip), and nothing is uploaded.
 Scrub the skill before sharing it and delete the folder when it has served its purpose.
 
 `eval` runs arbitrary JavaScript in the page with your session. It's there on purpose, and it's

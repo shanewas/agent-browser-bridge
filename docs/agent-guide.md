@@ -272,8 +272,8 @@ touch the mouse for a moment" before a long `desktop_type`, or "done, please che
 
 `desktop_record {op: "start", name?, describe?}` records what the person does, not what you do:
 their clicks (with a screenshot each), wheel and keys. Your own injected input is left out, so you
-can keep working. The strip turns red for the whole recording, only a `desktop_notify` of yours
-covers it, and `start` refuses when the strip is off. `op: "stop"` writes
+can keep working. The strip turns red for the whole recording, your `desktop_notify` texts show
+inside it, and `start` refuses when the strip is off. `op: "stop"` writes
 `<data dir>/recordings/<name>/SKILL.md`, numbered steps with the images, which you or a later
 agent follow with the same tools: shoot, confirm `window` names the same application, run the
 step, shoot again. `op: "status"` answers `{recording, name, events, seconds}`.

@@ -67,6 +67,9 @@ class Overlay:
 
     def show(self, text: str, kind: str = "action", seconds: float | None = None) -> None:
         with self._lock:
+            if self._record and kind != "record":
+                # A notice must not hide the fact that keys are being kept.
+                kind, text = "record", f"{self._record.split(':', 1)[0]} · {text}"
             self._text, self._kind = text, kind
             self._until = None if seconds is None else time.monotonic() + seconds
         self._post()
