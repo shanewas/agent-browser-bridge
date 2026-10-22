@@ -210,17 +210,35 @@ agent-bridge desktop screen                # list displays (numbered left to rig
 agent-bridge desktop click 640,360 --button right --count 2 --modifiers ctrl
 agent-bridge desktop move 640,360          # reveal a hover state, then shot, then click
 agent-bridge desktop drag 100,100 400,300
+agent-bridge desktop drag 100,100 400,300 --through "200,50;300,150"   # one stroke through waypoints
 agent-bridge desktop scroll down 3 --at 640,360
+agent-bridge desktop window               # which window has the keyboard, before typing
 agent-bridge desktop type "hello"
 agent-bridge desktop key ctrl+s --repeat 2
 agent-bridge desktop hold shift 2
 agent-bridge desktop wait 1.5
 agent-bridge desktop cursor                # where the pointer is, in both spaces
+agent-bridge desktop notify "filling the form now" --seconds 5   # a notice on the overlay
+agent-bridge desktop record start --name expense-claim --describe "file one expense"
+agent-bridge desktop record stop           # writes <data dir>/recordings/expense-claim/SKILL.md
 ```
 
-MCP tools: `desktop_shot`, `desktop_screen`, `desktop_cursor`, `desktop_click`, `desktop_move`,
-`desktop_drag`, `desktop_scroll`, `desktop_type`, `desktop_key`, `desktop_hold`. `desktop_shot`
-returns the image inline plus the coordinate space. Python: `Edge().send("desktop_click", {"at": [640, 360]})`.
+MCP tools: `desktop_shot`, `desktop_screen`, `desktop_cursor`, `desktop_window`, `desktop_click`,
+`desktop_move`, `desktop_drag`, `desktop_scroll`, `desktop_type`, `desktop_key`, `desktop_hold`,
+`desktop_notify`, `desktop_record`. `desktop_shot` returns the image inline plus the coordinate
+space and the foreground `window`. Python: `Edge().send("desktop_click", {"at": [640, 360]})`.
+
+While a desktop action runs, a small strip in the top-right corner of the primary display says
+so. It never takes focus and stays out of screenshots on Windows 10 2004 and later;
+`EDGE_BRIDGE_NO_OVERLAY=1` turns it off. `desktop notify` puts an agent's own short notice there.
+
+`desktop record` watches you instead of the agent: it keeps your clicks and keys, a screenshot
+per click, and on stop writes a `SKILL.md` of numbered steps with the images, which an agent can
+follow later with the same tools. The strip turns red for the whole recording and refuses to
+start without the strip. The bridge's own injected input is left out, so an agent can keep
+working while you demonstrate. Text composed through an IME never reaches a keyboard hook, so
+Japanese or Chinese input is not captured; the recorder stops itself after 2000 events or 30
+minutes of activity.
 
 Coordinates are **view pixels**: the pixel space of the last `shot` of that display, which is
 scaled down to a 1280 long edge by default. The daemon scales them back up; never convert
@@ -231,8 +249,9 @@ starting at 0,0; `--monitor all` captures every display as one wide image for fi
 then capture the one display before clicking.
 
 Windows only: elsewhere every desktop action answers `desktop_unsupported`, and without Pillow
-`desktop_unavailable`. An elevated daemon cannot send input into unelevated windows (Windows
-UIPI), so run the daemon from a normal shell; `agent-bridge doctor` reports both halves.
+`desktop_unavailable`. Start the daemon from your own shell: one started by a scheduled task or
+a service cannot move the cursor, and an elevated one cannot pair with Edge, though it still
+drives unelevated desktop apps. `agent-bridge doctor` reports both halves.
 
 ---
 
@@ -253,6 +272,12 @@ your browser profile, so the daemon doesn't try to defend against it.
 - WebSocket frames above 16 MB close the connection, and the socket carries a read timeout, so a
   local client can't make the daemon buffer without bound or pin a worker thread forever.
 - Nothing leaves the machine: no telemetry, no outbound requests of any kind.
+
+`desktop record` installs keyboard and mouse hooks for as long as it runs, so everything you
+type, passwords included, lands in `events.jsonl` and, as `Type "..."` steps, in `SKILL.md` in
+your data directory. It starts only on an explicit `record start`, the red strip stays up until
+`record stop` (an agent's notices appear inside that red strip), and nothing is uploaded.
+Scrub the skill before sharing it and delete the folder when it has served its purpose.
 
 `eval` runs arbitrary JavaScript in the page with your session. It's there on purpose, and it's
 the reason to think about which agent you hand this to. Actions that destroy state need an explicit

@@ -96,7 +96,7 @@ def test_double_and_triple_click_carry_their_count(parts):
 def test_drag_uses_both_coordinates(parts):
     ex, _, keyboard = parts
     ex.dispatch("left_click_drag", {"start_coordinate": [0, 0], "coordinate": [640, 360]})
-    assert ("drag", (0, 0), (960, 540), "left") in keyboard.calls
+    assert ("drag", (0, 0), (960, 540), "left", []) in keyboard.calls
 
 
 def test_drag_without_a_start_is_rejected(parts):

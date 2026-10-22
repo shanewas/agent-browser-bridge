@@ -86,6 +86,7 @@ class DaemonHandle:
 
     def start(self, extra_env=None):
         env = dict(os.environ, EDGE_BRIDGE_HOME=str(self.home), EDGE_BRIDGE_PORT=str(self.port),
+                   EDGE_BRIDGE_NO_OVERLAY="1",
                    EDGE_BRIDGE_HEARTBEAT="1", EDGE_BRIDGE_PONG_TIMEOUT="3", PYTHONUNBUFFERED="1")
         if extra_env:
             env.update(extra_env)

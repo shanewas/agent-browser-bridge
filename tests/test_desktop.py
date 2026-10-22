@@ -7,7 +7,7 @@ pytest.importorskip("PIL")
 
 from agent_browser_bridge.desktop import Desktop, executor  # noqa: E402
 from agent_browser_bridge.desktop.screen import Monitor  # noqa: E402
-from tests.desktop_fakes import FakeKeyboard, FakeScreen, three_monitors  # noqa: E402
+from tests.desktop_fakes import FakeKeyboard, FakeOverlay, FakeScreen, three_monitors  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -21,8 +21,13 @@ def keyboard():
 
 
 @pytest.fixture
-def desk(keyboard):
-    return Desktop(screen=FakeScreen(layout=three_monitors()), inputs=keyboard)
+def overlay():
+    return FakeOverlay()
+
+
+@pytest.fixture
+def desk(keyboard, overlay):
+    return Desktop(screen=FakeScreen(layout=three_monitors()), inputs=keyboard, overlay=overlay)
 
 
 def test_screen_reports_the_coordinate_space(desk):
@@ -229,3 +234,130 @@ def test_an_action_longer_than_the_remaining_deadline_is_refused(desk, keyboard,
 
 def test_a_short_action_runs_within_the_deadline(desk, keyboard):
     assert desk.handle("desktop_type", {"text": "ok"}, remaining=1.0)["success"]
+
+
+def test_shot_reports_the_foreground_window(desk):
+    r = desk.handle("desktop_shot", {})
+    assert r["window"] == {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe"}
+
+
+def test_drag_through_waypoints_is_one_stroke(desk, keyboard):
+    r = desk.handle("desktop_drag", {"from": [0, 0], "to": [10, 10], "through": [[2, 2], [5, 5]]})
+    assert r["success"] and r["through"] == 2
+    drags = [c for c in keyboard.calls if c[0] == "drag"]
+    assert drags == [("drag", (0, 0), (15, 15), "left", [(3, 3), (8, 8)])]
+
+
+def test_a_waypoint_off_the_view_is_refused_before_the_pen_goes_down(desk, keyboard):
+    r = desk.handle("desktop_drag", {"from": [0, 0], "to": [10, 10], "through": [[99999, 5]]})
+    assert r["code"] == "desktop_error" and "outside" in r["error"]
+    assert keyboard.calls == []
+
+
+@pytest.mark.parametrize("through", [[[1]], "2,2", [[1, 2, 3]], [["a", "b"]]])
+def test_through_must_be_a_list_of_points(desk, keyboard, through):
+    r = desk.handle("desktop_drag", {"from": [0, 0], "to": [10, 10], "through": through})
+    assert r["code"] == "bad_params" and keyboard.calls == []
+
+
+def test_estimate_counts_waypoints():
+    from agent_browser_bridge.desktop import estimate_seconds
+    # 31 segments of eight 10 ms sleeps, which Python 3.10 on Windows rounds up to the 15.6 ms tick.
+    assert estimate_seconds("desktop_drag", {"from": [0, 0], "to": [1, 1], "through": [[1, 1]] * 30}) == 3.875
+    assert estimate_seconds("desktop_drag", {"from": [0, 0], "to": [1, 1]}) == 0.0
+
+
+def test_window_action_reports_without_capturing(desk):
+    r = desk.handle("desktop_window", {})
+    assert r["success"] and r["window"]["title"] == "Untitled - Paint"
+    assert desk.screen.grabs == []
+
+
+def test_an_action_shows_the_overlay_then_idles(desk, overlay):
+    desk.handle("desktop_click", {"at": [1, 1]})
+    assert overlay.calls == [("show", "agent-bridge: desktop_click", "action", None), ("idle",)]
+
+
+def test_a_failed_action_still_idles_the_overlay(desk, overlay):
+    desk.handle("desktop_click", {"at": [99999, 1]})
+    assert overlay.calls[-1] == ("idle",)
+
+
+@pytest.mark.parametrize("action", ["desktop_screen", "desktop_cursor", "desktop_window"])
+def test_quiet_actions_leave_the_overlay_alone(desk, overlay, action):
+    assert desk.handle(action, {})["success"]
+    assert overlay.calls == []
+
+
+def test_notify_shows_the_text_for_the_seconds_asked(desk, overlay):
+    r = desk.handle("desktop_notify", {"text": "hello", "seconds": 2})
+    assert r["success"] and r["action"] == "notify" and r["seconds"] == 2.0
+    assert overlay.calls == [("show", "hello", "notify", 2.0), ("idle",)]
+
+
+def test_notify_defaults_to_four_seconds(desk, overlay):
+    assert desk.handle("desktop_notify", {"text": "x" * 200})["seconds"] == 4.0
+    assert desk.handle("desktop_notify", {"text": "y", "seconds": 0.5})["success"]
+    assert desk.handle("desktop_notify", {"text": "y", "seconds": 30})["success"]
+
+
+@pytest.mark.parametrize("params", [{}, {"text": ""}, {"text": "x" * 201}, {"text": 5},
+                                    {"text": "a", "seconds": 31}, {"text": "a", "seconds": 0.1}])
+def test_notify_bad_params(desk, overlay, params):
+    assert desk.handle("desktop_notify", params)["code"] == "bad_params"
+    assert ("show", params.get("text"), "notify", params.get("seconds")) not in overlay.calls
+
+
+def test_close_closes_the_overlay(desk, overlay):
+    desk.close()
+    assert ("close",) in overlay.calls
+
+
+class _StubRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, name, describe):
+        self.calls.append(("start", name, describe))
+        return {"recording": True, "name": name or "rec-x", "dir": "d"}
+
+    def stop(self):
+        self.calls.append(("stop",))
+        return {"recording": False}
+
+    def status(self):
+        return {"recording": False}
+
+
+def test_record_ops_reach_the_recorder_and_status_is_quiet(keyboard, overlay):
+    rec = _StubRecorder()
+    d = Desktop(screen=FakeScreen(), inputs=keyboard, overlay=overlay, recorder=rec)
+    assert d.handle("desktop_record", {"op": "status"}) == {"success": True, "recording": False}
+    assert overlay.calls == []
+    r = d.handle("desktop_record", {"op": "start", "name": "demo", "describe": "x"})
+    assert r["success"] and r["recording"] and rec.calls == [("start", "demo", "x")]
+    assert d.handle("desktop_record", {"op": "stop"})["success"] and rec.calls[-1] == ("stop",)
+
+
+def test_actions_leave_the_banner_alone_while_recording(keyboard, overlay):
+    rec = _StubRecorder()
+    rec.status = lambda: {"recording": True, "name": "demo", "events": 0, "seconds": 1.0}
+    d = Desktop(screen=FakeScreen(), inputs=keyboard, overlay=overlay, recorder=rec)
+    assert d.handle("desktop_click", {"at": [1, 1]})["success"]
+    assert overlay.calls == []
+    assert d.handle("desktop_notify", {"text": "still allowed"})["success"]
+    assert overlay.calls[0] == ("show", "still allowed", "notify", 4.0)
+
+
+@pytest.mark.parametrize("params", [{}, {"op": "pause"}, {"op": "start", "name": 5},
+                                    {"op": "start", "describe": "x" * 201}, {"op": "start", "describe": "a\nb"}])
+def test_record_bad_params(keyboard, overlay, params):
+    d = Desktop(screen=FakeScreen(), inputs=keyboard, overlay=overlay, recorder=_StubRecorder())
+    assert d.handle("desktop_record", params)["code"] == "bad_params"
+
+
+def test_fakes_never_get_a_real_overlay(keyboard):
+    from agent_browser_bridge.desktop.overlay import NullOverlay
+    d = Desktop(screen=FakeScreen(), inputs=keyboard)
+    d.handle("desktop_screen", {})
+    assert isinstance(d.overlay, NullOverlay)

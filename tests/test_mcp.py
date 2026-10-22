@@ -78,10 +78,10 @@ def test_mcp_notifications_and_ping(mcp_proc):
     assert resp["result"] == {}
 
 
-def test_mcp_tools_list_44_tools(mcp_proc):
+def test_mcp_tools_list_47_tools(mcp_proc):
     resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = resp["result"]["tools"]
-    assert len(tools) == 44
+    assert len(tools) == 47
     for t in tools:
         assert t["name"].startswith(("edge_", "desktop_"))
         assert t["description"]
@@ -348,7 +348,10 @@ def test_desktop_tools_are_listed_with_point_schemas():
     from agent_browser_bridge.mcp import TOOLS
     names = {t["name"] for t in TOOLS}
     assert {"desktop_shot", "desktop_screen", "desktop_cursor", "desktop_click", "desktop_move", "desktop_drag",
-            "desktop_scroll", "desktop_type", "desktop_key", "desktop_hold"} <= names
+            "desktop_scroll", "desktop_type", "desktop_key", "desktop_hold", "desktop_window",
+            "desktop_notify", "desktop_record"} <= names
+    record = next(t for t in TOOLS if t["name"] == "desktop_record")
+    assert record["inputSchema"]["properties"]["op"]["enum"] == ["start", "stop", "status"]
     click = next(t for t in TOOLS if t["name"] == "desktop_click")
     assert click["inputSchema"]["properties"]["at"]["minItems"] == 2 and click["inputSchema"]["required"] == ["at"]
     drag = next(t for t in TOOLS if t["name"] == "desktop_drag")

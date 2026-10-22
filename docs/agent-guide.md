@@ -183,13 +183,19 @@ extension cannot attach to.
 
 ## The loop
 
-1. `desktop_shot` returns the image and its coordinate space:
-   `{"monitor": 2, "view": [1280, 720], "display": [1920, 1080], "scale": 0.6667, "space": "view", ...}`.
+1. `desktop_shot` returns the image, its coordinate space and the foreground window:
+   `{"monitor": 2, "view": [1280, 720], "display": [1920, 1080], "scale": 0.6667, "space": "view",
+   "window": {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe"}, ...}`.
    The CLI form, `agent-bridge desktop shot`, writes the PNG and prints the same fields plus `path`.
 2. Read the image. Decide. Run one action with coordinates read off that image.
 3. Take another shot to confirm the screen changed the way you expected.
 
 Take a screenshot before your first action, always. The desktop is not where you left it.
+
+Keys go to whatever window is in front, which is not always the one you clicked a moment ago.
+Before `desktop_type` or `desktop_key`, read `window` from the last shot, or call
+`desktop_window`, and stop if it names a different application: a `ctrl+n` meant for Notepad
+wipes an unsaved Paint canvas.
 
 ## Coordinates
 
@@ -222,14 +228,17 @@ reports `pointer_on_monitor`, which is where the user's pointer is right now.
 | `desktop_shot {region?, cursor?, fast?}` | `agent-bridge desktop shot [out] [--region X,Y,W,H] [--no-cursor] [--fast]` | capture; `fast` is JPEG and softer text |
 | `desktop_screen` | `agent-bridge desktop screen` | displays and the coordinate space, no capture |
 | `desktop_cursor` | `agent-bridge desktop cursor` | pointer position in both spaces |
+| `desktop_window` | `agent-bridge desktop window` | the foreground window: title, pid, process; no capture |
 | `desktop_click {at, button?, count?, modifiers?}` | `agent-bridge desktop click X,Y [--button right] [--count 2] [--modifiers ctrl+shift]` | click; 2 double-clicks, 3 selects a line (left only) |
 | `desktop_move {at}` | `agent-bridge desktop move X,Y` | move without clicking, to reveal a hover state |
-| `desktop_drag {from, to, modifiers?}` | `agent-bridge desktop drag X1,Y1 X2,Y2` | press, drag, release |
+| `desktop_drag {from, to, through?, modifiers?}` | `agent-bridge desktop drag X1,Y1 X2,Y2 [--through "X,Y;X,Y"]` | press, drag, release; `through` (up to 500 points) makes one continuous stroke for drawing or path gestures |
 | `desktop_scroll {direction, amount?, at?}` | `agent-bridge desktop scroll down 3 [--at X,Y]` | wheel at the pointer or at `at` |
 | `desktop_type {text}` | `agent-bridge desktop type "text"` | literal text at the keyboard focus |
 | `desktop_key {combo, repeat?}` | `agent-bridge desktop key ctrl+s [--repeat N]` | press a key or combination |
 | `desktop_hold {combo, seconds}` | `agent-bridge desktop hold shift 2` | hold a key down |
 | (none) | `agent-bridge desktop wait 1.5` | pause; MCP agents take another shot instead |
+| `desktop_notify {text, seconds?}` | `agent-bridge desktop notify "text" [--seconds N]` | show a short notice (up to 200 characters, 0.5 to 30 s) on the overlay for the person at the keyboard |
+| `desktop_record {op, name?, describe?}` | `agent-bridge desktop record start\|stop\|status [--name N] [--describe TEXT]` | record the person's own clicks and keys into a skill; see below |
 
 Every action also takes `monitor`, `space` and `maxEdge`. Key names follow the X11 style of the
 computer-use toolset: `Return`, `Escape`, `Tab`, `BackSpace`, `Delete`, `Up`, `Down`, `Left`,
@@ -245,8 +254,34 @@ computer-use toolset: `Return`, `Escape`, `Tab`, `BackSpace`, `Delete`, `Up`, `D
 - After clicking something that opens a window or menu, take another shot before acting again. A
   click on a menu item that has not rendered yet lands on whatever was underneath.
 - When text is too small to read, capture just that part with `region` instead of guessing.
+- Some tools ignore the first click after they are picked (Paint's text tool, for one). If a shot
+  shows nothing happened, click the same spot once more before changing plan.
+- Freehand shapes and gestures are one `desktop_drag` with `through` waypoints, not a drag per
+  segment: the pen stays down the whole way.
 - `success: false` means the action did not happen. Read `code` and `error`, fix the input and
   try again rather than moving on as though it worked.
+
+## The overlay and `desktop_notify`
+
+While one of your desktop actions runs, a small strip in the top-right corner of the primary
+display tells the person what is happening. It never takes focus and is left out of your shots.
+`desktop_notify` puts your own one-line notice there, for example "filling the form, do not
+touch the mouse for a moment" before a long `desktop_type`, or "done, please check" at the end.
+
+## Recording the person into a skill
+
+`desktop_record {op: "start", name?, describe?}` records what the person does, not what you do:
+their clicks (with a screenshot each), wheel and keys. Your own injected input is left out, so you
+can keep working. The strip turns red for the whole recording, your `desktop_notify` texts show
+inside it, and `start` refuses when the strip is off. `op: "stop"` writes
+`<data dir>/recordings/<name>/SKILL.md`, numbered steps with the images, which you or a later
+agent follow with the same tools: shoot, confirm `window` names the same application, run the
+step, shoot again. `op: "status"` answers `{recording, name, events, seconds}`.
+
+Ask before starting: the keyboard hook keeps everything typed, passwords included, and the
+`Type "..."` steps in `SKILL.md` repeat it, so tell the person to scrub the skill before it is
+shared. Text composed through an IME never reaches the hook. Stop as soon as the demonstration
+ends; the recorder also stops itself after 2000 events or 30 minutes of activity.
 
 ## Care
 
@@ -257,5 +292,6 @@ were given: do not close windows, dismiss dialogs or save files the task did not
 screen is not what you expected, stop and describe what you see rather than clicking to find
 out. The user can hold Escape to make the next action refuse with `desktop_aborted`.
 
-An elevated daemon (started from an admin shell) cannot send input into unelevated windows and
-the failure is silent; `agent-bridge doctor` shows the elevation state for both halves.
+A daemon started by a scheduled task or a service cannot move the cursor and every action says so;
+an elevated daemon still drives unelevated apps but cannot pair with Edge. `agent-bridge doctor`
+shows the elevation state for both halves.

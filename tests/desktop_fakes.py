@@ -40,10 +40,49 @@ class FakeScreen:
     def cursor_overlay(self):
         return None
 
+    def foreground(self):
+        return {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe"}
+
     def grab(self, region=None, cursor=False):
         self.grabs.append((region, cursor))
         width, height = self.size if region is None else (region[2], region[3])
         return Image.new("RGB", (width, height), "white")
+
+
+class FakeOverlay:
+    def __init__(self):
+        self.calls = []
+
+    def show(self, text, kind="action", seconds=None):
+        self.calls.append(("show", text, kind, seconds))
+
+    def idle(self):
+        self.calls.append(("idle",))
+
+    def record(self, text):
+        self.calls.append(("record", text))
+
+    def close(self):
+        self.calls.append(("close",))
+
+
+class FakeHooks:
+    """Stands in for the low-level hooks: tests push the events a person would make."""
+
+    instances = []
+
+    def __init__(self, sink):
+        self.sink, self.running = sink, False
+        FakeHooks.instances.append(self)
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def push(self, kind, **data):
+        self.sink(kind, data)
 
 
 def three_monitors():
@@ -79,8 +118,8 @@ class FakeKeyboard:
     def mouse_up(self, button="left"):
         self.calls.append(("mouse_up", button))
 
-    def drag(self, start, end, button="left"):
-        self.calls.append(("drag", start, end, button))
+    def drag(self, start, end, button="left", through=()):
+        self.calls.append(("drag", start, end, button, list(through)))
 
     def scroll(self, direction, amount):
         self.calls.append(("scroll", direction, amount))

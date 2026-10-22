@@ -1,5 +1,31 @@
 # Changelog
 
+## 4.1.0
+
+Three things learned from driving Paint through 4.0.0, plus an overlay and a recorder.
+
+- Every `desktop_shot` now reports the foreground `window` (title, pid, process), and
+  `desktop_window` answers it without a capture. Keys go to whatever is in front, so an
+  agent checks this before `desktop_type` or `desktop_key`.
+- `desktop_drag` takes `through` waypoints and draws one continuous stroke instead of a
+  lifted pen per segment. The CLI spells it `drag A B --through "x,y;x,y"`. The moves between
+  press and release are now real pointer input rather than cursor jumps, which WinUI apps
+  such as Paint never saw: a 4.0.0 drag into Paint drew a straight line from press to release.
+- A small always-on-top overlay in the top-right corner says which desktop action is
+  running and never takes focus. `desktop_notify` puts an agent's own short notice there.
+  It stays out of screenshots on Windows 10 2004 and later; `EDGE_BRIDGE_NO_OVERLAY=1`
+  turns it off.
+- `desktop_record start|stop|status` records the person's own clicks and keys (a shot per
+  click, the bridge's injected input left out) into `<data dir>/recordings/<name>/` and on
+  stop writes a `SKILL.md` of numbered steps an agent can replay. The overlay shows a red
+  banner the whole time. Keys typed into password fields are recorded too.
+- Doctor's elevation line now says what the Paint run proved: an elevated daemon still
+  drives unelevated apps; only Edge pairing needs an unelevated daemon. A daemon started by
+  a scheduled task cannot move the cursor, and its error now says so.
+
+Three new MCP tools (`desktop_window`, `desktop_notify`, `desktop_record`) bring the list
+to 47. The extension is unchanged.
+
 ## 4.0.0
 
 The daemon now drives the Windows desktop as well as the browser. `doppelhand` has been

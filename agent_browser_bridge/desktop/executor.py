@@ -184,8 +184,10 @@ class Executor:
         end = self._point(params)
         if start is None or end is None:
             raise ActionError("left_click_drag needs start_coordinate and coordinate")
+        # Every waypoint is checked before the pen goes down, so a bad one moves nothing.
+        through = [self._point({"coordinate": p}) for p in params.get("through") or []]
         with self.keyboard.modifiers_held(params.get("text")):
-            self.keyboard.drag(start, end)
+            self.keyboard.drag(start, end, through=through)
         return self._settled()
 
     def _do_mouse_move(self, params: dict) -> list[dict]:

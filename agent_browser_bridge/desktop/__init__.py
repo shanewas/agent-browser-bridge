@@ -16,13 +16,18 @@ import io
 import sys
 
 from .errors import ActionError, Aborted
+from .overlay import NullOverlay, make_overlay
 
-ACTIONS = ("screen", "cursor", "shot", "click", "move", "drag", "scroll", "type", "key",
-           "hold", "wait")
+ACTIONS = ("screen", "cursor", "window", "shot", "click", "move", "drag", "scroll", "type", "key",
+           "hold", "wait", "notify", "record")
+#: Read-only verbs agents call in tight loops; the overlay stays quiet for them.
+QUIET = {"screen", "cursor", "window"}
+NOTIFY_MAX_CHARS = 200
 DEFAULT_MAX_EDGE = 1280
 MAX_DURATION = 100
 MAX_EDGE_LIMIT = 16384
 MAX_SCROLL = 1000
+MAX_WAYPOINTS = 500
 REGION_NOTE = "read this image, do not take click coordinates from it"
 #: Typing pauses 5 ms per character, and time.sleep rounds up to the 15.6 ms timer tick on
 #: Python 3.10 under Windows, so the budget per character is generous on purpose.
@@ -41,6 +46,9 @@ def estimate_seconds(action: str, params: dict) -> float:
         return max(0.0, float(params["seconds"]))
     if action == "desktop_type" and isinstance(params.get("text"), str):
         return len(params["text"]) * TYPE_SECONDS_PER_CHAR
+    if action == "desktop_drag" and isinstance(params.get("through"), list) and params["through"]:
+        # Eight 10 ms moves per segment; Python 3.10 on Windows sleeps a 15.6 ms tick each time.
+        return (len(params["through"]) + 1) * 0.125
     return 0.0
 
 
@@ -65,6 +73,15 @@ def _point(params: dict, key: str, required: bool = True):
     if not (isinstance(value, (list, tuple)) and len(value) == 2 and all(_is_number(n) for n in value)):
         raise BadParams(f"{key} must be [x, y], got {value!r}")
     return [value[0], value[1]]
+
+
+def _points(params: dict, key: str, limit: int) -> list:
+    value = params.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > limit:
+        raise BadParams(f"{key} must be a list of up to {limit} [x, y] points")
+    return [_point({key: p}, key) for p in value]
 
 
 def _whole(params: dict, key: str, default, lo: int, hi: int):
@@ -129,10 +146,14 @@ def _layout_of(monitors) -> list:
 
 
 class Desktop:
-    def __init__(self, screen=None, inputs=None, frames=None):
+    def __init__(self, screen=None, inputs=None, frames=None, overlay=None, recorder=None):
         self.screen = screen
         self.inputs = inputs
         self.frames = frames
+        self.recorder = recorder
+        # The real strip is only built alongside the real screen, so fakes never open a window.
+        self.overlay = overlay if overlay is not None else NullOverlay()
+        self._overlay_given = overlay is not None
         self._executor_module = None
         # (max_edge, monitor index, layout) of the last full shot; replaces doppelhand's
         # session file. A changed layout makes the note worthless, so it is checked each use.
@@ -157,6 +178,12 @@ class Desktop:
             self.inputs = self.inputs or inputs
             if self.frames is None:
                 self.frames = duplication.FrameSource()
+            if not self._overlay_given:
+                self.overlay = make_overlay()
+            if self.recorder is None:
+                from .. import config
+                from .recorder import Recorder
+                self.recorder = Recorder(self.screen, home=config.home(), overlay=self.overlay)
         self._executor_module = executor
         return None
 
@@ -176,6 +203,11 @@ class Desktop:
             # Running on would keep the keyboard busy after the caller has given up.
             return _failure("timeout", f"{action} needs about {need:g} s but only {max(0.0, remaining):g} s "
                                        "remain of the call's timeout; split it into shorter calls")
+        loud = verb not in QUIET and not (verb == "record" and params.get("op") == "status")
+        if loud and verb != "notify" and self.recorder is not None and self.recorder.status().get("recording"):
+            loud = False  # the red banner stays up for the whole recording
+        if loud and verb != "notify":
+            self.overlay.show(f"agent-bridge: {action}")
         try:
             # Attachment to the input desktop is per thread, and the daemon answers each
             # request on its own thread.
@@ -189,11 +221,17 @@ class Desktop:
             return _failure("desktop_error", str(exc))
         except Exception as exc:  # noqa: BLE001 - the contract is a dict, always
             return _failure("desktop_error", f"{type(exc).__name__}: {exc}")
+        finally:
+            if loud:
+                self.overlay.idle()
 
     def close(self) -> None:
         frames, self.frames = self.frames, None
         if frames is not None:
             frames.close()
+        if self.recorder is not None and hasattr(self.recorder, "close"):
+            self.recorder.close()
+        self.overlay.close()
 
     def _pick_monitor(self, monitors, wanted):
         if wanted in (None, "primary"):
@@ -248,6 +286,33 @@ class Desktop:
                 "monitor": executor.monitor.index, "pointer_on_monitor": on,
                 "scale": round(executor.scale, 6)}
 
+    def _do_window(self, params: dict) -> dict:
+        return {"action": "window", "window": self.screen.foreground()}
+
+    def _do_notify(self, params: dict) -> dict:
+        text = _text(params, "text")
+        if not text or len(text) > NOTIFY_MAX_CHARS:
+            raise BadParams(f"text must be 1 to {NOTIFY_MAX_CHARS} characters")
+        seconds = _number(params, "seconds", 0.5, 30.0) if "seconds" in params else 4.0
+        self.overlay.show(text, "notify", seconds)
+        return {"action": "notify", "seconds": seconds}
+
+    def _do_record(self, params: dict) -> dict:
+        op = _choice(params, "op", ("start", "stop", "status"), None)
+        if op is None:
+            raise BadParams("op is required: start, stop or status")
+        if self.recorder is None:
+            raise ActionError("recording is not available here")
+        if op == "start":
+            name = _text(params, "name", required=False)
+            describe = _text(params, "describe", required=False)
+            if describe is not None and (len(describe) > NOTIFY_MAX_CHARS or "\n" in describe or "\r" in describe):
+                raise BadParams(f"describe must be one line of at most {NOTIFY_MAX_CHARS} characters")
+            return self.recorder.start(name, describe)
+        if op == "stop":
+            return self.recorder.stop()
+        return self.recorder.status()
+
     def _do_shot(self, params: dict) -> dict:
         region = _region(params)
         fast = _flag(params, "fast", False)
@@ -279,6 +344,8 @@ class Desktop:
         payload["image"] = list(image.size)
         payload["cursor_drawn"] = executor.cursor
         payload["source"] = executor.last_source
+        # Keys go to whatever is in front, so a shot says what that is.
+        payload["window"] = self.screen.foreground()
         return payload
 
     def _do_click(self, params: dict) -> dict:
@@ -304,11 +371,12 @@ class Desktop:
 
     def _do_drag(self, params: dict) -> dict:
         start, end = _point(params, "from"), _point(params, "to")
+        through = _points(params, "through", MAX_WAYPOINTS)
         modifiers = _text(params, "modifiers", required=False)
         executor, _ = self._executor(params)
         executor.dispatch("left_click_drag", {"start_coordinate": start, "coordinate": end,
-                                              "text": modifiers})
-        return {"action": "left_click_drag", "from": start, "to": end}
+                                              "through": through, "text": modifiers})
+        return {"action": "left_click_drag", "from": start, "to": end, "through": len(through)}
 
     def _do_scroll(self, params: dict) -> dict:
         direction = _choice(params, "direction", ("up", "down", "left", "right"), None)

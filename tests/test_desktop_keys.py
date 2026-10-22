@@ -49,6 +49,56 @@ def test_astral_characters_become_surrogate_pairs():
     assert len(inputs._code_units("\U0001F600")) == 2
 
 
+def test_cursor_move_failure_names_the_scheduled_task_case(monkeypatch):
+    pytest.importorskip("PIL")
+
+    class NoCursor:
+        def SetCursorPos(self, x, y):
+            return 0
+
+    monkeypatch.setattr(inputs, "_user32", NoCursor())
+    monkeypatch.setattr("agent_browser_bridge.desktop.screen.attach_input_desktop", lambda: True)
+    with pytest.raises(ActionError, match="scheduled task"):
+        inputs.move(1, 2)
+
+
+class RecordingUser32:
+    """Keeps every input event; the virtual desktop is 1920x1080 at the origin."""
+
+    def __init__(self):
+        self.events = []
+
+    def SetCursorPos(self, x, y):
+        self.events.append(("cursor", x, y))
+        return 1
+
+    def GetSystemMetrics(self, index):
+        return {76: 0, 77: 0, 78: 1920, 79: 1080}[index]
+
+    def SendInput(self, count, array, size):
+        for i in range(count):
+            self.events.append(("input", array[i].mi.dwFlags, array[i].mi.dx, array[i].mi.dy))
+        return count
+
+
+def test_drag_moves_are_absolute_input_events_not_cursor_jumps(monkeypatch):
+    # WinUI apps (Paint, Settings) read raw pointer input: SetCursorPos between the press and
+    # the release draws nothing, so the stroke must be SendInput moves in absolute coordinates.
+    stub = RecordingUser32()
+    monkeypatch.setattr(inputs, "_user32", stub)
+    monkeypatch.setattr(inputs.time, "sleep", lambda s: None)
+    inputs.drag((0, 0), (100, 100), through=[(50, 0)])
+    flags = [e[1] for e in stub.events if e[0] == "input"]
+    moves = [e for e in stub.events if e[0] == "input" and e[1] & inputs.MOUSEEVENTF_MOVE]
+    assert flags[0] == inputs.MOUSEEVENTF_LEFTDOWN and flags[-1] == inputs.MOUSEEVENTF_LEFTUP
+    assert len(moves) == 16
+    assert all(m[1] & inputs.MOUSEEVENTF_ABSOLUTE and m[1] & inputs.MOUSEEVENTF_VIRTUALDESK for m in moves)
+    assert (moves[-1][2], moves[-1][3]) == (round(100 * 65535 / 1919), round(100 * 65535 / 1079))
+    assert moves[7][2] == round(50 * 65535 / 1919) and moves[7][3] == 0
+    # The release lands on the exact pixel: absolute moves can be a pixel off after rounding.
+    assert stub.events[-2] == ("cursor", 100, 100)
+
+
 class StubUser32:
     """Refuses the first `blocked` events, the way a background desktop does."""
 
