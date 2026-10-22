@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.1.1
+
+Four small fixes in the desktop layer.
+
+- `desktop_notify` with a short `seconds` hides on time instead of at the 1.5 s fade.
+- The 30 minute recording limit now fires while the person touches nothing; before, it was
+  only checked when the next click or key arrived.
+- When the `SKILL.md` write at `desktop_record stop` fails, the error is returned and the
+  recorder's worker thread ends with it, so the next start is clean.
+- On close the overlay unregisters its window class, so a second strip in one process gets
+  its own message handler instead of the old one's.
+
+Extension unchanged.
+
 ## 4.1.0
 
 Three things learned from driving Paint through 4.0.0, plus an overlay and a recorder.

@@ -238,7 +238,7 @@ follow later with the same tools. The strip turns red for the whole recording an
 start without the strip. The bridge's own injected input is left out, so an agent can keep
 working while you demonstrate. Text composed through an IME never reaches a keyboard hook, so
 Japanese or Chinese input is not captured; the recorder stops itself after 2000 events or 30
-minutes of activity.
+minutes.
 
 Coordinates are **view pixels**: the pixel space of the last `shot` of that display, which is
 scaled down to a 1280 long edge by default. The daemon scales them back up; never convert

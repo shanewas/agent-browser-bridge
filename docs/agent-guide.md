@@ -281,7 +281,7 @@ step, shoot again. `op: "status"` answers `{recording, name, events, seconds}`.
 Ask before starting: the keyboard hook keeps everything typed, passwords included, and the
 `Type "..."` steps in `SKILL.md` repeat it, so tell the person to scrub the skill before it is
 shared. Text composed through an IME never reaches the hook. Stop as soon as the demonstration
-ends; the recorder also stops itself after 2000 events or 30 minutes of activity.
+ends; the recorder also stops itself after 2000 events or 30 minutes.
 
 ## Care
 
