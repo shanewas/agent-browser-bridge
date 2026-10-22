@@ -75,10 +75,10 @@ class Overlay:
         self._post()
 
     def idle(self) -> None:
-        """Let the current message fade: in IDLE_SECONDS, or when its own time is up."""
+        """Let the current message fade in IDLE_SECONDS, unless it carries its own time."""
         with self._lock:
-            soon = time.monotonic() + IDLE_SECONDS
-            self._until = soon if self._until is None else max(self._until, soon)
+            if self._until is None:
+                self._until = time.monotonic() + IDLE_SECONDS
 
     def record(self, text: str | None) -> None:
         with self._lock:
@@ -154,6 +154,7 @@ class Overlay:
         user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, wintypes.BYTE, wintypes.DWORD]
         user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
         gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
         gdi32.CreateSolidBrush.argtypes = [wintypes.COLORREF]
         gdi32.CreateFontW.restype = wintypes.HFONT
@@ -238,14 +239,15 @@ class Overlay:
             user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
             self._hwnd = hwnd
         self._ready.set()
-        if not hwnd:
-            return
-        msg = wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        gdi32.DeleteObject(font)
-        self._hwnd = None
+        if hwnd:
+            msg = wintypes.MSG()
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            gdi32.DeleteObject(font)
+            self._hwnd = None
+        # A class left registered would hand the next strip this instance's message handler.
+        user32.UnregisterClassW(CLASS_NAME, wc.hInstance)
 
 
 def make_overlay():

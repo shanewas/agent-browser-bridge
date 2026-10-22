@@ -22,6 +22,7 @@ from .overlay import NullOverlay
 
 MAX_EVENTS = 2000
 MAX_SECONDS = 1800
+POLL_SECONDS = 1.0
 VIEW_EDGE = 1280
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _MODIFIER_VKS = {0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}
@@ -140,7 +141,11 @@ class Recorder:
 
     def _drain(self) -> None:
         while True:
-            item = self._queue.get()
+            try:
+                item = self._queue.get(timeout=POLL_SECONDS)
+            except queue.Empty:
+                self._tick()
+                continue
             try:
                 if item is None:
                     return
@@ -196,6 +201,17 @@ class Recorder:
         elif t - active["started"] >= MAX_SECONDS:
             self._finish(f"{MAX_SECONDS // 60} minutes reached")
 
+    def _tick(self) -> None:
+        """The clock runs between events too: the time limit must not wait for the next key."""
+        with self._lock:
+            active = self._active
+        if not active or self.clock() - active["started"] < MAX_SECONDS:
+            return
+        try:
+            self._finish(f"{MAX_SECONDS // 60} minutes reached")
+        except Exception as exc:  # noqa: BLE001 - the worker must survive to take the sentinel
+            print(f"recorder: could not finish the recording: {type(exc).__name__}: {exc}", flush=True)
+
     def _monitor_at(self, x: int, y: int):
         for m in self.screen.monitors():
             if m.origin[0] <= x < m.origin[0] + m.size[0] and m.origin[1] <= y < m.origin[1] + m.size[1]:
@@ -207,15 +223,17 @@ class Recorder:
             active, self._active = self._active, None
         if not active:
             return None
-        self._hooks.stop()
-        active["file"].close()
-        skill = active["dir"] / "SKILL.md"
-        skill.write_text(write_skill(active["name"], active["describe"], active["display"], active["events"]),
-                         encoding="utf-8")
-        self.overlay.record(None)
-        if reason:
-            self.overlay.show(f"Recording {active['name']} stopped: {reason}", "notify", 6)
-        self._queue.put(None)
+        try:
+            self._hooks.stop()
+            active["file"].close()
+            skill = active["dir"] / "SKILL.md"
+            skill.write_text(write_skill(active["name"], active["describe"], active["display"], active["events"]),
+                             encoding="utf-8")
+            self.overlay.record(None)
+            if reason:
+                self.overlay.show(f"Recording {active['name']} stopped: {reason}", "notify", 6)
+        finally:
+            self._queue.put(None)  # the worker must end even when the skill could not be written
         self._last = {"recording": False, "name": active["name"], "dir": str(active["dir"]), "skill": str(skill),
                       "events": len(active["events"]), "shots": active["shots"]}
         return self._last

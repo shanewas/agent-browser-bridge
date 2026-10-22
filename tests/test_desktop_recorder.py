@@ -136,6 +136,33 @@ def test_the_event_limit_stops_the_recording(parts):
     assert any(c[0] == "show" and "stopped" in c[1] for c in overlay.calls)
 
 
+def test_the_time_limit_stops_the_recording_without_an_event(parts, monkeypatch):
+    from agent_browser_bridge.desktop import recorder as mod
+    monkeypatch.setattr(mod, "POLL_SECONDS", 0.01, raising=False)
+    rec, _, overlay, clock, home = parts
+    rec.start("demo", None)
+    clock.now += mod.MAX_SECONDS
+    rec._worker.join(2.0)  # the worker finishes the recording on its next poll, then ends
+    assert not rec._worker.is_alive()
+    assert rec.status() == {"recording": False} and not _hooks().running
+    assert (home / "recordings" / "demo" / "SKILL.md").exists()
+    assert any(c[0] == "show" and "minutes" in c[1] for c in overlay.calls)
+
+
+def test_a_failing_skill_write_still_ends_the_worker(parts, monkeypatch):
+    def broken(*_args):
+        raise OSError("disk full")
+    rec = parts[0]
+    rec.start("demo", None)
+    worker = rec._worker
+    monkeypatch.setattr("agent_browser_bridge.desktop.recorder.write_skill", broken)
+    with pytest.raises(OSError, match="disk full"):
+        rec.stop()
+    worker.join(2.0)
+    assert not worker.is_alive() and not _hooks().running
+    assert rec.status() == {"recording": False}
+
+
 def test_write_skill_collapses_typing_and_names_combos():
     events = [
         {"t": 0, "kind": "click", "button": "left", "display": [1, 1], "monitor": 1, "view": [1, 1],
