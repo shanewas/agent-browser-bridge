@@ -903,6 +903,11 @@ def serve(stdin=None, stdout=None) -> None:
                 out_stream.write(json.dumps(resp).encode("utf-8") + b"\n")
                 out_stream.flush()
     finally:
+        if mint.get("success") and mint.get("sessionToken"):
+            try:
+                edge.send("session_stop", {})
+            except Exception:
+                pass
         edge.close()
 
 

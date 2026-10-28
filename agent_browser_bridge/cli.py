@@ -444,7 +444,15 @@ def _handle_run(args, edge: Edge, opt_session, opt_json: bool, opt_tab=None) -> 
             if args.stop_on_error:
                 break
             continue
-        params = dict(step.get("params") or {})
+        raw_params = step.get("params")
+        if raw_params is not None and not isinstance(raw_params, dict):
+            print(json.dumps({"step": i, "action": step["action"], "success": False,
+                              "code": "bad_params", "error": "step params must be an object"}))
+            worst = 1
+            if args.stop_on_error:
+                break
+            continue
+        params = dict(raw_params or {})
         if opt_tab is not None and "tabId" not in params:
             params["tabId"] = opt_tab
         res = edge.send(step["action"], params)
@@ -480,6 +488,12 @@ def _handle_extension_cmd(args) -> int:
     return 3
 
 
+def _result_exit(res) -> int:
+    if res.get("success"):
+        return 0
+    return 2 if res.get("code") in ("daemon_unreachable", "missing_token") else 1
+
+
 def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
     sub = args.session_action
     if sub == "start" and not getattr(args, "new", False) and edge.session_token:
@@ -498,7 +512,7 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
                 print(json.dumps(res))
             else:
                 print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
-            return 1
+            return _result_exit(res)
         if opt_json:
             print(json.dumps(res))
         else:
@@ -525,7 +539,7 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
                     print(f"  {s.get('name')}  {state}  age {s.get('age_s')}s")
             else:
                 print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
-        return 0 if res.get("success") else 1
+        return _result_exit(res)
     if sub == "prune":
         res = edge._send_once("session_prune", {})
         if opt_json:
@@ -535,7 +549,7 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
                 print(f"Pruned {res.get('dropped', 0)} closed session(s)")
             else:
                 print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
-        return 0 if res.get("success") else 1
+        return _result_exit(res)
     if not edge.session_token:
         msg = "no session: pass --session TOKEN or set EDGE_BRIDGE_SESSION"
         if opt_json:
@@ -555,7 +569,7 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
                 print("Session stopped")
         else:
             print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
-    return 0 if res.get("success") else 1
+    return _result_exit(res)
 
 
 def _coordinate(text: str) -> list:
@@ -1016,9 +1030,7 @@ def main(argv=None) -> int:
                 err_code = res.get("code", "error")
                 err_msg = res.get("error", "Action failed")
                 print(f"Error ({err_code}): {err_msg}", file=sys.stderr)
-        if res.get("success"):
-            return 0
-        return 2 if res.get("code") in ("daemon_unreachable", "missing_token") else 1
+        return _result_exit(res)
 
     # Map command to action and params
     action = args.cmd
@@ -1244,17 +1256,30 @@ def main(argv=None) -> int:
         save_path = args.out or config.home() / ("shot.jpg" if getattr(args, "fast", None) else "shot.png")
     if save_path and res.get("success") and (res.get("dataUrl") or res.get("data")):
         data_str = res.get("dataUrl") or res["data"]
-        if "," in data_str:
-            data_str = data_str.split(",", 1)[1]
-        import base64
-        b = base64.b64decode(data_str)
         out_p = Path(save_path)
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        out_p.write_bytes(b)
-        res["path"] = str(out_p.resolve())
-        if action == "desktop_shot":
-            # The file is what the agent reads; a megabyte of base64 on stdout helps nobody.
-            res.pop("dataUrl", None)
+        existed = out_p.is_file()
+        writing = False
+        try:
+            if "," in data_str:
+                data_str = data_str.split(",", 1)[1]
+            import base64
+            b = base64.b64decode(data_str)
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            writing = True
+            out_p.write_bytes(b)
+        except (ValueError, TypeError, OSError) as e:
+            if writing and not existed and out_p.is_file():
+                try:
+                    out_p.unlink()
+                except OSError:
+                    pass
+            code = "bad_response" if isinstance(e, (ValueError, TypeError)) else "file_not_found"
+            res = {"success": False, "code": code, "error": f"cannot save screenshot to {save_path}: {e}"}
+        else:
+            res["path"] = str(out_p.resolve())
+            if action == "desktop_shot":
+                # The file is what the agent reads; a megabyte of base64 on stdout helps nobody.
+                res.pop("dataUrl", None)
 
     if opt_json:
         print(json.dumps(res))
