@@ -793,6 +793,8 @@ class Edge:
                 conn = self._get_connection(config.call_timeout(self.timeout))
                 conn.request("GET", "/status")
                 data = json.loads(conn.getresponse().read().decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("daemon status response was not a JSON object")
                 data["success"] = bool(data.get("bridge_running"))
                 return data
             except (OSError, http.client.HTTPException, ValueError) as e:

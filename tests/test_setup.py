@@ -232,6 +232,40 @@ def test_fix_path_abort_writes_nothing(monkeypatch, capsys):
     assert fake_u32.calls == []
 
 
+def test_setup_cli_failing_json_merge_returns_1(monkeypatch, capsys):
+    detected = {"cli": {}, "json": {"cursor": {"found": True, "path": "/tmp/mcp.json"}}}
+    monkeypatch.setattr(setup, "detect_clients", lambda: detected)
+    monkeypatch.setattr(setup, "merge_json_config", lambda path, client: (False, "boom"))
+    assert setup.setup_cli(yes=True) == 1
+    assert "Setup complete" in capsys.readouterr().out
+
+
+def test_setup_cli_all_success_returns_0(monkeypatch):
+    detected = {"cli": {}, "json": {"cursor": {"found": True, "path": "/tmp/mcp.json"}}}
+    monkeypatch.setattr(setup, "detect_clients", lambda: detected)
+    monkeypatch.setattr(setup, "merge_json_config", lambda path, client: (True, "ok"))
+    assert setup.setup_cli(yes=True) == 0
+
+
+def test_setup_cli_failing_cli_registration_returns_1(monkeypatch):
+    detected = {"cli": {"claude": "/bin/claude"}, "json": {}}
+    monkeypatch.setattr(setup, "detect_clients", lambda: detected)
+
+    def fake_run(cmd, check=True):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(setup.subprocess, "run", fake_run)
+    assert setup.setup_cli(yes=True) == 1
+
+
+def test_setup_cli_abort_is_not_a_failure(monkeypatch, capsys):
+    detected = {"cli": {"claude": "/bin/claude"}, "json": {}}
+    monkeypatch.setattr(setup, "detect_clients", lambda: detected)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    assert setup.setup_cli() == 0
+    assert "Aborted" in capsys.readouterr().out
+
+
 def test_setup_cli_runs_detected_path_and_user_scope(monkeypatch):
     gemini_cmd = r"C:\Users\tester\AppData\Roaming\npm\gemini.CMD"
     claude_bin = "/usr/local/bin/claude"
