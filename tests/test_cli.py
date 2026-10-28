@@ -240,6 +240,24 @@ def test_cli_daemon_stop_hung_daemon_needs_force(tmp_path, bystander):
         listener.close()
 
 
+@pytest.mark.parametrize("bad_pid", ["0", "-1"])
+def test_cli_daemon_stop_force_rejects_non_positive_pid(tmp_path, monkeypatch, capsys, bad_pid):
+    # os.kill(0/-1, SIGTERM) would signal the caller's process group / every
+    # signalable process, and taskkill needs the same guard on Windows.
+    (tmp_path / "bridge.pid").write_text(bad_pid, encoding="utf-8")
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    kills, runs = [], []
+    monkeypatch.setattr(cli.os, "kill", lambda *a: kills.append(a))
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: runs.append((a, k)))
+    code = cli._handle_daemon_cmd(cli.argparse.Namespace(daemon_action="stop", force=True),
+                                  port=free_port())
+    out, err = capsys.readouterr()
+    assert code == 0
+    assert kills == [] and runs == []
+    assert "Stopped daemon" not in out
+    assert "Error stopping daemon" in out
+
+
 def test_cli_daemon_restart_fails_while_another_daemon_answers(daemon, bystander):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     (daemon.home / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")

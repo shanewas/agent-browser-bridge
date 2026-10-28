@@ -218,6 +218,45 @@ def test_unaccepted_socket_fails_fast_until_grace_passes(daemon):
     ext.close()
 
 
+def test_grace_candidate_does_not_displace_live_extension(daemon):
+    real = FakeExtension(daemon.port, version="2.5.0").connect().run()
+    assert _wait_active(daemon)
+    lurker = FakeExtension(daemon.port, send_hello=False).connect().run()
+    time.sleep(1.5)   # longer than the pairing-off grace window
+    status = daemon.status()
+    assert status["websocket_active"] is True
+    assert status["extension_version"] == "2.5.0"
+    assert real.closed_with is None
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True and body["version"] == "2.5.0"
+    assert not any("action" in m for m in lurker.received)
+    lurker.close()
+    real.close()
+
+
+def test_grace_accepts_when_no_extension_connected(daemon):
+    ext = FakeExtension(daemon.port, send_hello=False).connect().run()
+    time.sleep(1.2)   # pairing-off grace timer accepts the socket
+    assert daemon.status()["websocket_active"] is True
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True
+    ext.close()
+
+
+def test_prefixed_routes_are_not_real_routes(daemon):
+    assert daemon._request("GET", "/status")[0] == 200
+    assert daemon._request("GET", "/status?verbose=1")[0] == 200
+    for method, path in (("GET", "/statusx"), ("GET", "/wsx"), ("GET", "/status-anything")):
+        code, body = daemon._request(method, path)
+        assert code == 404 and body["code"] == "not_found", (path, code, body)
+    code, body = daemon._request("POST", "/execx", {"action": "ping", "params": {}},
+                                 headers={config.TOKEN_HEADER: daemon.token})
+    assert code == 404 and body["code"] == "not_found", (code, body)
+    code, body = daemon._request("POST", "/exec-anything", {"action": "ping", "params": {}},
+                                 headers={config.TOKEN_HEADER: daemon.token})
+    assert code == 404 and body["code"] == "not_found", (code, body)
+
+
 def test_inflight_timeout_and_late_result_dropped(daemon):
     ext = FakeExtension(daemon.port).connect().run()
     assert _wait_active(daemon)
