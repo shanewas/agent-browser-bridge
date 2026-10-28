@@ -758,3 +758,84 @@ def test_cli_desktop_window_posts_and_prints_the_title(tmp_path, monkeypatch, ca
     assert cli.main(["desktop", "window"]) == 0
     assert bodies[0]["action"] == "desktop_window" and bodies[0]["params"] == {}
     assert "window: Untitled - Paint (mspaint.exe)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("clip", ["1,2", "a,b,c,d"])
+def test_cli_screenshot_malformed_clip_exits_3_and_sends_nothing(tmp_path, monkeypatch, capsys, clip):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["--json", "screenshot", "--clip", clip]) == 3
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["success"] is False and printed["code"] == "bad_params"
+    assert "x,y,width,height" in printed["error"]
+    assert bodies == []
+
+
+def test_cli_screenshot_malformed_clip_human_error(tmp_path, monkeypatch, capsys):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["screenshot", "--clip", "1,2"]) == 3
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err and "x,y,width,height" in captured.err
+    assert bodies == []
+
+
+def test_cli_screenshot_valid_clip_is_forwarded(tmp_path, monkeypatch):
+    bodies = _recording_cli(monkeypatch, tmp_path)
+    assert cli.main(["--json", "screenshot", "--clip", "1,2,30,40"]) == 0
+    assert bodies[0]["action"] == "screenshot"
+    assert bodies[0]["params"]["clip"] == {"x": 1.0, "y": 2.0, "width": 30.0, "height": 40.0}
+
+
+def test_cli_daemon_restart_propagates_require_pairing(tmp_path, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setenv("EDGE_BRIDGE_PORT", str(free_port()))
+    monkeypatch.setattr(cli, "_probe_status", lambda port: {})
+    starts = []
+
+    def fake_ensure(port, wait_for_extension, timeout):
+        starts.append((port, wait_for_extension, timeout))
+        return True
+
+    monkeypatch.setattr(cli, "ensure_bridge_running", fake_ensure)
+    assert cli.main(["daemon", "restart", "--require-pairing"]) == 0
+    assert starts
+    assert config.read_config().get("pairing") == "1"
+
+
+def test_log_rotated_detects_inode_change_and_truncation(tmp_path):
+    import os as _os
+    p = tmp_path / "bridge.log"
+    p.write_text("one\ntwo\n", encoding="utf-8")
+    with open(p, "r", encoding="utf-8") as fh:
+        inode = _os.fstat(fh.fileno()).st_ino
+        fh.seek(0, 2)
+        assert cli._log_rotated(p, fh, inode) is False
+        p.write_text("x\n", encoding="utf-8")
+        assert cli._log_rotated(p, fh, inode) is True
+    with open(p, "r", encoding="utf-8") as fh:
+        inode = _os.fstat(fh.fileno()).st_ino
+        fh.seek(0, 2)
+        p.rename(tmp_path / "bridge.log.1")
+        p.write_text("new\n", encoding="utf-8")
+        assert cli._log_rotated(p, fh, inode) is True
+
+
+def test_cli_logs_follow_reopens_after_rotation(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    p = tmp_path / "bridge.log"
+    p.write_text("old\n", encoding="utf-8")
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 1:
+            p.rename(tmp_path / "bridge.log.1")
+            p.write_text("new\n", encoding="utf-8")
+        else:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.time, "sleep", fake_sleep)
+    assert cli._handle_logs(SimpleNamespace(tail=1, follow=True), False) == 0
+    out = capsys.readouterr().out
+    assert "old" in out and "new" in out
+    assert sleeps and all(s == 0.5 for s in sleeps)
