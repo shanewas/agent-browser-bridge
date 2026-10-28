@@ -47,6 +47,15 @@ LOCK_IDLE_EVICT_SEC = 3600.0
 def _is_tab_scoped(action: str) -> bool:
     return action not in LOCK_EXEMPT_ACTIONS and not action.startswith("desktop_")
 
+
+def _tab_id(tab_info) -> int | None:
+    if not isinstance(tab_info, dict):
+        return None
+    try:
+        return int(tab_info.get("id"))
+    except (TypeError, ValueError):
+        return None
+
 logger = logging.getLogger("edge_bridge")
 
 
@@ -203,6 +212,12 @@ class BridgeState:
         old = self.ext
         if old is not ws:
             if old is not None:
+                # Commands sent on the old socket can never be answered once it is
+                # replaced; fail them now rather than leaving callers to time out.
+                for cmd_id, event in list(self.pending.items()):
+                    self.results[cmd_id] = {"success": False, "code": "extension_offline",
+                                            "error": "Edge extension disconnected while the command was in flight."}
+                    event.set()
                 old.close()
             self.ext = ws
             now = time.monotonic()
@@ -589,6 +604,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         if "id" in data and "result" in data:
             cmd_id = data["id"]
             result = data["result"]
+            if not isinstance(cmd_id, str) or not isinstance(result, dict):
+                logger.warning("Dropping malformed extension result: id=%r result type=%s",
+                               cmd_id, type(result).__name__)
+                return
             with state.lock:
                 if cmd_id in state.pending and state.is_active_locked(ws_conn):
                     err = result.get("error") if isinstance(result, dict) else ""
@@ -835,14 +854,14 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             # set it, the first successful tab-bound result sets it while empty,
             # an explicit tabId is a one-shot override that leaves it alone.
             tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
+            tab_id = _tab_id(tab_info)
             with state.lock:
-                if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
-                        and tab_info.get("id") is not None:
-                    state.cli_pin = int(tab_info["id"])
+                if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_id is not None:
+                    state.cli_pin = tab_id
                     state.cli_pin_closed = False
                 elif state.cli_pin is None and forward_tab is None and res.get("success") \
-                        and tab_info is not None and tab_info.get("id") is not None:
-                    state.cli_pin = int(tab_info["id"])
+                        and tab_id is not None:
+                    state.cli_pin = tab_id
                 if forward_tab is not None and forward_tab == state.cli_pin:
                     if res.get("code") == "tab_not_found":
                         if not state.cli_pin_closed:
@@ -861,13 +880,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if sess is None:
                 return
             tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
-            if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
-                    and tab_info.get("id") is not None:
-                sess["tabId"] = int(tab_info["id"])
+            tab_id = _tab_id(tab_info)
+            if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_id is not None:
+                sess["tabId"] = tab_id
                 sess["tabClosed"] = False
-            elif sess.get("tabId") is None and res.get("success") and tab_info is not None \
-                    and tab_info.get("id") is not None:
-                sess["tabId"] = int(tab_info["id"])
+            elif sess.get("tabId") is None and res.get("success") and tab_id is not None:
+                sess["tabId"] = tab_id
             if forward_tab is not None and forward_tab == sess.get("tabId"):
                 if res.get("code") == "tab_not_found" \
                         or (action in CLOSING_ACTIONS and res.get("success")):

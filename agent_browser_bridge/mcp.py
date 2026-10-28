@@ -518,6 +518,48 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
 ]
 TOOLS.extend(DESKTOP_TOOLS)
 
+_SIMPLE_TYPES = ("string", "number", "integer", "boolean", "array", "object")
+
+
+def _type_matches(value: Any, type_name: str) -> bool:
+    if type_name == "string":
+        return isinstance(value, str)
+    if type_name == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if type_name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "boolean":
+        return isinstance(value, bool)
+    if type_name == "array":
+        return isinstance(value, list)
+    if type_name == "object":
+        return isinstance(value, dict)
+    return True
+
+
+def _invalid_arguments(msg_id: Any, message: str) -> dict:
+    # Tool-argument errors use the isError tool-result shape handle() already
+    # returns for tool-level failures, rather than a top-level JSON-RPC error.
+    res = {"success": False, "code": "invalid_params", "error": message}
+    return {"jsonrpc": "2.0", "id": msg_id,
+            "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}],
+                       "isError": True}}
+
+
+def _validate_arguments(tool_name: Any, args: dict) -> str | None:
+    tool = next((t for t in TOOLS if t.get("name") == tool_name), None)
+    if tool is None:
+        return None
+    schema = tool.get("inputSchema") or {}
+    properties = schema.get("properties") or {}
+    for field in schema.get("required") or []:
+        if field not in args:
+            return f"{tool_name}: missing required argument '{field}'"
+        declared = (properties.get(field) or {}).get("type")
+        if declared in _SIMPLE_TYPES and not _type_matches(args[field], declared):
+            return f"{tool_name}: argument '{field}' must be of type {declared}"
+    return None
+
 
 def handle(msg: dict, edge: Edge) -> dict | None:
     """Handle a single JSON-RPC 2.0 message."""
@@ -549,8 +591,16 @@ def handle(msg: dict, edge: Edge) -> dict | None:
 
     if method == "tools/call":
         params = msg.get("params", {})
+        if not isinstance(params, dict):
+            return {"jsonrpc": "2.0", "id": msg_id,
+                    "error": {"code": -32602, "message": "Invalid params: params must be an object"}}
         tool_name = params.get("name", "")
         args = params.get("arguments", {})
+        if not isinstance(args, dict):
+            return _invalid_arguments(msg_id, "Invalid arguments: arguments must be an object")
+        validation_error = _validate_arguments(tool_name, args)
+        if validation_error is not None:
+            return _invalid_arguments(msg_id, validation_error)
 
         # Route tool call
         if tool_name == "edge_status":

@@ -258,13 +258,70 @@ def test_cli_daemon_stop_force_rejects_non_positive_pid(tmp_path, monkeypatch, c
     assert "Error stopping daemon" in out
 
 
-def test_cli_daemon_restart_fails_while_another_daemon_answers(daemon, bystander):
-    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
-    (daemon.home / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
-    code, out, err = run_cli(["daemon", "restart"], env=env)
+def test_cli_daemon_stop_uses_status_pid_when_pid_file_is_stale(tmp_path, monkeypatch, capsys):
+    (tmp_path / "bridge.pid").write_text("111", encoding="utf-8")
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "_probe_status", lambda port: {"bridge_running": True, "pid": 222})
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    kills = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    code = cli._handle_daemon_cmd(cli.argparse.Namespace(daemon_action="stop", force=False),
+                                  port=free_port())
+    out, err = capsys.readouterr()
+    assert code == 0
+    assert [pid for pid, _ in kills] == [222]
+    assert "Stopped daemon (PID 222)" in out
+    assert not (tmp_path / "bridge.pid").exists()
+
+
+def test_cli_daemon_stop_failed_taskkill_does_not_report_stopped(tmp_path, monkeypatch, capsys):
+    import types
+
+    (tmp_path / "bridge.pid").write_text("222", encoding="utf-8")
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=1))
+    code = cli._handle_daemon_cmd(cli.argparse.Namespace(daemon_action="stop", force=True),
+                                  port=free_port())
+    out, err = capsys.readouterr()
     assert code == 1
-    assert f"PID {daemon.status()['pid']} still answers" in err
-    assert bystander.poll() is None
+    assert "Stopped daemon" not in out
+    assert (tmp_path / "bridge.pid").exists()
+
+
+def test_cli_daemon_stop_failed_kill_keeps_pid_file_and_returns_1(tmp_path, monkeypatch, capsys):
+    (tmp_path / "bridge.pid").write_text("222", encoding="utf-8")
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+
+    def fail_kill(pid, sig):
+        raise OSError("no such process")
+
+    monkeypatch.setattr(cli.os, "kill", fail_kill)
+    code = cli._handle_daemon_cmd(cli.argparse.Namespace(daemon_action="stop", force=True),
+                                  port=free_port())
+    out, err = capsys.readouterr()
+    assert code == 1
+    assert "Stopped daemon" not in out
+    assert "Error stopping daemon" in out
+    assert (tmp_path / "bridge.pid").exists()
+
+
+def test_cli_daemon_restart_with_stale_pid_file_restarts_the_status_daemon(daemon, bystander):
+    # The PID file names a bystander, but /status names the live daemon: restart
+    # stops that daemon (not the bystander) and starts a fresh one.
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    old_pid = daemon.status()["pid"]
+    (daemon.home / "bridge.pid").write_text(str(bystander.pid), encoding="utf-8")
+    try:
+        code, out, err = run_cli(["daemon", "restart"], env=env)
+        assert code == 0, err
+        assert f"Stopped daemon (PID {old_pid})" in out
+        assert bystander.poll() is None
+        daemon.proc.wait(timeout=10)
+        assert daemon.status()["pid"] != old_pid
+    finally:
+        run_cli(["daemon", "stop"], env=env)
 
 
 def test_cli_daemon_restart_without_pid_file(daemon):

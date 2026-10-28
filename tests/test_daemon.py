@@ -45,6 +45,44 @@ def test_result_arriving_after_timeout_is_dropped(tmp_path):
     assert state.results == {} and state.pending == {}
 
 
+def test_malformed_extension_results_are_dropped(tmp_path):
+    # A scalar result or a non-string id must not complete (or crash) a pending request.
+    import types
+
+    from agent_browser_bridge.bridge import BridgeRequestHandler, BridgeState
+
+    state = BridgeState(port=0, home=tmp_path, token="t")
+
+    class Ws:
+        closed = False
+        grace_timer = None
+
+    ws = Ws()
+    state.ext, state.ext_accepted = ws, True
+    event = threading.Event()
+    state.pending["cmd1"] = event
+    handler = object.__new__(BridgeRequestHandler)
+    handler.server = types.SimpleNamespace(state=state)
+    handler._handle_ws_json({"id": "cmd1", "result": "scalar"}, ws)
+    handler._handle_ws_json({"id": ["cmd1"], "result": {"success": True}}, ws)
+    handler._handle_ws_json({"id": 123, "result": {"success": True}}, ws)
+    assert not event.is_set()
+    assert state.pending == {"cmd1": event} and state.results == {}
+
+
+def test_bad_tab_id_in_result_does_not_crash_pin_maintenance(tmp_path):
+    from agent_browser_bridge.bridge import BridgeRequestHandler, BridgeState
+
+    state = BridgeState(port=0, home=tmp_path, token="t")
+    res = {"success": True, "tab": {"id": "x", "title": "t", "url": "http://t"}}
+    BridgeRequestHandler._after_result(None, state, None, None, "tab_switch", {}, None, res)
+    assert state.cli_pin is None
+    token = state.session_create_locked("s")
+    BridgeRequestHandler._after_result(None, state, token, state.sessions[token],
+                                       "tab_switch", {}, None, res)
+    assert state.sessions[token]["tabId"] is None
+
+
 def test_status_reports_running(daemon):
     st = daemon.status()
     assert st["bridge_running"] is True
@@ -291,6 +329,35 @@ def test_pending_command_fails_fast_when_extension_drops(daemon):
     code, body = outcome["r"]
     assert body["code"] == "extension_offline", (code, body)
     assert daemon.status()["pending"] == 0
+
+
+def test_pending_command_fails_when_extension_is_replaced(daemon):
+    # A command in flight on the replaced socket can never be answered; it must
+    # fail extension_offline at replacement time, not at its own timeout.
+    def handler(action, params):
+        time.sleep(5)
+        return {"success": True}
+
+    old = FakeExtension(daemon.port, handler=handler).connect().run()
+    assert _wait_active(daemon)
+    outcome = {}
+
+    def call():
+        outcome["r"] = daemon.exec("click", {"target": "x"}, timeout=20)
+
+    th = threading.Thread(target=call)
+    th.start()
+    deadline = time.time() + 3
+    while time.time() < deadline and not any("action" in m for m in old.received):
+        time.sleep(0.02)
+    new = FakeExtension(daemon.port).connect().run()
+    th.join(timeout=8)
+    assert not th.is_alive(), "caller still waiting after its socket was replaced"
+    code, body = outcome["r"]
+    assert body["code"] == "extension_offline", (code, body)
+    assert daemon.status()["pending"] == 0
+    new.close()
+    old.close()
 
 
 def test_extension_outdated_rewrite(daemon):

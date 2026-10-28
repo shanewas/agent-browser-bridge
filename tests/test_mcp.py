@@ -344,6 +344,60 @@ def _call(edge, name, args):
                    "params": {"name": name, "arguments": args}}, edge)
 
 
+class _RecordingEdge:
+    def __init__(self):
+        self.calls = []
+
+    def fill(self, **kwargs):
+        self.calls.append(("fill", kwargs))
+        return {"success": True}
+
+    def batch(self, **kwargs):
+        self.calls.append(("batch", kwargs))
+        return {"success": True}
+
+
+def test_mcp_missing_required_argument_is_an_error_without_calling_the_client():
+    edge = _RecordingEdge()
+    resp = _call(edge, "edge_fill", {"target": "#x"})
+    assert resp["result"]["isError"] is True
+    assert "text" in resp["result"]["content"][0]["text"]
+    resp = _call(edge, "edge_batch", {})
+    assert resp["result"]["isError"] is True
+    assert "steps" in resp["result"]["content"][0]["text"]
+    assert edge.calls == []
+
+
+def test_mcp_wrong_typed_required_argument_is_an_error_without_calling_the_client():
+    edge = _RecordingEdge()
+    resp = _call(edge, "edge_fill", {"text": 123})
+    assert resp["result"]["isError"] is True
+    assert edge.calls == []
+
+
+def test_mcp_non_object_arguments_is_an_error_without_calling_the_client():
+    from agent_browser_bridge.mcp import handle
+
+    edge = _RecordingEdge()
+    resp = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "edge_fill", "arguments": ["text"]}}, edge)
+    assert resp["result"]["isError"] is True
+    assert edge.calls == []
+    resp = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": []}, edge)
+    assert resp["error"]["code"] == -32602
+    assert edge.calls == []
+
+
+def test_mcp_valid_required_arguments_still_route():
+    edge = _RecordingEdge()
+    resp = _call(edge, "edge_fill", {"text": "hello"})
+    assert resp["result"]["isError"] is False
+    assert edge.calls[0][0] == "fill" and edge.calls[0][1]["text"] == "hello"
+    resp = _call(edge, "edge_batch", {"steps": []})
+    assert resp["result"]["isError"] is False
+    assert edge.calls[1] == ("batch", {"steps": [], "tab_id": None})
+
+
 def test_desktop_tools_are_listed_with_point_schemas():
     from agent_browser_bridge.mcp import TOOLS
     names = {t["name"] for t in TOOLS}
