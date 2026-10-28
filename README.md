@@ -1,7 +1,7 @@
 # Agent Browser Bridge
 
 [![PyPI - Version](https://img.shields.io/pypi/v/agent-browser-bridge?color=0078D4&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/agent-browser-bridge/)
-[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v2.6.1-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
+[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v4.1.1-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/lknjdleggnheadkkjfngphdbcglalmmg?color=4285F4&logo=googlechrome&logoColor=white&label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/lknjdleggnheadkkjfngphdbcglalmmg)
 [![GitHub Release](https://img.shields.io/github/v/release/shanewas/agent-browser-bridge?color=2ea44f&logo=github&label=Release)](https://github.com/shanewas/agent-browser-bridge/releases/latest)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/agent-browser-bridge?color=3776AB&logo=python&logoColor=white)](https://pypi.org/project/agent-browser-bridge/)
@@ -54,7 +54,7 @@ agent-bridge daemon status
 
 ```text
 Daemon: running on 127.0.0.1:18999 (PID 24188)
-Extension: 2.6.1 (connected)
+Extension: 4.1.1 (connected)
 ```
 
 CLI commands and Python's `with Edge()` start the daemon on first use if it isn't running, but
@@ -88,8 +88,9 @@ agent-bridge mcp-config --client claude
 agent-bridge mcp-config --client cursor
 ```
 
-The server speaks stdio JSON-RPC and exposes 34 tools, all prefixed `edge_` so they don't collide
-with Playwright MCP in a mixed setup. [`docs/agent-guide.md`](docs/agent-guide.md) is written for
+The server speaks stdio JSON-RPC and exposes 47 tools: 34 `edge_*` tools for the browser and
+13 `desktop_*` tools for the Windows desktop. The `edge_` prefix keeps the browser tools from
+colliding with Playwright MCP in a mixed setup. [`docs/agent-guide.md`](docs/agent-guide.md) is written for
 the agent rather than for you: snapshot first, act by ref, re-snapshot after navigation.
 
 ---
@@ -171,7 +172,7 @@ agent-bridge group list                     # tab groups; --window-id filters
 agent-bridge group move 1459 1460 --title Agent --color blue   # omit --group-id for a new group
 agent-bridge group ungroup 1459
 agent-bridge batch '[{"action":"click","target":"e5"},{"action":"sleep","ms":50},{"action":"fill","target":"e1","text":"spec"}]'
-agent-bridge run steps.json --stop-on-error  # batch from a file; one JSON line per step
+agent-bridge run steps.json --stop-on-error  # batch from a file holding one JSON array of steps
 agent-bridge session start --name agent-a  # prints sessionToken=<uuid>; --new always mints
 agent-bridge session list                  # named pins; prune drops closed-tab sessions
 agent-bridge session status --session <uuid>
@@ -293,7 +294,7 @@ no extension can dismiss.
 
 Against live Edge tabs, from `tests/e2e/test_benchmark.py`. These are one machine's numbers;
 the timings move with the host, so the suite treats them as advisory and gates on the
-correctness assertions instead. `EDGE_BRIDGE_BENCH_STRICT=1` makes the timings gate too.
+correctness assertions instead.
 
 | Gate | What | Conditions | Result |
 | :--- | :--- | :--- | :--- |
@@ -322,8 +323,9 @@ python scripts/build_extension.py  # syncs the manifest version, zips to dist/
 ```
 
 The hermetic suite runs a real daemon against a fake extension over a real WebSocket, so it covers
-the wire protocol without Edge installed. CI runs it on Windows, Linux and macOS and the E2E suite
-against a real Edge on Windows; releases are automated, see [`docs/release.md`](docs/release.md).
+the wire protocol without Edge installed. CI runs both suites on Windows, Linux and macOS, with
+the E2E suite driving a real Edge on each OS. Releases are automated, see
+[`docs/release.md`](docs/release.md).
 
 ---
 
