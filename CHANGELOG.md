@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Four new desktop actions for driving native applications.
+
+- `desktop_windows` lists the open windows with title, pid, process, rect, minimized and
+  foreground state. `desktop_focus` brings one window to the front and waits for it to appear.
+- `desktop_launch` starts a program without a shell and waits for its window. A timeout
+  returns `found: false` instead of an error.
+- `desktop_shot`, `desktop_click`, `desktop_move`, `desktop_drag` and `desktop_scroll` take a
+  `window` selector. Coordinates then live in that window's own view, so a moved window
+  breaks nothing.
+- `desktop_clipboard` gets, sets, or sets and pastes clipboard text. Paste is the reliable
+  route for long or non-Latin text.
+
+Four new MCP tools bring the list to 51. The extension is unchanged.
+
 ## 4.1.1
 
 Four small fixes in the desktop layer.

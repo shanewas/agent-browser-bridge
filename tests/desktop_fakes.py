@@ -16,6 +16,11 @@ class FakeScreen:
         self.size = size
         self._monitors = layout or [Monitor(1, (0, 0), size, True)]
         self.grabs = []
+        self.window_list = [{"hwnd": 77, "title": "Untitled - Paint", "pid": 4242,
+                             "process": "mspaint.exe", "rect": [100, 50, 1280, 800],
+                             "minimized": False, "foreground": True}]
+        self.focused = []
+        self.focus_result = True
 
     def monitors(self):
         return list(self._monitors)
@@ -41,12 +46,48 @@ class FakeScreen:
         return None
 
     def foreground(self):
-        return {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe"}
+        return {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe",
+                "hwnd": 77, "rect": [100, 50, 1280, 800]}
+
+    def windows(self):
+        return [dict(window) for window in self.window_list]
+
+    def find_window(self, title=None, process=None, pid=None):
+        for window in self.window_list:
+            if title is not None and title.lower() not in (window.get("title") or "").lower():
+                continue
+            if process is not None:
+                wanted = process.lower()
+                actual = (window.get("process") or "").lower()
+                if wanted != actual and wanted + ".exe" != actual:
+                    continue
+            if pid is not None and window.get("pid") != pid:
+                continue
+            return dict(window)
+        return None
+
+    def focus_window(self, hwnd):
+        self.focused.append(hwnd)
+        return self.focus_result
 
     def grab(self, region=None, cursor=False):
         self.grabs.append((region, cursor))
         width, height = self.size if region is None else (region[2], region[3])
         return Image.new("RGB", (width, height), "white")
+
+
+class FakeClipboard:
+    def __init__(self, text=""):
+        self.text = text
+        self.calls = []
+
+    def get_text(self):
+        self.calls.append(("get_text",))
+        return self.text
+
+    def set_text(self, text):
+        self.calls.append(("set_text", text))
+        self.text = text
 
 
 class FakeOverlay:
