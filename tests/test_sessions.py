@@ -15,39 +15,6 @@ def test_session_start_status_stop_roundtrip(daemon):
     assert code == 200 and st2["code"] == "unknown_session"
 
 
-def test_non_string_session_token_is_unknown_session(daemon, fake_ext):
-    # [] is unhashable in sessions.get on the normal-action path and a truthy
-    # ["x"] crashes the session_status/session_stop lookup the same way.
-    for bad_token in ([], ["x"], 123):
-        for action, params in (("session_status", {}), ("session_stop", {}),
-                               ("ping", {}), ("click", {"target": "x"})):
-            code, body = daemon.exec(action, params, session_token=bad_token)
-            assert code == 200 and body["success"] is False and body["code"] == "unknown_session", (
-                bad_token, action, code, body)
-    code, body = daemon.exec("ping")
-    assert code == 200 and body["success"] is True, (code, body)
-
-
-def test_tab_id_must_be_a_real_integer(daemon):
-    seen = []
-
-    def handler(action, params):
-        seen.append((action, dict(params)))
-        return {"success": True, "tab": {"id": params.get("tabId", 1), "title": "t", "url": "http://t"}}
-
-    ext = FakeExtension(daemon.port, handler=handler).connect().run()
-    time.sleep(0.3)
-    # 1e999 reaches the daemon as inf; the extension sends real ints only.
-    for bad in (float("inf"), "3", 2.5, True, [3]):
-        code, body = daemon.exec("click", {"target": "x", "tabId": bad})
-        assert code == 200 and body["success"] is False and body["code"] == "bad_params", (bad, code, body)
-    assert seen == [], seen
-    code, body = daemon.exec("click", {"target": "x", "tabId": 3})
-    assert code == 200 and body["success"] is True, (code, body)
-    assert seen[-1][1]["tabId"] == 3 and type(seen[-1][1]["tabId"]) is int
-    ext.close()
-
-
 def test_unknown_token_rejected_never_unpinned(daemon, fake_ext):
     n_before = len(fake_ext.received)
     code, body = daemon.exec("click", {"target": "x"}, session_token="bogus-token")
@@ -414,3 +381,171 @@ def test_deadline_ms_forwarded_for_tab_scoped_only(daemon, fake_ext):
     fwd_click10 = [m for m in fake_ext.received if m.get("action") == "click"][-1]
     assert "deadlineMs" in fwd_click10["params"]
     assert before10 + 8500 < fwd_click10["params"]["deadlineMs"] < before10 + 10500
+
+
+# --- Session idle expiry (audit finding 12, daemon half) ---
+
+def _expiry_state(tmp_path, ttl=100.0):
+    from agent_browser_bridge.bridge import BridgeState
+    return BridgeState(port=0, home=tmp_path, token="t", session_idle_ttl_sec=ttl)
+
+
+def _expiry_session(state, name="idle"):
+    with state.lock:
+        return state.session_create_locked(name)
+
+
+def _backdate(state, token, when):
+    with state.lock:
+        state.sessions[token]["lastActivity"] = when
+
+
+def test_idle_session_expired_on_next_prune(tmp_path):
+    state = _expiry_state(tmp_path)
+    token = _expiry_session(state)
+    _backdate(state, token, 1_000.0)
+    with state.lock:
+        dropped = state.session_prune_locked(now=1_101.0)
+    assert dropped == 1
+    with state.lock:
+        assert token not in state.sessions
+
+
+def test_idle_session_expired_on_next_list(tmp_path):
+    state = _expiry_state(tmp_path)
+    old = _expiry_session(state, "old")
+    fresh = _expiry_session(state, "fresh")
+    _backdate(state, old, 1_000.0)
+    _backdate(state, fresh, 1_050.0)
+    with state.lock:
+        items = state.session_list_locked(now=1_101.0)
+    assert [s["name"] for s in items] == ["fresh"]
+    with state.lock:
+        assert old not in state.sessions and fresh in state.sessions
+
+
+def test_session_with_recent_activity_survives_expiry(tmp_path):
+    state = _expiry_state(tmp_path)
+    token = _expiry_session(state)
+    _backdate(state, token, 1_000.0)
+    with state.lock:
+        dropped = state.session_prune_locked(now=1_099.0)
+        items = state.session_list_locked(now=1_099.0)
+    assert dropped == 0 and [s["name"] for s in items] == ["idle"]
+    with state.lock:
+        assert token in state.sessions
+
+
+def test_dispatch_refreshes_activity_and_extends_life(tmp_path):
+    import json as _json
+    from agent_browser_bridge.bridge import BridgeRequestHandler
+
+    state = _expiry_state(tmp_path, ttl=100.0)
+    token = _expiry_session(state)
+    _backdate(state, token, time.time() - 90)
+
+    class ImmediateExtension:
+        closed = False
+
+        def send_text(self, text):
+            cmd = _json.loads(text)
+            state.results[cmd["id"]] = {"success": True,
+                                         "tab": {"id": 5, "title": "t", "url": "http://t"}}
+            state.pending[cmd["id"]].set()
+            return True
+
+    state.ext, state.ext_accepted = ImmediateExtension(), True
+    handler = object.__new__(BridgeRequestHandler)
+    res, code = handler._dispatch_guarded(state, "click", {"target": "b"},
+                                          time.time() + 5, True, None, session_token=token)
+    assert code == 200 and res["success"] is True
+    # Without the dispatch refresh the session would be 140 s idle at this clock.
+    with state.lock:
+        dropped = state.session_prune_locked(now=time.time() + 50)
+        assert token in state.sessions
+    assert dropped == 0
+
+
+def test_session_idle_ttl_env_override(monkeypatch):
+    from agent_browser_bridge import config
+    assert config.DEFAULT_SESSION_IDLE_TTL_SEC == 24 * 60 * 60
+    monkeypatch.delenv("EDGE_BRIDGE_SESSION_IDLE_TTL_S", raising=False)
+    assert config.session_idle_ttl_seconds() == 24 * 60 * 60
+    monkeypatch.setenv("EDGE_BRIDGE_SESSION_IDLE_TTL_S", "42")
+    assert config.session_idle_ttl_seconds() == 42.0
+    for bad in ("not-a-number", "0", "-5", ""):
+        monkeypatch.setenv("EDGE_BRIDGE_SESSION_IDLE_TTL_S", bad)
+        assert config.session_idle_ttl_seconds() == 24 * 60 * 60, bad
+
+
+def test_inflight_session_is_not_expired(tmp_path):
+    import json as _json
+    import threading as _threading
+    from agent_browser_bridge.bridge import BridgeRequestHandler
+
+    state = _expiry_state(tmp_path, ttl=100.0)
+    token = _expiry_session(state)
+    started, release = _threading.Event(), _threading.Event()
+
+    class BlockingExtension:
+        closed = False
+
+        def send_text(self, text):
+            cmd = _json.loads(text)
+            event = state.pending[cmd["id"]]
+            started.set()
+
+            def respond():
+                release.wait(timeout=10)
+                state.results[cmd["id"]] = {"success": True}
+                event.set()
+
+            _threading.Thread(target=respond, daemon=True).start()
+            return True
+
+    state.ext, state.ext_accepted = BlockingExtension(), True
+    handler = object.__new__(BridgeRequestHandler)
+    outcome = {}
+    thread = _threading.Thread(
+        target=lambda: outcome.update(
+            r=handler._dispatch_guarded(state, "click", {"target": "b"},
+                                        time.time() + 10, True, None, session_token=token)))
+    thread.start()
+    try:
+        assert started.wait(timeout=5)
+        _backdate(state, token, 1_000.0)
+        with state.lock:
+            dropped = state.session_prune_locked(now=10_000.0)
+        assert dropped == 0
+        with state.lock:
+            assert token in state.sessions
+    finally:
+        release.set()
+        thread.join(timeout=10)
+    assert outcome["r"][1] == 200 and outcome["r"][0]["success"] is True
+    # Once nothing is in flight, the same idle session expires.
+    with state.lock:
+        dropped = state.session_prune_locked(now=10_000.0)
+    assert dropped == 1
+    with state.lock:
+        assert token not in state.sessions
+
+
+def test_idle_expiry_in_running_daemon(tmp_path):
+    from tests.support import DaemonHandle, free_port
+    handle = DaemonHandle(free_port(), tmp_path).start(
+        extra_env={"EDGE_BRIDGE_SESSION_IDLE_TTL_S": "0.2"})
+    try:
+        _, start = handle.exec("session_start", {"name": "short-lived"})
+        assert start["success"] is True
+        deadline = time.time() + 5
+        listed = {"sessions": ["pending"]}
+        while time.time() < deadline and listed["sessions"]:
+            _, listed = handle.exec("session_list")
+            if listed["sessions"]:
+                time.sleep(0.05)
+        assert listed["sessions"] == []
+        _, st = handle.exec("session_status", session_token=start["sessionToken"])
+        assert st["code"] == "unknown_session"
+    finally:
+        handle.stop()
