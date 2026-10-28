@@ -87,6 +87,10 @@ def _handle_daemon_cmd(args, port: int) -> int:
                 print(f"Error stopping daemon: {e}")
                 pid_p.unlink(missing_ok=True)
                 return 0
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+            print(f"Error stopping daemon: corrupt PID file: invalid PID {pid!r}")
+            pid_p.unlink(missing_ok=True)
+            return 0
         if pid_p.exists() and not getattr(args, "force", False):
             st = _probe_status(port)
             if st.get("bridge_running") and "pid" not in st:
