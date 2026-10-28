@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import __version__, config
 from .desktop import Desktop
@@ -375,7 +376,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         state = self.server.state
 
-        if self.path.startswith("/status"):
+        if urlsplit(self.path).path == "/status":
             state.mark_seen()
             with state.lock:
                 ext_connected = bool(state.ext and not state.ext.closed)
@@ -408,7 +409,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        if self.path.startswith("/ws"):
+        if urlsplit(self.path).path == "/ws":
             upgrade = self.headers.get("Upgrade", "").lower()
             conn_hdr = self.headers.get("Connection", "").lower()
             if upgrade != "websocket" or "upgrade" not in conn_hdr:
@@ -441,8 +442,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 # after a short grace window.
                 def grace_timeout():
                     with state.lock:
-                        if state.ext is not ws_conn:
-                            state.accept_extension_locked(ws_conn, None)
+                        if state.ext is ws_conn:
+                            return
+                        current = state.ext
+                        if (current is not None and state.ext_accepted and not current.closed
+                                and time.monotonic() - state.last_pong <= state.pong_timeout_sec):
+                            # A live extension holds the slot; a socket that sent no hello
+                            # must not displace it (see accept_extension_locked).
+                            return
+                        state.accept_extension_locked(ws_conn, None)
                 with state.lock:
                     ws_conn.grace_timer = threading.Timer(1.0, grace_timeout)
                     ws_conn.grace_timer.daemon = True
@@ -453,7 +461,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self._run_ws_loop(ws_conn)
             return
 
-        if self.path.startswith("/poll") or self.path.startswith("/result"):
+        if urlsplit(self.path).path in ("/poll", "/result"):
             self._respond(404, {"success": False, "code": "not_found", "error": "/poll and /result are removed in v2; use WebSocket /ws"})
             return
 
@@ -604,7 +612,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         state = self.server.state
 
-        if self.path.startswith("/exec"):
+        if urlsplit(self.path).path == "/exec":
             if self._is_browser_request():
                 self._respond(403, {"success": False, "code": "browser_context", "error": "/exec is not reachable from browser context"})
                 return
@@ -633,6 +641,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
             timeout = config.call_timeout(req.get("timeout", 20))
             session_token = req.get("sessionToken")
+            if session_token is not None and not isinstance(session_token, str):
+                self._respond(200, {"success": False, "code": "unknown_session",
+                                    "error": "Unknown or expired sessionToken. Mint one with session_start."})
+                return
 
             if action == "session_start":
                 name = params.get("name")
@@ -706,6 +718,11 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         "error": "Pinned tab is closed. Use switch or new to re-pin."})
                     return
 
+            if tab_scoped and params.get("tabId") is not None and type(params["tabId"]) is not int:
+                self._respond(200, {"success": False, "code": "bad_params",
+                                    "error": "tabId must be an integer"})
+                return
+
             if action == "batch":
                 self._exec_batch(state, session_token, session, params, timeout)
                 return
@@ -718,7 +735,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self._respond(status_code, res)
             return
 
-        if self.path.startswith("/poll") or self.path.startswith("/result"):
+        if urlsplit(self.path).path in ("/poll", "/result"):
             self._respond(404, {"success": False, "code": "not_found", "error": "/poll and /result are removed in v2; use WebSocket /ws"})
             return
 
@@ -729,10 +746,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             return None
         explicit = params.get("tabId")
         if explicit is not None:
-            try:
-                return int(explicit)
-            except (TypeError, ValueError):
+            if type(explicit) is not int:
                 return None
+            params["tabId"] = explicit
+            return explicit
         if action in CLOSING_ACTIONS:
             return None
         if session is not None:
@@ -913,6 +930,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
             s_tab_scoped = _is_tab_scoped(s_action)
+            if s_tab_scoped and s_params.get("tabId") is not None and type(s_params["tabId"]) is not int:
+                err = "tabId must be an integer"
+                results.append({"success": False, "code": "bad_params", "error": err})
+                self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                    "stoppedAt": s_action, "results": results})
+                return
             forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)

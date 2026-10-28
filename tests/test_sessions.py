@@ -15,6 +15,39 @@ def test_session_start_status_stop_roundtrip(daemon):
     assert code == 200 and st2["code"] == "unknown_session"
 
 
+def test_non_string_session_token_is_unknown_session(daemon, fake_ext):
+    # [] is unhashable in sessions.get on the normal-action path and a truthy
+    # ["x"] crashes the session_status/session_stop lookup the same way.
+    for bad_token in ([], ["x"], 123):
+        for action, params in (("session_status", {}), ("session_stop", {}),
+                               ("ping", {}), ("click", {"target": "x"})):
+            code, body = daemon.exec(action, params, session_token=bad_token)
+            assert code == 200 and body["success"] is False and body["code"] == "unknown_session", (
+                bad_token, action, code, body)
+    code, body = daemon.exec("ping")
+    assert code == 200 and body["success"] is True, (code, body)
+
+
+def test_tab_id_must_be_a_real_integer(daemon):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "tab": {"id": params.get("tabId", 1), "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    # 1e999 reaches the daemon as inf; the extension sends real ints only.
+    for bad in (float("inf"), "3", 2.5, True, [3]):
+        code, body = daemon.exec("click", {"target": "x", "tabId": bad})
+        assert code == 200 and body["success"] is False and body["code"] == "bad_params", (bad, code, body)
+    assert seen == [], seen
+    code, body = daemon.exec("click", {"target": "x", "tabId": 3})
+    assert code == 200 and body["success"] is True, (code, body)
+    assert seen[-1][1]["tabId"] == 3 and type(seen[-1][1]["tabId"]) is int
+    ext.close()
+
+
 def test_unknown_token_rejected_never_unpinned(daemon, fake_ext):
     n_before = len(fake_ext.received)
     code, body = daemon.exec("click", {"target": "x"}, session_token="bogus-token")
