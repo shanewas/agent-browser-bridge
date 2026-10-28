@@ -5,9 +5,12 @@ EDGE_BRIDGE_PONG_TIMEOUT (seconds), EDGE_BRIDGE_LOCK_TIMEOUT (seconds), EDGE_BRI
 The extension itself always talks to 18999.
 """
 import os
+import logging
 import secrets
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 18999
 TOKEN_HEADER = "X-Bridge-Token"
@@ -89,12 +92,22 @@ def config_path() -> Path:
     return home() / "config"
 
 
+def _restrict_token_file(p: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        os.chmod(p, 0o600)
+    except OSError as e:
+        logger.warning("Could not set 0600 permissions on token file %s: %s", p, e)
+
+
 def ensure_token() -> str:
     p = token_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         existing = p.read_text(encoding="utf-8").strip()
         if len(existing) == 64:
+            _restrict_token_file(p)
             return existing
     token = secrets.token_hex(32)
     # Created 0600 rather than written then chmodded: the write-first order leaves the token
@@ -102,6 +115,7 @@ def ensure_token() -> str:
     fd = os.open(p, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(token)
+    _restrict_token_file(p)
     return token
 
 

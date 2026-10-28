@@ -59,6 +59,29 @@ def test_ensure_token_creates_once(monkeypatch, tmp_path):
         assert stat.S_IMODE(config.token_path().stat().st_mode) == 0o600
 
 
+def test_ensure_token_restricts_an_existing_0644_token_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    p = config.token_path()
+    p.write_text("a" * 64, encoding="utf-8")
+    if os.name == "posix":
+        os.chmod(p, 0o644)
+    assert config.ensure_token() == "a" * 64
+    if os.name == "posix":
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
+def test_ensure_token_rotated_token_file_is_0600(monkeypatch, tmp_path):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    p = config.token_path()
+    p.write_text("not-a-token", encoding="utf-8")
+    if os.name == "posix":
+        os.chmod(p, 0o644)
+    token = config.ensure_token()
+    assert len(token) == 64 and token != "not-a-token"
+    if os.name == "posix":
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
 def test_read_token_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
     assert config.read_token() is None
