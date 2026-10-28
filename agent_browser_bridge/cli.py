@@ -103,22 +103,33 @@ def _handle_daemon_cmd(args, port: int) -> int:
                       "If that is a hung daemon, run: agent-bridge daemon stop --force", file=sys.stderr)
                 return 1
             if st.get("pid") != pid:
-                pid_p.unlink(missing_ok=True)
-                print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
-                return 0
+                status_pid = st.get("pid")
+                if st.get("bridge_running") and isinstance(status_pid, int) \
+                        and not isinstance(status_pid, bool) and status_pid > 1:
+                    # The file is stale, but /status names the live daemon on this
+                    # port; stop that daemon instead of only removing the file.
+                    pid = status_pid
+                else:
+                    pid_p.unlink(missing_ok=True)
+                    print(f"Removed stale PID file: PID {pid} is not the daemon on 127.0.0.1:{port}")
+                    return 0
         try:
             if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                result = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if result.returncode != 0:
+                    print(f"Error stopping daemon: taskkill failed for PID {pid}")
+                    return 1
             else:
                 os.kill(pid, signal.SIGTERM)
-            print(f"Stopped daemon (PID {pid})")
         except Exception as e:
             print(f"Error stopping daemon: {e}")
-        finally:
-            try:
-                pid_p.unlink(missing_ok=True)
-            except Exception:
-                pass
+            return 1
+        try:
+            pid_p.unlink(missing_ok=True)
+        except Exception:
+            pass
+        print(f"Stopped daemon (PID {pid})")
         return 0
 
     elif sub == "start":
