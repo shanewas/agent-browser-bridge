@@ -210,6 +210,7 @@ class BridgeState:
         self.ext_version = version
         self.ext_instance = instance
         self.ext_accepted = True
+        self.extension_outdated = False
         self.mark_seen()
         self._drain_held_locked()
 
@@ -872,6 +873,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if not isinstance(step, dict):
                 continue
             s_action = step.get("action")
+            if not isinstance(s_action, str) or not s_action:
+                err = f"step {i + 1} needs an action string"
+                results.append({"success": False, "code": "bad_params", "error": err})
+                self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                    "stoppedAt": s_action, "results": results})
+                return
             pause = 0.0
             if s_action in ("sleep", "wait_ms"):
                 try:
