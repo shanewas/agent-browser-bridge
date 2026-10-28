@@ -161,6 +161,60 @@ def test_mcp_tools_call_pinning(daemon):
     ext.close()
 
 
+def test_mcp_shutdown_stops_the_session_it_minted(monkeypatch):
+    import io
+
+    from agent_browser_bridge import mcp
+
+    calls = []
+
+    class FakeEdge:
+        session_token = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        def send(self, action, params=None):
+            calls.append((action, params, self.session_token))
+            if action == "session_start":
+                return {"success": True, "sessionToken": "minted-token"}
+            return {"success": True}
+
+        def close(self):
+            calls.append(("close", None, self.session_token))
+
+    monkeypatch.setattr(mcp, "Edge", FakeEdge)
+    mcp.serve(stdin=io.BytesIO(b""), stdout=io.BytesIO())
+    assert ("session_stop", {}, "minted-token") in calls
+    assert calls[-1][0] == "close"
+
+
+def test_mcp_shutdown_survives_a_failed_session_stop(monkeypatch):
+    import io
+
+    from agent_browser_bridge import mcp
+
+    closed = []
+
+    class FakeEdge:
+        session_token = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        def send(self, action, params=None):
+            if action == "session_start":
+                return {"success": True, "sessionToken": "minted-token"}
+            raise RuntimeError("daemon gone")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(mcp, "Edge", FakeEdge)
+    mcp.serve(stdin=io.BytesIO(b""), stdout=io.BytesIO())
+    assert closed == [True]
+
+
 def test_mcp_unknown_tool_and_malformed(mcp_proc):
     # Unknown tool
     r1 = send_rpc(

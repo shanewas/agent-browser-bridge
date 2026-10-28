@@ -438,6 +438,21 @@ def test_cli_run_steps_and_exit_codes(daemon, fake_ext, tmp_path):
     assert len(out.splitlines()) == 1
 
 
+def test_cli_run_non_object_params_is_bad_params(daemon, fake_ext, tmp_path):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    steps = tmp_path / "steps.json"
+    steps.write_text(json.dumps([{"action": "ping", "params": 5}, {"action": "ping"}]), encoding="utf-8")
+    code, out, err = run_cli(["run", str(steps)], env=env)
+    assert code == 1, err
+    lines = [json.loads(ln) for ln in out.splitlines()]
+    assert lines[0]["success"] is False and lines[0]["code"] == "bad_params"
+    assert lines[1]["success"] is True
+
+    code, out, err = run_cli(["run", str(steps), "--stop-on-error"], env=env)
+    assert code == 1, err
+    assert len(out.splitlines()) == 1
+
+
 def test_cli_run_tab_forwarded_to_steps(daemon, tmp_path):
     seen = []
 
@@ -858,6 +873,81 @@ def test_cli_screenshot_valid_clip_is_forwarded(tmp_path, monkeypatch):
     assert cli.main(["--json", "screenshot", "--clip", "1,2,30,40"]) == 0
     assert bodies[0]["action"] == "screenshot"
     assert bodies[0]["params"]["clip"] == {"x": 1.0, "y": 2.0, "width": 30.0, "height": 40.0}
+
+
+def test_cli_screenshot_save_to_directory_exits_1_json(tmp_path, monkeypatch, capsys):
+    _recording_cli(monkeypatch, tmp_path, reply=_shot_reply())
+    assert cli.main(["--json", "screenshot", str(tmp_path)]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["success"] is False and printed["code"] == "file_not_found"
+    assert tmp_path.is_dir()
+
+
+def test_cli_screenshot_save_to_directory_human_error(tmp_path, monkeypatch, capsys):
+    _recording_cli(monkeypatch, tmp_path, reply=_shot_reply())
+    assert cli.main(["screenshot", str(tmp_path)]) == 1
+    assert "Error (file_not_found):" in capsys.readouterr().err
+
+
+def test_cli_screenshot_malformed_base64_exits_1_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    reply = json.dumps({"success": True, "dataUrl": "data:image/png;base64,A", "format": "png"}).encode()
+    _recording_cli(monkeypatch, tmp_path, reply=reply)
+    out = tmp_path / "shot.png"
+    assert cli.main(["--json", "screenshot", str(out)]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["success"] is False and printed["code"] == "bad_response"
+    assert not out.exists()
+
+
+def test_cli_screenshot_partial_write_is_removed(tmp_path, monkeypatch, capsys):
+    _recording_cli(monkeypatch, tmp_path, reply=_shot_reply())
+
+    def flaky_write(self, data):
+        with self.open("wb") as fh:
+            fh.write(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", flaky_write)
+    out = tmp_path / "shot.png"
+    assert cli.main(["--json", "screenshot", str(out)]) == 1
+    assert json.loads(capsys.readouterr().out)["success"] is False
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("sub", ["list", "prune", "status", "stop", "start"])
+@pytest.mark.parametrize("code,expected", [("daemon_unreachable", 2), ("missing_token", 2), ("unknown_session", 1)])
+def test_cli_session_failure_exit_codes(sub, code, expected):
+    from types import SimpleNamespace
+
+    class FakeEdge:
+        session_token = "tok"
+
+        def _send_once(self, action, params):
+            return {"success": False, "code": code, "error": "x"}
+
+    edge = FakeEdge()
+    if sub == "start":
+        edge.session_token = None
+    args = SimpleNamespace(session_action=sub, new=False, name=None)
+    assert cli._handle_session_cmd(args, edge, True) == expected
+
+
+def test_cli_session_success_and_no_session_exit_codes(capsys):
+    from types import SimpleNamespace
+
+    class FakeEdge:
+        session_token = "tok"
+
+        def _send_once(self, action, params):
+            return {"success": True, "sessions": []}
+
+    args = SimpleNamespace(session_action="list", new=False, name=None)
+    assert cli._handle_session_cmd(args, FakeEdge(), True) == 0
+    capsys.readouterr()
+    args = SimpleNamespace(session_action="status", new=False, name=None)
+    edge = FakeEdge()
+    edge.session_token = None
+    assert cli._handle_session_cmd(args, edge, True) == 3
 
 
 def test_cli_daemon_restart_propagates_require_pairing(tmp_path, monkeypatch):
