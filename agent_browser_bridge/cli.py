@@ -140,7 +140,7 @@ def _handle_daemon_cmd(args, port: int) -> int:
         if st.get("bridge_running"):
             print(f"Daemon PID {st.get('pid', '?')} still answers on 127.0.0.1:{port}; not restarted", file=sys.stderr)
             return 1
-        return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=False), port)
+        return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=getattr(args, "require_pairing", False)), port)
 
     elif sub == "status":
         with Edge(port=port, auto_start=False) as client:
@@ -349,6 +349,15 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
     return 0 if all(c["ok"] for c in checks) else 1
 
 
+def _log_rotated(p, fh, inode: int) -> bool:
+    """True when the log at p is no longer the file fh is reading: a new inode, or truncated in place."""
+    try:
+        st = p.stat()
+    except OSError:
+        return False
+    return st.st_ino != inode or st.st_size < fh.tell()
+
+
 def _handle_logs(args, opt_json: bool) -> int:
     p = config.log_path()
     if not p.exists():
@@ -369,14 +378,21 @@ def _handle_logs(args, opt_json: bool) -> int:
             print(ln)
     if args.follow and not opt_json:
         try:
-            with open(p, "r", encoding="utf-8", errors="replace") as fh:
-                fh.seek(0, 2)
-                while True:
-                    line = fh.readline()
-                    if line:
-                        print(line, end="" if line.endswith("\n") else "\n")
-                    else:
-                        time.sleep(0.5)
+            at_start = False
+            while True:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    if not at_start:
+                        fh.seek(0, 2)
+                    inode = os.fstat(fh.fileno()).st_ino
+                    while True:
+                        line = fh.readline()
+                        if line:
+                            print(line, end="" if line.endswith("\n") else "\n")
+                        elif _log_rotated(p, fh, inode):
+                            at_start = True
+                            break
+                        else:
+                            time.sleep(0.5)
         except KeyboardInterrupt:
             pass
     return 0
@@ -1169,9 +1185,15 @@ def main(argv=None) -> int:
         if args.clip:
             try:
                 parts = [float(x) for x in args.clip.split(",")]
+                if len(parts) != 4:
+                    raise ValueError("expected 4 values")
                 params["clip"] = {"x": parts[0], "y": parts[1], "width": parts[2], "height": parts[3]}
             except Exception:
-                pass
+                if opt_json:
+                    print(json.dumps({"success": False, "code": "bad_params", "error": f"Invalid --clip {args.clip!r}: expected x,y,width,height"}))
+                else:
+                    print(f"Error: Invalid --clip {args.clip!r}: expected x,y,width,height", file=sys.stderr)
+                return 3
         if args.of:
             params["of"] = args.of
     elif action == "console":
