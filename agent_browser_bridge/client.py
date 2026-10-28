@@ -33,10 +33,11 @@ def _browser_wait_ms(action: str, params: dict) -> float:
     """How long a call asks the browser to wait or sleep: its `timeout`, or a batch's sleeps and step timeouts."""
     steps = params.get("steps") if action == "batch" else [dict(params, action=action)]
     total = 0.0
-    if action.startswith("desktop_"):
-        total += estimate_seconds(action, params) * 1000
     for step in steps if isinstance(steps, list) else ():
         if isinstance(step, dict):
+            step_action = step.get("action")
+            if isinstance(step_action, str) and step_action.startswith("desktop_"):
+                total += estimate_seconds(step_action, step) * 1000
             value = step.get("ms") if step.get("action") in ("sleep", "wait_ms") else step.get("timeout")
             if isinstance(value, (int, float)):
                 total += max(0.0, value)

@@ -101,6 +101,16 @@ def test_exec_malformed_bodies_get_json_errors(daemon, fake_ext):
     assert code == 200 and body["success"] is True, (code, body)
 
 
+def test_batch_step_without_a_string_action_is_bad_params(daemon, fake_ext):
+    # A missing or non-string step action crashed the handler instead of answering an error.
+    for steps in ([{}], [{"action": ["ping"]}], [{"action": "ping"}, {"action": 5}]):
+        code, body = daemon.exec("batch", {"steps": steps})
+        assert code == 200 and body["success"] is False and body["code"] == "bad_params", (steps, code, body)
+        assert "stoppedAt" in body and len(body["results"]) == len(steps), (steps, body)
+    code, body = daemon.exec("ping")
+    assert code == 200 and body["success"] is True, (code, body)
+
+
 def test_bad_host_rejected(daemon):
     code, body = daemon._request("GET", "/status", headers={"Host": "evil.example:80"})
     assert code == 421 and body["code"] == "bad_host"
@@ -263,6 +273,22 @@ def test_extension_outdated_rewrite_for_older_v2_extension(daemon):
     assert code == 200 and body["code"] == "extension_outdated"
     assert "2.4.0" in body["error"]
     assert daemon.status()["extension_outdated"] is True
+    ext.close()
+
+
+def test_extension_outdated_clears_when_a_current_extension_connects(daemon):
+    # The flag stayed set after the user updated the extension, until the daemon restarted.
+    old = FakeExtension(daemon.port, send_hello=False).connect().run()
+    time.sleep(1.2)
+    daemon.exec("snapshot", timeout=3)
+    assert daemon.status()["extension_outdated"] is True
+    old.close()
+    ext = FakeExtension(daemon.port).connect().run()
+    deadline = time.time() + 5
+    while daemon.status()["extension_version"] != ext.version and time.time() < deadline:
+        time.sleep(0.05)
+    status = daemon.status()
+    assert status["extension_version"] == ext.version and status["extension_outdated"] is False, status
     ext.close()
 
 
