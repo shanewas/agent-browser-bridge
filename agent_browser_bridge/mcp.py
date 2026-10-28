@@ -1,6 +1,6 @@
 """Model Context Protocol (MCP) server for Agent Browser Bridge.
 
-Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser tools and 10 Windows desktop tools.
+Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser tools and 13 Windows desktop tools.
 """
 import json
 import logging

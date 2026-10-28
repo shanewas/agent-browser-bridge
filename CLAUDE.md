@@ -9,7 +9,6 @@
 - `desktop/` is the Windows desktop layer (screenshot, mouse, keyboard) absorbed from doppelhand; the daemon routes `desktop_*` actions to it. Pillow is its only dependency, installed by the optional `desktop` extra; off Windows or without Pillow every desktop action answers a failure dict.
 - Version lives in `agent_browser_bridge/__init__.py` only. `pyproject.toml` reads it; `scripts/build_extension.py` writes it into `manifest.json` and zips the extension.
 - `shim/` is the `edge-agent-bridge` compatibility package: frozen at 3.0.0, never bumped.
-- Design: `docs/superpowers/specs/2026-09-07-v2-design.md`. Plan: `docs/superpowers/plans/2026-09-07-v2-implementation.md`.
 
 ## Rules
 - Zero runtime dependencies; the one exception is the optional `desktop` extra (Pillow). Daemon binds 127.0.0.1 only. No telemetry.

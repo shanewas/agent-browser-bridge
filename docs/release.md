@@ -91,8 +91,11 @@ replaces the package and nothing else.
 
 ## Edge certification notes
 
-Partner Center asks for notes to the certification team on every submission. The API can't fill
-them in, so paste this text; the 2.6.1 submission on 2026-10-21 passed certification with it:
+Partner Center asks for notes to the certification team on every submission.
+`scripts/publish_extension.py` sends them with the submission: pass `--notes "<text>"` and the
+script posts that text as the `notes` field of the publish request. Without `--notes` it sends
+`Automated submission of <package file name>` instead. The 2.6.1 submission on 2026-10-21 passed
+certification with this text:
 
 > No credentials are needed. The extension talks only to a daemon on the tester's own machine.
 > To test: `pip install agent-browser-bridge`, then `agent-bridge daemon start`; the popup shows
