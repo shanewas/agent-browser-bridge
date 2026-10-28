@@ -1,16 +1,14 @@
 """Paths, port and token shared by daemon and clients.
 
 Test-only knobs: EDGE_BRIDGE_PORT, EDGE_BRIDGE_HOME, EDGE_BRIDGE_HEARTBEAT (seconds),
-EDGE_BRIDGE_PONG_TIMEOUT (seconds), EDGE_BRIDGE_LOCK_TIMEOUT (seconds), EDGE_BRIDGE_HTTP_IDLE (seconds).
+EDGE_BRIDGE_PONG_TIMEOUT (seconds), EDGE_BRIDGE_LOCK_TIMEOUT (seconds), EDGE_BRIDGE_HTTP_IDLE (seconds),
+EDGE_BRIDGE_SESSION_IDLE_TTL_S (seconds).
 The extension itself always talks to 18999.
 """
 import os
-import logging
 import secrets
 import sys
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 18999
 TOKEN_HEADER = "X-Bridge-Token"
@@ -18,6 +16,7 @@ TOKEN_HEADER = "X-Bridge-Token"
 # checks compare against this floor, not against the daemon's own version.
 MIN_EXTENSION_VERSION = "2.6.0"
 MAX_CALL_TIMEOUT_SEC = 120.0
+DEFAULT_SESSION_IDLE_TTL_SEC = 24 * 60 * 60.0
 
 
 def home() -> Path:
@@ -59,6 +58,15 @@ def lock_timeout_seconds() -> float:
     return _float_env("EDGE_BRIDGE_LOCK_TIMEOUT", 10.0)
 
 
+def session_idle_ttl_seconds() -> float:
+    # A dead client leaks its session, so idle expiry is the reaper. 24 h is
+    # safely above any real browsing session's idle gaps. An unreadable or
+    # non-positive override is ignored rather than expiring everything at
+    # once (or never), and the default applies instead.
+    value = _float_env("EDGE_BRIDGE_SESSION_IDLE_TTL_S", DEFAULT_SESSION_IDLE_TTL_SEC)
+    return value if value > 0 else DEFAULT_SESSION_IDLE_TTL_SEC
+
+
 def http_idle_seconds() -> float:
     return _float_env("EDGE_BRIDGE_HTTP_IDLE", 30.0)
 
@@ -92,22 +100,12 @@ def config_path() -> Path:
     return home() / "config"
 
 
-def _restrict_token_file(p: Path) -> None:
-    if os.name != "posix":
-        return
-    try:
-        os.chmod(p, 0o600)
-    except OSError as e:
-        logger.warning("Could not set 0600 permissions on token file %s: %s", p, e)
-
-
 def ensure_token() -> str:
     p = token_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         existing = p.read_text(encoding="utf-8").strip()
         if len(existing) == 64:
-            _restrict_token_file(p)
             return existing
     token = secrets.token_hex(32)
     # Created 0600 rather than written then chmodded: the write-first order leaves the token
@@ -115,7 +113,6 @@ def ensure_token() -> str:
     fd = os.open(p, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(token)
-    _restrict_token_file(p)
     return token
 
 
