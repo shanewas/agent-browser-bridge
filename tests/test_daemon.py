@@ -149,6 +149,30 @@ def test_batch_step_without_a_string_action_is_bad_params(daemon, fake_ext):
     assert code == 200 and body["success"] is True, (code, body)
 
 
+def test_batch_non_object_step_is_bad_params(daemon, fake_ext):
+    for steps, result_count in (([42], 1), ([{"action": "ping"}, 42, {"action": "ping"}], 2)):
+        code, body = daemon.exec("batch", {"steps": steps})
+        assert code == 200 and body["success"] is False and body["code"] == "bad_params", (steps, code, body)
+        assert "stoppedAt" in body and len(body["results"]) == result_count, (steps, body)
+        assert body["results"][-1]["success"] is False and body["results"][-1]["code"] == "bad_params", body
+    code, body = daemon.exec("ping")
+    assert code == 200 and body["success"] is True, (code, body)
+
+
+def test_pairing_flags_are_mutually_exclusive(monkeypatch):
+    from agent_browser_bridge import bridge
+
+    monkeypatch.setattr(bridge, "run_server", lambda **kwargs: None)
+    monkeypatch.setattr(bridge.config, "read_config", lambda: {})
+    writes = []
+    monkeypatch.setattr(bridge.config, "write_config", lambda cfg: writes.append(dict(cfg)))
+    with pytest.raises(SystemExit) as exc:
+        bridge.main(["--require-pairing", "--no-pairing"])
+    assert exc.value.code == 2
+    assert bridge.main(["--require-pairing"]) == 0 and writes[-1]["pairing"] == "1"
+    assert bridge.main(["--no-pairing"]) == 0 and writes[-1]["pairing"] == "0"
+
+
 def test_bad_host_rejected(daemon):
     code, body = daemon._request("GET", "/status", headers={"Host": "evil.example:80"})
     assert code == 421 and body["code"] == "bad_host"

@@ -533,6 +533,26 @@ def test_batch_call_timeout_covers_its_sleeps(daemon, fake_ext, monkeypatch):
     assert r.get("success") is True, r
 
 
+@pytest.mark.parametrize("body", [b"[]", b'"hello"'])
+def test_status_non_object_body_is_daemon_unreachable(monkeypatch, body):
+    edge = Edge(port=free_port(), auto_start=False)
+
+    class Response:
+        def read(self):
+            return body
+
+    class Connection:
+        def request(self, method, url):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+    monkeypatch.setattr(edge, "_get_connection", lambda timeout=None: Connection())
+    res = edge.status()
+    assert res["success"] is False and res["code"] == "daemon_unreachable", res
+
+
 def test_status_uses_the_client_timeout_after_a_long_call(daemon, fake_ext, monkeypatch):
     # A long call left its socket timeout on the pooled connection, and status() inherited it.
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))

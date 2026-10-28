@@ -906,7 +906,11 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         deadline = time.time() + timeout
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
-                continue
+                err = f"step {i + 1} needs an action string"
+                results.append({"success": False, "code": "bad_params", "error": err})
+                self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                    "stoppedAt": None, "results": results})
+                return
             s_action = step.get("action")
             if not isinstance(s_action, str) or not s_action:
                 err = f"step {i + 1} needs an action string"
@@ -1046,8 +1050,9 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Agent Browser Bridge daemon")
     parser.add_argument("--port", type=int, default=None, help="Port to listen on")
-    parser.add_argument("--require-pairing", action="store_true", help="Require pairing token")
-    parser.add_argument("--no-pairing", action="store_true", help="Disable pairing token")
+    pairing_group = parser.add_mutually_exclusive_group()
+    pairing_group.add_argument("--require-pairing", action="store_true", help="Require pairing token")
+    pairing_group.add_argument("--no-pairing", action="store_true", help="Disable pairing token")
     args = parser.parse_args(argv)
 
     pairing = None

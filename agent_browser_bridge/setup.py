@@ -303,6 +303,8 @@ def setup_cli(yes: bool = False) -> int:
             print("\nAborted.")
             return 0
 
+    failed = False
+
     # Configure CLI clients
     for c, path in targets_cli:
         print(f"\nConfiguring {c}...")
@@ -311,6 +313,7 @@ def setup_cli(yes: bool = False) -> int:
             subprocess.run(cmd, check=True)
             print(f"  Successfully added edge MCP to {c}")
         except Exception as err:
+            failed = True
             print(f"  Failed to configure {c}: {err}")
 
     # Configure JSON clients
@@ -320,7 +323,8 @@ def setup_cli(yes: bool = False) -> int:
         if ok:
             print(f"  {msg}")
         else:
+            failed = True
             print(f"  Error: {msg}")
 
     print("\nSetup complete! You can verify daemon status with: agent-bridge status")
-    return 0
+    return 1 if failed else 0
