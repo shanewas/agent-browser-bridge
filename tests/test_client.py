@@ -548,3 +548,10 @@ def test_desktop_wait_hold_and_type_count_toward_the_call_timeout():
     assert _browser_wait_ms("desktop_wait", {"seconds": 2.5}) == 2500
     assert _browser_wait_ms("desktop_type", {"text": "x" * 4000}) == 80000
     assert _browser_wait_ms("desktop_click", {"at": [1, 1]}) == 0
+
+
+def test_desktop_steps_in_a_batch_count_toward_the_call_timeout():
+    # Only a top-level desktop action counted, so a batched 30 s desktop_wait hit the 20 s default.
+    from agent_browser_bridge.client import _browser_wait_ms
+    assert _browser_wait_ms("batch", {"steps": [{"action": "desktop_wait", "seconds": 30}]}) == 30000
+    assert _browser_wait_ms("batch", {"steps": [{"action": ["desktop_wait"], "seconds": 30}, {}]}) == 0
