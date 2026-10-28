@@ -88,8 +88,8 @@ agent-bridge mcp-config --client claude
 agent-bridge mcp-config --client cursor
 ```
 
-The server speaks stdio JSON-RPC and exposes 47 tools: 34 `edge_*` tools for the browser and
-13 `desktop_*` tools for the Windows desktop. The `edge_` prefix keeps the browser tools from
+The server speaks stdio JSON-RPC and exposes 51 tools: 34 `edge_*` tools for the browser and
+17 `desktop_*` tools for the Windows desktop. The `edge_` prefix keeps the browser tools from
 colliding with Playwright MCP in a mixed setup. [`docs/agent-guide.md`](docs/agent-guide.md) is written for
 the agent rather than for you: snapshot first, act by ref, re-snapshot after navigation.
 
@@ -226,7 +226,8 @@ agent-bridge desktop record stop           # writes <data dir>/recordings/expens
 
 MCP tools: `desktop_shot`, `desktop_screen`, `desktop_cursor`, `desktop_window`, `desktop_click`,
 `desktop_move`, `desktop_drag`, `desktop_scroll`, `desktop_type`, `desktop_key`, `desktop_hold`,
-`desktop_notify`, `desktop_record`. `desktop_shot` returns the image inline plus the coordinate
+`desktop_notify`, `desktop_record`, `desktop_windows`, `desktop_focus`, `desktop_launch`,
+`desktop_clipboard`. `desktop_shot` returns the image inline plus the coordinate
 space and the foreground `window`. Python: `Edge().send("desktop_click", {"at": [640, 360]})`.
 
 While a desktop action runs, a small strip in the top-right corner of the primary display says

@@ -1,6 +1,6 @@
 """Model Context Protocol (MCP) server for Agent Browser Bridge.
 
-Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser tools and 13 Windows desktop tools.
+Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser tools and 17 Windows desktop tools.
 """
 import json
 import logging
@@ -454,6 +454,10 @@ DESKTOP_COMMON = {
     "maxEdge": {"type": "integer", "minimum": 1, "description": "Long edge of the view space. Default: the last shot's, else 1280."},
 }
 MODIFIERS = {"type": "string", "description": "Keys to hold during the action, e.g. 'ctrl+shift'."}
+WINDOW_SELECTOR = {"type": "object",
+                   "properties": {"title": {"type": "string"}, "process": {"type": "string"},
+                                  "pid": {"type": "integer", "minimum": 1}},
+                   "description": "Window to act on, found at call time by title, process or pid. Coordinates then live in that window's own view, so they stay right when the window moves."}
 
 
 def _desktop_tool(name: str, description: str, properties: dict, required: list | None = None) -> dict:
@@ -469,7 +473,8 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
                   {"region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
                               "description": "[x, y, width, height] in view pixels to capture instead of the whole display, for small text."},
                    "cursor": {"type": "boolean", "description": "Draw the pointer into the capture. Default true."},
-                   "fast": {"type": "boolean", "description": "JPEG and a cheaper resize: faster, slightly softer text. Default false."}}),
+                   "fast": {"type": "boolean", "description": "JPEG and a cheaper resize: faster, slightly softer text. Default false."},
+                   "window": WINDOW_SELECTOR}),
     _desktop_tool("desktop_screen",
                   "Windows only. List the displays (numbered from 1, left to right) and the current coordinate space without capturing.", {}),
     _desktop_tool("desktop_cursor",
@@ -491,21 +496,21 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
                   "Windows only. Move the pointer to a view-pixel point and click. A point outside the view is refused, not clamped.",
                   {"at": POINT, "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
                    "count": {"type": "integer", "minimum": 1, "maximum": 3, "description": "2 double-clicks, 3 selects a line (left button only)."},
-                   "modifiers": MODIFIERS}, ["at"]),
+                   "modifiers": MODIFIERS, "window": WINDOW_SELECTOR}, ["at"]),
     _desktop_tool("desktop_move",
                   "Windows only. Move the pointer without clicking, to reveal a hover state. Take a shot, then click the revealed control.",
-                  {"at": POINT}, ["at"]),
+                  {"at": POINT, "window": WINDOW_SELECTOR}, ["at"]),
     _desktop_tool("desktop_drag",
                   "Windows only. Press at 'from', drag to 'to', release. 'through' draws one continuous stroke through those waypoints on the way, for freehand drawing or path gestures.",
                   {"from": POINT, "to": POINT,
                    "through": {"type": "array", "items": POINT, "maxItems": 500,
                                "description": "Waypoints in view pixels visited between 'from' and 'to' without lifting the button."},
-                   "modifiers": MODIFIERS}, ["from", "to"]),
+                   "modifiers": MODIFIERS, "window": WINDOW_SELECTOR}, ["from", "to"]),
     _desktop_tool("desktop_scroll",
                   "Windows only. Scroll the surface under the pointer, or under 'at'.",
                   {"direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
                    "amount": {"type": "integer", "minimum": 1, "description": "Wheel notches. Default 3."},
-                   "at": POINT, "modifiers": MODIFIERS}, ["direction"]),
+                   "at": POINT, "modifiers": MODIFIERS, "window": WINDOW_SELECTOR}, ["direction"]),
     _desktop_tool("desktop_type",
                   "Windows only. Type literal text at the keyboard focus, as Unicode, independent of the keyboard layout.",
                   {"text": {"type": "string"}}, ["text"]),
@@ -515,6 +520,23 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
     _desktop_tool("desktop_hold",
                   "Windows only. Hold a key or combination down for a number of seconds.",
                   {"combo": {"type": "string"}, "seconds": {"type": "number", "minimum": 0, "maximum": 100}}, ["combo", "seconds"]),
+    _desktop_tool("desktop_windows",
+                  "Windows only. List the open windows with their title, pid, process, rect, minimized and foreground state.", {}),
+    _desktop_tool("desktop_focus",
+                  "Windows only. Bring a window to the front. It waits up to waitSeconds for the window to appear.",
+                  {"title": {"type": "string"}, "process": {"type": "string"},
+                   "pid": {"type": "integer", "minimum": 1},
+                   "waitSeconds": {"type": "number", "minimum": 0, "maximum": 30, "description": "How long to wait for the window. Default 5."}}),
+    _desktop_tool("desktop_launch",
+                  "Windows only. Start a program without a shell and wait for its window to appear.",
+                  {"command": {"type": "string"},
+                   "args": {"type": "array", "items": {"type": "string"}},
+                   "waitSeconds": {"type": "number", "minimum": 0, "maximum": 30, "description": "How long to wait for the window. Default 10."},
+                   "title": {"type": "string"}, "process": {"type": "string"}}, ["command"]),
+    _desktop_tool("desktop_clipboard",
+                  "Windows only. Get, set, or set and paste clipboard text. Paste is the reliable route for long or non-Latin text.",
+                  {"op": {"type": "string", "enum": ["get", "set", "paste"]},
+                   "text": {"type": "string"}}, ["op"]),
 ]
 TOOLS.extend(DESKTOP_TOOLS)
 

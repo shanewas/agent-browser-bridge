@@ -28,12 +28,14 @@ MONITORINFOF_PRIMARY = 0x0001
 DESKTOP_RIGHTS = 0x01FF
 SM_CXSCREEN = 0
 SM_CYSCREEN = 1
+SW_RESTORE = 9
 
 try:
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
     _gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 except (AttributeError, OSError):  # not Windows: the module still imports, the Desktop gate answers
-    _user32 = _gdi32 = None
+    _user32 = _gdi32 = _kernel32 = None
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -73,9 +75,45 @@ class ICONINFO(ctypes.Structure):
 
 
 _MONITORENUMPROC = None
+_WINDOWENUMPROC = None
 if _user32 is not None:
     _MONITORENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
                                           ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+    _WINDOWENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    _user32.GetForegroundWindow.restype = wintypes.HWND
+    _user32.GetForegroundWindow.argtypes = []
+    _user32.GetWindowTextW.restype = ctypes.c_int
+    _user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    _user32.GetWindowTextLengthW.restype = ctypes.c_int
+    _user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    _user32.GetWindowRect.restype = wintypes.BOOL
+    _user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    _user32.IsWindowVisible.restype = wintypes.BOOL
+    _user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    _user32.IsIconic.restype = wintypes.BOOL
+    _user32.IsIconic.argtypes = [wintypes.HWND]
+    _user32.EnumWindows.restype = wintypes.BOOL
+    _user32.EnumWindows.argtypes = [_WINDOWENUMPROC, wintypes.LPARAM]
+    _user32.ShowWindow.restype = wintypes.BOOL
+    _user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    _user32.BringWindowToTop.restype = wintypes.BOOL
+    _user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    _user32.SetForegroundWindow.restype = wintypes.BOOL
+    _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    _user32.AttachThreadInput.restype = wintypes.BOOL
+    _user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    if _kernel32 is not None:
+        _kernel32.OpenProcess.restype = wintypes.HANDLE
+        _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        _kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        _kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                                         wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        _kernel32.CloseHandle.restype = wintypes.BOOL
+        _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        _kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+        _kernel32.GetCurrentThreadId.argtypes = []
 
     # Handles are pointer-sized; without these the return values are truncated on 64-bit.
     _user32.OpenInputDesktop.restype = wintypes.HANDLE
@@ -137,26 +175,102 @@ class Monitor:
                 "size": list(self.size), "primary": self.primary}
 
 
-def foreground() -> dict:
-    """The window that has the keyboard: title, process id and image name (None when the
-    process cannot be opened, which is what an elevated one answers)."""
-    hwnd = _user32.GetForegroundWindow()
+def _process_name(pid) -> str | None:
+    if not pid or _kernel32 is None:
+        return None
+    handle = _kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        path = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if _kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+            return path.value.rsplit("\\", 1)[-1]
+        return None
+    finally:
+        _kernel32.CloseHandle(handle)
+
+
+def _window_info(hwnd) -> dict:
     title = ctypes.create_unicode_buffer(512)
     _user32.GetWindowTextW(hwnd, title, 512)
     pid = wintypes.DWORD()
     _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    process = None
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
-    if handle:
+    rect = wintypes.RECT()
+    if _user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        bounds = [rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top]
+    else:
+        bounds = [0, 0, 0, 0]
+    return {"hwnd": int(hwnd), "title": title.value, "pid": pid.value,
+            "process": _process_name(pid.value), "rect": bounds,
+            "minimized": bool(_user32.IsIconic(hwnd))}
+
+
+def foreground() -> dict:
+    """The window that has the keyboard: title, process id and image name (None when the
+    process cannot be opened, which is what an elevated one answers)."""
+    info = _window_info(_user32.GetForegroundWindow())
+    return {"title": info["title"], "pid": info["pid"], "process": info["process"],
+            "hwnd": info["hwnd"], "rect": info["rect"]}
+
+
+def windows() -> list[dict]:
+    if _user32 is None:
+        return []
+    foreground_hwnd = _user32.GetForegroundWindow()
+    found: list[dict] = []
+
+    def collect(hwnd, _param):
+        if _user32.IsWindowVisible(hwnd):
+            info = _window_info(hwnd)
+            if info["title"]:
+                info["foreground"] = bool(hwnd == foreground_hwnd)
+                found.append(info)
+        return True
+
+    _user32.EnumWindows(_WINDOWENUMPROC(collect), 0)
+    return found
+
+
+def find_window(title=None, process=None, pid=None) -> dict | None:
+    for window in windows():
+        if title is not None and title.lower() not in (window.get("title") or "").lower():
+            continue
+        if process is not None:
+            wanted = process.lower()
+            actual = (window.get("process") or "").lower()
+            if wanted != actual and wanted + ".exe" != actual:
+                continue
+        if pid is not None and window.get("pid") != pid:
+            continue
+        return window
+    return None
+
+
+def focus_window(hwnd) -> bool:
+    if _user32 is None or _kernel32 is None:
+        return False
+    try:
+        if _user32.IsIconic(hwnd):
+            _user32.ShowWindow(hwnd, SW_RESTORE)
+        foreground_hwnd = _user32.GetForegroundWindow()
+        if int(foreground_hwnd or 0) == int(hwnd):
+            return True
+        current_thread = _kernel32.GetCurrentThreadId()
+        pid = wintypes.DWORD()
+        foreground_thread = _user32.GetWindowThreadProcessId(foreground_hwnd, ctypes.byref(pid)) if foreground_hwnd else 0
+        attached = False
         try:
-            path = ctypes.create_unicode_buffer(1024)
-            size = wintypes.DWORD(1024)
-            if kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
-                process = path.value.rsplit("\\", 1)[-1]
+            if foreground_thread and foreground_thread != current_thread:
+                attached = bool(_user32.AttachThreadInput(current_thread, foreground_thread, True))
+            _user32.BringWindowToTop(hwnd)
+            _user32.SetForegroundWindow(hwnd)
         finally:
-            kernel32.CloseHandle(handle)
-    return {"title": title.value, "pid": pid.value, "process": process}
+            if attached:
+                _user32.AttachThreadInput(current_thread, foreground_thread, False)
+        return bool(int(_user32.GetForegroundWindow() or 0) == int(hwnd))
+    except (AttributeError, OSError):
+        return False
 
 
 def attach_input_desktop() -> bool:

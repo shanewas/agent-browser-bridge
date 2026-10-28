@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import base64
 import io
+import subprocess
 import sys
+import time
 
 from .errors import ActionError, Aborted
 from .overlay import NullOverlay, make_overlay
 
 ACTIONS = ("screen", "cursor", "window", "shot", "click", "move", "drag", "scroll", "type", "key",
-           "hold", "wait", "notify", "record")
+           "hold", "wait", "notify", "record", "windows", "focus", "launch", "clipboard")
 #: Read-only verbs agents call in tight loops; the overlay stays quiet for them.
-QUIET = {"screen", "cursor", "window"}
+QUIET = {"screen", "cursor", "window", "windows"}
 NOTIFY_MAX_CHARS = 200
 DEFAULT_MAX_EDGE = 1280
 MAX_DURATION = 100
@@ -44,6 +46,8 @@ def estimate_seconds(action: str, params: dict) -> float:
         return 0.0
     if action in ("desktop_wait", "desktop_hold") and _is_number(params.get("seconds")):
         return max(0.0, float(params["seconds"]))
+    if action in ("desktop_focus", "desktop_launch") and _is_number(params.get("waitSeconds")):
+        return max(0.0, float(params["waitSeconds"]))
     if action == "desktop_type" and isinstance(params.get("text"), str):
         return len(params["text"]) * TYPE_SECONDS_PER_CHAR
     if action == "desktop_drag" and isinstance(params.get("through"), list) and params["through"]:
@@ -54,6 +58,14 @@ def estimate_seconds(action: str, params: dict) -> float:
 
 class BadParams(ValueError):
     pass
+
+
+class WindowNotFound(ActionError):
+    code = "window_not_found"
+
+
+def _default_launcher(command, args):
+    return subprocess.Popen([command, *args], shell=False, close_fds=True)
 
 
 def _failure(code: str, error: str) -> dict:
@@ -141,16 +153,64 @@ def _region(params: dict):
     return [left, top, width, height]
 
 
+def _selector(params: dict):
+    value = params.get("window")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise BadParams(f"window must be an object with title, process or pid, got {value!r}")
+    selector = {}
+    for key in ("title", "process"):
+        if key in value and value[key] is not None:
+            if not isinstance(value[key], str) or not value[key]:
+                raise BadParams(f"window {key} must be a non-empty string, got {value[key]!r}")
+            selector[key] = value[key]
+    if "pid" in value and value["pid"] is not None:
+        pid = value["pid"]
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            raise BadParams(f"window pid must be a positive whole number, got {pid!r}")
+        selector["pid"] = pid
+    if not selector:
+        raise BadParams("window needs at least one of title, process or pid")
+    return selector
+
+
+def _inline_selector(params: dict, required: bool) -> dict:
+    selector = {}
+    for key in ("title", "process"):
+        if params.get(key) is not None:
+            if not isinstance(params[key], str) or not params[key]:
+                raise BadParams(f"{key} must be a non-empty string, got {params[key]!r}")
+            selector[key] = params[key]
+    if params.get("pid") is not None:
+        pid = params["pid"]
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            raise BadParams(f"pid must be a positive whole number, got {pid!r}")
+        selector["pid"] = pid
+    if required and not selector:
+        raise BadParams("at least one of title, process or pid is required")
+    return selector
+
+
+def _wait_seconds(params: dict, default: float) -> float:
+    if params.get("waitSeconds") is None:
+        return default
+    return _number(params, "waitSeconds", 0, 30)
+
+
 def _layout_of(monitors) -> list:
     return [[m.index, list(m.origin), list(m.size)] for m in monitors]
 
 
 class Desktop:
-    def __init__(self, screen=None, inputs=None, frames=None, overlay=None, recorder=None):
+    def __init__(self, screen=None, inputs=None, frames=None, overlay=None, recorder=None,
+                 clipboard=None, launcher=None):
         self.screen = screen
         self.inputs = inputs
         self.frames = frames
         self.recorder = recorder
+        self.clipboard = clipboard
+        self.launcher = launcher
         # The real strip is only built alongside the real screen, so fakes never open a window.
         self.overlay = overlay if overlay is not None else NullOverlay()
         self._overlay_given = overlay is not None
@@ -171,7 +231,10 @@ class Desktop:
         except ImportError:
             return _failure("desktop_unavailable",
                             "Pillow is not installed; run: pip install agent-browser-bridge[desktop]")
+        from . import clipboard as clipboard_module
         from . import executor
+        self.clipboard = self.clipboard or clipboard_module
+        self.launcher = self.launcher or _default_launcher
         if not injected:
             from . import duplication, inputs, screen
             self.screen = self.screen or screen
@@ -215,6 +278,8 @@ class Desktop:
             return {"success": True, **getattr(self, "_do_" + verb)(params)}
         except BadParams as exc:
             return _failure("bad_params", str(exc))
+        except WindowNotFound as exc:
+            return _failure("window_not_found", str(exc))
         except Aborted as exc:
             return _failure("desktop_aborted", str(exc))
         except ActionError as exc:
@@ -248,6 +313,27 @@ class Desktop:
 
     def _executor(self, params: dict):
         """The executor whose view space the params are written in, plus the space name."""
+        selector = _selector(params)
+        if selector is not None:
+            if params.get("monitor") is not None:
+                raise BadParams("give either monitor or window, not both")
+            info = self.screen.find_window(**selector)
+            if info is None:
+                raise BadParams(f"no window matches {selector!r}; call desktop_windows to see what is open")
+            from .screen import Monitor
+            rect = info["rect"]
+            monitor = Monitor(0, (rect[0], rect[1]), (rect[2], rect[3]), False)
+            space = _choice(params, "space", ("view", "display"), "view")
+            max_edge = _whole(params, "maxEdge", None, 1, MAX_EDGE_LIMIT)
+            if space == "display":
+                max_edge = max(monitor.size)
+            else:
+                max_edge = max_edge or DEFAULT_MAX_EDGE
+            executor = self._executor_module.Executor(
+                max_edge=max_edge, monitor=monitor, screen=self.screen, keyboard=self.inputs,
+                cursor=_flag(params, "cursor", True), frames=self.frames)
+            executor.window = info
+            return executor, space
         monitors = self.screen.monitors()
         noted_edge = noted_monitor = None
         if self._noted is not None and self._noted[2] == _layout_of(monitors):
@@ -263,13 +349,18 @@ class Desktop:
         executor = self._executor_module.Executor(
             max_edge=max_edge, monitor=monitor, screen=self.screen, keyboard=self.inputs,
             cursor=_flag(params, "cursor", True), frames=self.frames)
+        executor.window = None
         return executor, space
 
     @staticmethod
     def _space(executor, space: str) -> dict:
-        return {"monitor": executor.monitor.index, "view": list(executor.view_size),
-                "display": list(executor.screen_size), "scale": round(executor.scale, 6),
-                "space": space}
+        result = {"monitor": executor.monitor.index, "view": list(executor.view_size),
+                  "display": list(executor.screen_size), "scale": round(executor.scale, 6),
+                  "space": space}
+        window = getattr(executor, "window", None)
+        if window is not None:
+            result["window"] = window
+        return result
 
     def _do_screen(self, params: dict) -> dict:
         executor, space = self._executor(params)
@@ -288,6 +379,64 @@ class Desktop:
 
     def _do_window(self, params: dict) -> dict:
         return {"action": "window", "window": self.screen.foreground()}
+
+    def _do_windows(self, params: dict) -> dict:
+        return {"action": "windows", "windows": self.screen.windows()}
+
+    def _do_focus(self, params: dict) -> dict:
+        selector = _inline_selector(params, required=True)
+        wait = _wait_seconds(params, 5.0)
+        deadline = time.monotonic() + wait
+        info = None
+        while True:
+            info = self.screen.find_window(**selector)
+            if info is not None or time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        if info is None:
+            raise WindowNotFound(f"no window matches {selector!r}; call desktop_windows to see what is open")
+        focused = self.screen.focus_window(info["hwnd"])
+        return {"action": "focus", "window": info, "focused": focused}
+
+    def _do_launch(self, params: dict) -> dict:
+        command = _text(params, "command")
+        args = params.get("args")
+        if args is None:
+            args = []
+        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+            raise BadParams(f"args must be a list of strings, got {args!r}")
+        wait = _wait_seconds(params, 10.0)
+        selector = _inline_selector(params, required=False)
+        proc = self.launcher(command, args)
+        pid = proc.pid
+        deadline = time.monotonic() + wait
+        info = None
+        while True:
+            if selector:
+                info = self.screen.find_window(**selector)
+            else:
+                info = next((w for w in self.screen.windows() if w.get("pid") == pid), None)
+            if info is not None or time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        return {"action": "launch", "pid": pid, "window": info, "found": info is not None}
+
+    def _do_clipboard(self, params: dict) -> dict:
+        op = _choice(params, "op", ("get", "set", "paste"), None)
+        if op is None:
+            raise BadParams("op is required: get, set or paste")
+        if op == "get":
+            text = self.clipboard.get_text()
+            return {"action": "clipboard", "op": "get", "text": text[:100_000],
+                    "characters": len(text), "truncated": len(text) > 100_000}
+        text = _text(params, "text")
+        if len(text) > 200_000:
+            raise BadParams("text must be at most 200000 characters")
+        # Paste puts long or non-Latin text in one step instead of typing it character by character.
+        self.clipboard.set_text(text)
+        if op == "paste":
+            self.inputs.press("ctrl+v")
+        return {"action": "clipboard", "op": op, "characters": len(text)}
 
     def _do_notify(self, params: dict) -> dict:
         text = _text(params, "text")
@@ -338,14 +487,16 @@ class Desktop:
             payload["space"] = "region"
             payload["note"] = REGION_NOTE
         else:
-            # The virtual monitor has index 0, which is not a valid request; note it as "all".
-            noted_monitor = "all" if executor.monitor.index == 0 else executor.monitor.index
-            self._noted = (executor.max_edge, noted_monitor, _layout_of(self.screen.monitors()))
+            if getattr(executor, "window", None) is None:
+                # The virtual monitor has index 0, which is not a valid request; note it as "all".
+                noted_monitor = "all" if executor.monitor.index == 0 else executor.monitor.index
+                self._noted = (executor.max_edge, noted_monitor, _layout_of(self.screen.monitors()))
         payload["image"] = list(image.size)
         payload["cursor_drawn"] = executor.cursor
         payload["source"] = executor.last_source
         # Keys go to whatever is in front, so a shot says what that is.
-        payload["window"] = self.screen.foreground()
+        if getattr(executor, "window", None) is None:
+            payload["window"] = self.screen.foreground()
         return payload
 
     def _do_click(self, params: dict) -> dict:

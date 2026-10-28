@@ -656,6 +656,20 @@ def _add_desktop_commands(parent, common):
     record.add_argument("op", choices=("start", "stop", "status"))
     record.add_argument("--name", default=None, help="recording name (letters, digits, _ or -; default rec-<timestamp>)")
     record.add_argument("--describe", default=None, help="one line for the skill's description")
+    verb("windows", "list the open windows (title, pid, process, rect)")
+    focus = verb("focus", "bring a window to the front")
+    focus.add_argument("--title", default=None)
+    focus.add_argument("--process", default=None)
+    focus.add_argument("--pid", type=int, default=None)
+    focus.add_argument("--wait", type=float, default=None)
+    launch = verb("launch", "start a program and wait for its window")
+    launch.add_argument("command")
+    launch.add_argument("--wait", type=float, default=None)
+    launch.add_argument("--title", default=None)
+    launch.add_argument("--process", default=None)
+    clipboard = verb("clipboard", "get, set or paste clipboard text")
+    clipboard.add_argument("op", choices=("get", "set", "paste"))
+    clipboard.add_argument("text", nargs="?", default=None)
 
 
 def _desktop_params(args) -> tuple[str, dict]:
@@ -664,7 +678,8 @@ def _desktop_params(args) -> tuple[str, dict]:
              "cursor": "cursor", "fast": "fast", "at": "at", "button": "button", "count": "count",
              "modifiers": "modifiers", "from_at": "from", "to_at": "to", "through": "through", "direction": "direction",
              "amount": "amount", "text": "text", "combo": "combo", "repeat": "repeat", "seconds": "seconds",
-             "op": "op", "name": "name", "describe": "describe"}
+             "op": "op", "name": "name", "describe": "describe", "title": "title", "process": "process",
+             "pid": "pid", "wait": "waitSeconds", "command": "command"}
     params = {}
     for attr, key in names.items():
         value = getattr(args, attr, None)
@@ -1341,6 +1356,9 @@ def main(argv=None) -> int:
             elif action == "desktop_window":
                 w = res.get("window") or {}
                 print(f"window: {w.get('title')} ({w.get('process') or 'pid ' + str(w.get('pid'))})")
+            elif action == "desktop_windows":
+                for w in res.get("windows", []):
+                    print(f"  {w.get('process')} pid {w.get('pid')} {w.get('title')} rect {w.get('rect')}")
             else:
                 tab_info = res.get("tab")
                 tab_str = f" (tab {tab_info['id']})" if isinstance(tab_info, dict) and "id" in tab_info else ""

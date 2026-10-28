@@ -239,11 +239,33 @@ reports `pointer_on_monitor`, which is where the user's pointer is right now.
 | (none) | `agent-bridge desktop wait 1.5` | pause; MCP agents take another shot instead |
 | `desktop_notify {text, seconds?}` | `agent-bridge desktop notify "text" [--seconds N]` | show a short notice (up to 200 characters, 0.5 to 30 s) on the overlay for the person at the keyboard |
 | `desktop_record {op, name?, describe?}` | `agent-bridge desktop record start\|stop\|status [--name N] [--describe TEXT]` | record the person's own clicks and keys into a skill; see below |
+| `desktop_windows` | `agent-bridge desktop windows` | list open windows with title, pid, process, rect, minimized and foreground state |
+| `desktop_focus {title?, process?, pid?, waitSeconds?}` | `agent-bridge desktop focus [--title T] [--process P] [--pid N] [--wait S]` | bring a window to the front and wait for it to appear |
+| `desktop_launch {command, args?, waitSeconds?, title?, process?}` | `agent-bridge desktop launch COMMAND [--wait S] [--title T] [--process P]` | start a program without a shell and wait for its window |
+| `desktop_clipboard {op, text?}` | `agent-bridge desktop clipboard get\|set\|paste [TEXT]` | get, set, or set and paste clipboard text |
 
 Every action also takes `monitor`, `space` and `maxEdge`. Key names follow the X11 style of the
 computer-use toolset: `Return`, `Escape`, `Tab`, `BackSpace`, `Delete`, `Up`, `Down`, `Left`,
 `Right`, `Home`, `End`, `Page_Up`, `Page_Down`, `F1` to `F24`, and combinations like `ctrl+s`,
 `alt+Tab`, `ctrl+shift+Escape`.
+
+## Native applications
+
+Start the application with `desktop_launch`. Bring it to the front with `desktop_focus`.
+Take a shot with `window: {process: "CapCut.exe"}` on `desktop_shot`.
+Clicks, moves, drags and scrolls sent with the same `window` value use coordinates in that
+window's own view.
+A moved window breaks nothing because the window is found again at call time.
+Use `desktop_windows` to see which selector values are available.
+
+Check `desktop_window` before typing, as before.
+Keys go to the window in front, so confirm that it names the application you mean.
+
+Paste long or non-Latin text with `desktop_clipboard` and `op: "paste"` instead of
+`desktop_type`.
+Open files from inside the application.
+Press `ctrl+o`, paste the path, and press `Return` rather than starting the application
+with a file argument from a shell.
 
 ## Working well
 

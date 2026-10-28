@@ -5,9 +5,9 @@ import pytest
 
 pytest.importorskip("PIL")
 
-from agent_browser_bridge.desktop import Desktop, executor  # noqa: E402
+from agent_browser_bridge.desktop import Desktop, estimate_seconds, executor  # noqa: E402
 from agent_browser_bridge.desktop.screen import Monitor  # noqa: E402
-from tests.desktop_fakes import FakeKeyboard, FakeOverlay, FakeScreen, three_monitors  # noqa: E402
+from tests.desktop_fakes import FakeClipboard, FakeKeyboard, FakeOverlay, FakeScreen, three_monitors  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -238,7 +238,8 @@ def test_a_short_action_runs_within_the_deadline(desk, keyboard):
 
 def test_shot_reports_the_foreground_window(desk):
     r = desk.handle("desktop_shot", {})
-    assert r["window"] == {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe"}
+    assert r["window"] == {"title": "Untitled - Paint", "pid": 4242, "process": "mspaint.exe",
+                           "hwnd": 77, "rect": [100, 50, 1280, 800]}
 
 
 def test_drag_through_waypoints_is_one_stroke(desk, keyboard):
@@ -361,3 +362,108 @@ def test_fakes_never_get_a_real_overlay(keyboard):
     d = Desktop(screen=FakeScreen(), inputs=keyboard)
     d.handle("desktop_screen", {})
     assert isinstance(d.overlay, NullOverlay)
+
+
+def _window_desk(keyboard, overlay, **kwargs):
+    return Desktop(screen=FakeScreen(), inputs=keyboard, overlay=overlay, **kwargs)
+
+
+def test_windows_returns_the_fake_list(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_windows", {})
+    assert r["success"] is True and r["windows"] == d.screen.window_list
+
+
+def test_focus_matching_title(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_focus", {"title": "paint", "waitSeconds": 0})
+    assert r["success"] is True and r["focused"] is True
+    assert r["window"]["hwnd"] == 77 and d.screen.focused == [77]
+
+
+def test_focus_no_match_is_window_not_found(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_focus", {"title": "nope", "waitSeconds": 0})
+    assert r["success"] is False and r["code"] == "window_not_found"
+
+
+def test_focus_without_selector_is_bad_params(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_focus", {})
+    assert r["success"] is False and r["code"] == "bad_params"
+
+
+def test_launch_reports_pid_and_found_window(keyboard, overlay):
+    calls = []
+
+    class Proc:
+        pid = 4242
+
+    def launcher(command, args):
+        calls.append((command, args))
+        return Proc()
+
+    d = _window_desk(keyboard, overlay, launcher=launcher)
+    r = d.handle("desktop_launch", {"command": "mspaint.exe", "args": ["a.png"], "waitSeconds": 0})
+    assert calls == [("mspaint.exe", ["a.png"])]
+    assert r["success"] is True and r["pid"] == 4242 and r["found"] is True
+    assert r["window"]["pid"] == 4242
+
+
+def test_launch_with_non_string_arg_is_bad_params(keyboard, overlay):
+    d = _window_desk(keyboard, overlay, launcher=lambda command, args: None)
+    r = d.handle("desktop_launch", {"command": "mspaint.exe", "args": [1]})
+    assert r["success"] is False and r["code"] == "bad_params"
+
+
+def test_clipboard_set_then_get_round_trips(keyboard, overlay):
+    clip = FakeClipboard()
+    d = _window_desk(keyboard, overlay, clipboard=clip)
+    assert d.handle("desktop_clipboard", {"op": "set", "text": "hello"})["characters"] == 5
+    r = d.handle("desktop_clipboard", {"op": "get"})
+    assert r["success"] is True and r["text"] == "hello" and r["characters"] == 5
+    assert r["truncated"] is False
+
+
+def test_clipboard_paste_sets_text_and_presses_ctrl_v(keyboard, overlay):
+    clip = FakeClipboard()
+    d = _window_desk(keyboard, overlay, clipboard=clip)
+    r = d.handle("desktop_clipboard", {"op": "paste", "text": "pasted"})
+    assert r["success"] is True and clip.text == "pasted"
+    assert ("press", "ctrl+v", 1) in keyboard.calls
+
+
+def test_clipboard_get_truncates(keyboard, overlay):
+    clip = FakeClipboard(text="x" * 100_001)
+    d = _window_desk(keyboard, overlay, clipboard=clip)
+    r = d.handle("desktop_clipboard", {"op": "get"})
+    assert len(r["text"]) == 100_000 and r["characters"] == 100_001 and r["truncated"] is True
+
+
+def test_window_relative_click_at_origin(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_click", {"at": [0, 0], "window": {"process": "mspaint.exe"}})
+    assert r["success"] is True and ("move", 100, 50) in keyboard.calls
+
+
+def test_window_relative_click_at_centre(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_click", {"at": [640, 400], "window": {"process": "mspaint"}})
+    assert r["success"] is True and ("move", 740, 450) in keyboard.calls
+
+
+def test_window_and_monitor_together_is_bad_params(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_click", {"at": [0, 0], "window": {"process": "mspaint.exe"}, "monitor": 1})
+    assert r["success"] is False and r["code"] == "bad_params"
+
+
+def test_unmatched_window_selector_is_bad_params_naming_desktop_windows(keyboard, overlay):
+    d = _window_desk(keyboard, overlay)
+    r = d.handle("desktop_click", {"at": [0, 0], "window": {"process": "nope.exe"}})
+    assert r["success"] is False and r["code"] == "bad_params" and "desktop_windows" in r["error"]
+
+
+def test_estimate_seconds_for_focus_and_launch():
+    assert estimate_seconds("desktop_launch", {"waitSeconds": 7}) == 7.0
+    assert estimate_seconds("desktop_focus", {"waitSeconds": 7}) == 7.0
