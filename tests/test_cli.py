@@ -340,6 +340,52 @@ def test_cli_daemon_restart_without_pid_file(daemon):
         run_cli(["daemon", "stop"], env=env)
 
 
+def _old_status_server():
+    """A /status that answers bridge_running without a pid: a pre-pid-reporting daemon."""
+    import http.server
+    import threading
+
+    class OldStatus(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"bridge_running": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), OldStatus)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_cli_daemon_stop_pidless_answering_daemon_without_pid_file(tmp_path):
+    # #37's tail: no bridge.pid and the answering daemon reports no pid, so no PID
+    # exists to kill and --force cannot invent one. Stop must fail with that reason
+    # instead of claiming success, and restart must inherit the failure at once.
+    srv = _old_status_server()
+    try:
+        env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(srv.server_address[1])}
+        code, out, err = run_cli(["daemon", "stop"], env=env)
+        assert code == 1
+        assert "does not report its PID" in err
+        code, out, err = run_cli(["daemon", "restart"], env=env)
+        assert code == 1
+        assert "does not report its PID" in err
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_cli_daemon_stop_without_pid_file_or_daemon_still_exits_0(tmp_path):
+    env = {"EDGE_BRIDGE_HOME": str(tmp_path), "EDGE_BRIDGE_PORT": str(free_port())}
+    code, out, err = run_cli(["daemon", "stop"], env=env)
+    assert code == 0, err
+    assert "Daemon PID file not found" in out
+
+
 def test_cli_status_session_line(daemon):
     def handler(action, params):
         tid = params.get("tabId", 7)
