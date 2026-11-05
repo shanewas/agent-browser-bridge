@@ -307,6 +307,14 @@ export function pageScroll(x, y, cx, cy) {
       || (x !== 0 && open(cs.overflowX) && el.scrollWidth > el.clientWidth);
   };
   let el = cx === undefined ? null : document.elementFromPoint(cx, cy);
+  // elementFromPoint stops at shadow hosts; step in so a scroller inside an
+  // open shadow root is found instead of falling through to the window.
+  while (el && el.shadowRoot) {
+    let inner = null;
+    try { inner = el.shadowRoot.elementFromPoint(cx, cy); } catch (e) {}
+    if (!inner || inner === el) break;
+    el = inner;
+  }
   while (el && el !== document.body && el !== document.documentElement) {
     if (el.nodeType === 1 && canScroll(el)) {
       el.scrollBy(x, y);
@@ -569,7 +577,9 @@ export async function pageResolve(query, opts) {
     }
   }
 
-  if (!el && bareTag && !explicitSelector) {
+  // Exact mode skips the bare-tag fallback too: a name that is also a tag word
+  // ("main", "table") must not resolve to the first such element.
+  if (!el && bareTag && !explicitSelector && !exactOnly) {
     try {
       el = document.querySelector(q) || L.queryAllDeep(document, q)[0] || null;
     } catch (e) {

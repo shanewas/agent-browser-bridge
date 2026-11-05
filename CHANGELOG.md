@@ -16,6 +16,15 @@ Four new desktop actions for driving native applications.
 
 Four new MCP tools bring the list to 51. The extension is unchanged.
 
+Two extension tails from the 2.6.0 review (#64).
+
+- The fallback ladder's exact rung no longer falls back to a bare tag:
+  a target name that is also a tag word ("main", "table") must not
+  resolve to the first such element.
+- A no-debugger scroll at a point inside an open shadow root now
+  reaches the scrollable element there instead of scrolling the
+  window.
+
 ## 4.1.1
 
 Four small fixes in the desktop layer.

@@ -76,8 +76,18 @@ def _handle_daemon_cmd(args, port: int) -> int:
     if sub == "stop":
         if not pid_p.exists():
             # Without bridge.pid, the daemon answering on the port is the only source of its PID.
-            pid = _probe_status(port).get("pid")
+            st = _probe_status(port)
+            pid = st.get("pid")
             if not pid:
+                if st.get("bridge_running"):
+                    # #37: the answering daemon predates pid reporting, so no PID exists
+                    # anywhere to kill; --force cannot invent one. Say so instead of
+                    # claiming success and letting restart fail on a still-live daemon.
+                    print(f"A daemon answers on 127.0.0.1:{port} but does not report its PID "
+                          "(it predates pid reporting) and bridge.pid is missing, so there is "
+                          "no PID to stop. Kill that daemon, then run: agent-bridge daemon start",
+                          file=sys.stderr)
+                    return 1
                 print("Daemon PID file not found")
                 return 0
         else:
