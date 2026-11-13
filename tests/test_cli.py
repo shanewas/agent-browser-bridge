@@ -1022,7 +1022,7 @@ def test_log_rotated_detects_inode_change_and_truncation(tmp_path):
         assert cli._log_rotated(p, fh, inode) is False
         p.write_text("x\n", encoding="utf-8")
         assert cli._log_rotated(p, fh, inode) is True
-    with open(p, "r", encoding="utf-8") as fh:
+    with cli._open_log_read(p) as fh:
         inode = _os.fstat(fh.fileno()).st_ino
         fh.seek(0, 2)
         p.rename(tmp_path / "bridge.log.1")
