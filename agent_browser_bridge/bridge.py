@@ -42,6 +42,33 @@ CLOSING_ACTIONS = frozenset({"tab_close", "close_tab"})
 DEADLINE_MARGIN_SEC = 0.5
 LOCK_IDLE_EVICT_SEC = 3600.0
 
+#: Actions that still answer while a tab or session is paused by the user: metadata
+#: only, never page content (a snapshot would hand the agent whatever the user is
+#: typing into the page they just took back).
+PAUSE_ALLOW_ACTIONS = frozenset({
+    "ping", "status", "tabs", "daemon", "session_start",
+    "session_status", "session_stop", "session_list", "session_prune",
+    "mcp-config", "extension",
+})
+USER_TAKEOVER_ERROR = ("The user took control of this tab. "
+                       "Do not retry. Tell the user and wait for them to resume.")
+PAUSE_TTL_SEC = 1800.0
+FEATURES = ["banner", "takeover"]
+
+
+def _takeover_result() -> dict:
+    return {"success": False, "code": "user_takeover", "error": USER_TAKEOVER_ERROR}
+
+
+def _clean_agent_label(value) -> str | None:
+    """An agent display name from a client: short printable text, or None."""
+    if not isinstance(value, str):
+        return None
+    cleaned = "".join(ch for ch in value if ch.isprintable()).strip()
+    if not cleaned:
+        return None
+    return cleaned[:40]
+
 
 def _is_tab_scoped(action: str) -> bool:
     return action not in LOCK_EXEMPT_ACTIONS and not action.startswith("desktop_")
@@ -190,6 +217,15 @@ class BridgeState:
         self.desktop = Desktop()
         self.desktop_lock = threading.Lock()
 
+        # Presence pill / takeover state. paused_tabs maps a tab id to its pause
+        # expiry (time.time()); the owning session is bookkeeping for /status
+        # only, because the pause check itself is tab-absolute.
+        self.paused_tabs: dict[int, float] = {}
+        self.paused_by: dict[int, str | None] = {}
+        self.paused_sessions: set[str] = set()
+        self.desktop_paused: bool = False
+        self.last_agent: str | None = None
+
         self.last_seen: float = 0.0
         self.last_pong: float = 0.0
         self.last_ping_sent: float = 0.0
@@ -233,8 +269,52 @@ class BridgeState:
         while self.held:
             item = self.held.popleft()
             if now < item.deadline and self.ext and not self.ext.closed:
+                # A command held across a reconnect still answers to a pause the
+                # user set while it waited; it is completed here, never sent.
+                p_action = item.payload.get("action") if isinstance(item.payload, dict) else None
+                p_params = item.payload.get("params") if isinstance(item.payload, dict) else None
+                p_tab = p_params.get("tabId") if isinstance(p_params, dict) else None
+                blocked = None
+                if isinstance(p_action, str):
+                    blocked = self.pause_blocked_locked(
+                        p_action, tab_id=p_tab if isinstance(p_tab, int) else None)
+                if blocked is not None:
+                    self.results[item.id] = blocked
+                    item.event.set()
+                    continue
                 self.pending[item.id] = item.event
                 self.ext.send_text(json.dumps(item.payload))
+
+    def pause_blocked_locked(self, action: str, tab_id: int | None = None,
+                             session_token: str | None = None) -> dict | None:
+        """The takeover result when this call is paused, else None. Caller holds the lock."""
+        if action in PAUSE_ALLOW_ACTIONS:
+            return None
+        now = time.time()
+        if action.startswith("desktop_"):
+            return _takeover_result() if self.desktop_paused else None
+        if session_token is not None and session_token in self.paused_sessions:
+            return _takeover_result()
+        if tab_id is not None:
+            exp = self.paused_tabs.get(tab_id)
+            if exp is not None:
+                if exp > now:
+                    return _takeover_result()
+                del self.paused_tabs[tab_id]
+                self.paused_by.pop(tab_id, None)
+        return None
+
+    def set_tab_pause_locked(self, tab_id: int, paused: bool, by: str | None = None) -> None:
+        if paused:
+            self.paused_tabs[tab_id] = time.time() + PAUSE_TTL_SEC
+            self.paused_by[tab_id] = by
+        else:
+            self.paused_tabs.pop(tab_id, None)
+            self.paused_by.pop(tab_id, None)
+
+    def live_paused_tabs_locked(self) -> list[int]:
+        now = time.time()
+        return [t for t, exp in self.paused_tabs.items() if exp > now]
 
     def on_ws_closed(self, ws: WebSocketConnection):
         with self.lock:
@@ -252,13 +332,16 @@ class BridgeState:
                                             "error": "Edge extension disconnected while the command was in flight."}
                     event.set()
 
-    def session_create_locked(self, name: str | None = None) -> str:
+    def session_create_locked(self, name: str | None = None, agent: str | None = None) -> str:
         token = str(uuid.uuid4())
         if not name:
             name = "s-" + token[:8]
         now = time.time()
         self.sessions[token] = {"tabId": None, "tabClosed": False, "warned": set(),
-                                "name": name, "created": now, "lastActivity": now}
+                                "name": name, "created": now, "lastActivity": now,
+                                "agent": agent}
+        if agent:
+            self.last_agent = agent
         return token
 
     def session_stop_locked(self, token: str | None) -> bool:
@@ -271,6 +354,7 @@ class BridgeState:
             return False
         del self.sessions[token]
         self.session_inflight.pop(token, None)
+        self.paused_sessions.discard(token)
         return True
 
     def session_touch_locked(self, token: str | None, now: float | None = None) -> None:
@@ -473,6 +557,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 session_count = len(state.sessions)
                 pin_tab = state.cli_pin
                 last_seen = state.last_seen
+                paused_count = len(state.live_paused_tabs_locked())
+                desktop_paused = state.desktop_paused
+                agent_label = state.last_agent
 
             self._respond(200, {
                 "bridge_running": True,
@@ -487,6 +574,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "last_seen_seconds_ago": round(time.time() - last_seen, 1) if last_seen > 0 else None,
                 "pending": pending_count,
                 "sessions": session_count,
+                "features": FEATURES,
+                "paused_tabs": paused_count,
+                "desktop_paused": desktop_paused,
+                "agent": agent_label,
                 "pin": pin_tab,
                 "pairing_required": state.pairing_required,
                 "data_dir": str(config.home()),
@@ -663,6 +754,38 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         if data.get("pong") is True:
             state.mark_pong()
 
+        if isinstance(data.get("control"), str):
+            # Presence-pill control frames from the extension, the only client of
+            # this socket. Fields are validated like everything else here; the
+            # is_active check above already refused unaccepted sockets.
+            control = data["control"]
+            ack = None
+            with state.lock:
+                if control == "takeover":
+                    tab_id, paused = data.get("tabId"), data.get("paused")
+                    if isinstance(tab_id, int) and isinstance(paused, bool):
+                        state.set_tab_pause_locked(tab_id, paused, by="extension")
+                        ack = {"tabId": tab_id, "paused": paused}
+                elif control == "desktop":
+                    paused = data.get("paused")
+                    if isinstance(paused, bool):
+                        state.desktop_paused = paused
+                        ack = {"desktop": True, "paused": paused}
+                elif control == "snapshot":
+                    tabs = data.get("pausedTabs")
+                    if isinstance(tabs, list):
+                        now = time.time()
+                        state.paused_tabs = {t: now + PAUSE_TTL_SEC for t in tabs
+                                             if isinstance(t, int)}
+                        state.paused_by = {t: "extension" for t in state.paused_tabs}
+                        ack = {"snapshot": True, "pausedTabs": sorted(state.paused_tabs)}
+            if ack is not None and isinstance(data.get("id"), str):
+                try:
+                    ws_conn.send_text(json.dumps({"control_ack": data["id"], **ack}))
+                except Exception:
+                    pass
+            return
+
         if "id" in data and "result" in data:
             cmd_id = data["id"]
             result = data["result"]
@@ -717,6 +840,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(400, {"success": False, "code": "bad_body", "error": "params must be an object"})
                 return
             timeout = config.call_timeout(req.get("timeout", 20))
+            req_agent = _clean_agent_label(req.get("agent"))
             session_token = req.get("sessionToken")
 
             if action == "session_start":
@@ -725,10 +849,16 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._respond(200, {"success": False, "code": "bad_name",
                                         "error": "Invalid session name: use 1-40 chars of A-Z a-z 0-9 _ -."})
                     return
+                agent = _clean_agent_label(params.get("agent")) or req_agent
+                if params.get("agent") and agent is None:
+                    self._respond(200, {"success": False, "code": "bad_name",
+                                        "error": "Invalid agent label: use 1-40 printable characters."})
+                    return
                 with state.lock:
-                    token = state.session_create_locked(name)
+                    token = state.session_create_locked(name, agent=agent)
                     sess_name = state.sessions[token]["name"]
-                self._respond(200, {"success": True, "sessionToken": token, "name": sess_name})
+                self._respond(200, {"success": True, "sessionToken": token, "name": sess_name,
+                                    "agent": agent})
                 return
 
             if action in ("session_status", "session_stop"):
@@ -739,12 +869,29 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                             "error": "Unknown or expired sessionToken. Mint one with session_start."})
                         return
                     if action == "session_stop":
+                        stop_tab = sess.get("tabId")
+                        was_paused = session_token in state.paused_sessions or (
+                            stop_tab is not None and stop_tab in state.paused_tabs)
                         state.session_stop_locked(session_token)
+                        if stop_tab is not None:
+                            state.paused_tabs.pop(stop_tab, None)
+                            state.paused_by.pop(stop_tab, None)
+                        ext_ws = state.ext if state.ext_accepted else None
+                        if was_paused and stop_tab is not None and ext_ws is not None and not ext_ws.closed:
+                            try:
+                                ext_ws.send_text(json.dumps(
+                                    {"control": "state", "tabId": stop_tab, "paused": False}))
+                            except Exception:
+                                pass
                         self._respond(200, {"success": True, "stopped": True})
                         return
                     now = time.time()
                     self._respond(200, {"success": True, "name": sess.get("name", "s-?"),
                                         "tabId": sess["tabId"], "tabClosed": sess["tabClosed"],
+                                        "agent": sess.get("agent"),
+                                        "paused": session_token in state.paused_sessions or (
+                                            sess.get("tabId") is not None
+                                            and sess.get("tabId") in state.paused_tabs),
                                         "age_s": int(now - sess.get("created", now))})
                     return
 
@@ -796,7 +943,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     with state.lock:
                         state.session_dispatch_begin_locked(session_token)
                 try:
-                    self._exec_batch(state, session_token, session, params, timeout)
+                    self._exec_batch(state, session_token, session, params, timeout,
+                                     agent=_clean_agent_label(session.get("agent")) if session else req_agent)
                 finally:
                     if session_token is not None:
                         with state.lock:
@@ -805,8 +953,18 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
             _strip_session_token(params)
             forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped, action)
+            agent_label = (_clean_agent_label(session.get("agent")) if session else None) or req_agent
+            if agent_label:
+                with state.lock:
+                    state.last_agent = agent_label
+            with state.lock:
+                blocked = state.pause_blocked_locked(action, tab_id=forward_tab,
+                                                     session_token=session_token)
+            if blocked is not None:
+                self._respond(200, blocked)
+                return
             res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
-                                                      tab_scoped, forward_tab, session_token=session_token)
+                                                      tab_scoped, forward_tab, session_token=session_token, agent=agent_label)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
             self._respond(status_code, res)
             return
@@ -843,7 +1001,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         return None
 
     def _dispatch_guarded(self, state, action, params, deadline, tab_scoped, forward_tab,
-                          session_token=None):
+                          session_token=None, agent=None):
         # Narrowest activity hook: every real command for a session, single
         # or batch step, funnels through here, while session_start/status/
         # stop/list/prune and /status never do. Touching at dispatch also
@@ -861,7 +1019,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     return ({"success": False, "code": "tab_busy", "tabId": forward_tab,
                              "error": f"Tab {forward_tab} is busy; another call holds its lock"}, 200)
             try:
-                return self._dispatch_once(state, action, params, deadline, tab_scoped)
+                # Execution-time recheck: the pause may have landed while this call
+                # waited on the tab lock, and an admission-time pass proves nothing
+                # about the moment the action actually runs.
+                with state.lock:
+                    blocked = state.pause_blocked_locked(action, tab_id=forward_tab,
+                                                         session_token=session_token)
+                if blocked is not None:
+                    return (blocked, 200)
+                return self._dispatch_once(state, action, params, deadline, tab_scoped, agent=agent)
             finally:
                 if tab_lock is not None:
                     tab_lock.release()
@@ -877,11 +1043,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             return ({"success": False, "code": "desktop_busy",
                      "error": "another desktop action is running; retry shortly"}, 200)
         try:
+            with state.lock:
+                blocked = state.pause_blocked_locked(action)
+            if blocked is not None:
+                return (blocked, 200)
             return (state.desktop.handle(action, params, remaining=deadline - time.time()), 200)
         finally:
             state.desktop_lock.release()
 
-    def _dispatch_once(self, state, action, params, deadline, tab_scoped):
+    def _dispatch_once(self, state, action, params, deadline, tab_scoped, agent=None):
         if action.startswith("desktop_"):
             return BridgeRequestHandler._dispatch_desktop(state, action, params, deadline)
         fwd_params = dict(params)
@@ -890,6 +1060,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         cmd_id = str(uuid.uuid4())
         event = threading.Event()
         cmd_payload = {"id": cmd_id, "action": action, "params": fwd_params}
+        if agent:
+            cmd_payload["agent"] = agent
         with state.lock:
             live = bool(state.ext and not state.ext.closed and state.ext_accepted)
             if live:
@@ -966,7 +1138,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                         logger.warning("Session tab %s closed; session is now sticky tab_closed", forward_tab)
 
 
-    def _exec_batch(self, state, session_token, session, params, timeout):
+    def _exec_batch(self, state, session_token, session, params, timeout, agent=None):
         steps = params.get("steps") or []
         if not isinstance(steps, list):
             self._respond(400, {"success": False, "code": "bad_body", "error": "steps must be a list"})
@@ -1021,7 +1193,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             s_tab_scoped = _is_tab_scoped(s_action)
             forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab,
-                                            session_token=session_token)
+                                            session_token=session_token, agent=agent)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
             results.append(res)
             if res and res.get("success") is False and step.get("stopOnError", True) is not False:

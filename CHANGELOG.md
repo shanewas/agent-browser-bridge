@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.2.0
+
+The user can see the agent working, and can take the browser back.
+
+- A presence pill at the top centre of the page shows who is driving
+  ("Sigil Working...", with a plain verb for longer actions: Clicking, Typing,
+  Navigating, Reading). The name comes from the client per request
+  (--agent-name, $AGENT_BRIDGE_AGENT_NAME, the Edge(agent=...) argument,
+  or the MCP client's own name); it falls back to "Agent". The close button hides the
+  pill on that tab for the session. The popup gains a matching status line
+  and a "Show the working pill" toggle.
+- Takeover: clicking the pill, pressing Alt+Shift+B, using the popup, or
+  simply typing and clicking in the page while the agent works pauses the
+  agent on that tab. Paused calls answer user_takeover - metadata still
+  reads, page content does not, and nothing resumes over the API: only the
+  user resumes, from the pill, the popup, or the shortcut. The pause clears
+  when the session stops, the tab closes, or 30 minutes pass. The toolbar
+  icon mirrors the state (green dot working, amber bars paused), and the
+  desktop layer pauses the same way from the popup.
+- The pill stays out of the agent's way: snapshots skip it, cover checks see
+  through it, screenshots hide it, and an action headed for the point under
+  it fades it first.
+
 ## Unreleased
 
 Four new desktop actions for driving native applications.

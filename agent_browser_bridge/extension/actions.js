@@ -161,7 +161,10 @@ function targetKind(p) {
 
 // Resolve coordinates for an input action from x/y or a target expression.
 async function locate(tabId, p, verb) {
-  if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
+  if (hasCoords(p)) {
+    await bannerFadeForPoint(tabId, Number(p.x), Number(p.y));
+    return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
+  }
   const target = p.ref || p.target || p.selector || p.text;
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
   const opts = { highlight: p.highlight, kind: targetKind(p) };
@@ -196,12 +199,25 @@ async function locate(tabId, p, verb) {
       return { ok: false, result: fail("click_covered", `Target "${target}" is covered by <${cover.covering}> in the main frame`), target };
     }
   }
+  await bannerFadeForPoint(tabId, r.x, r.y);
   return { ok: true, x: r.x, y: r.y, info: r };
 }
 
 function showCursor(tabId, x, y, click, p) {
   if (p.highlight === false) return;
   execInTab(tabId, page.pageCursor, [x, y, Boolean(click)]).catch(() => {});
+}
+
+// Presence pill helpers: the pill lives in the content script's isolated world,
+// which execInTab shares, so these calls are synchronous with the caller's queue.
+async function bannerHideForCapture(tabId) {
+  await execInTab(tabId, () => { if (window.__eabBanner) window.__eabBanner.hideForCapture(); }).catch(() => {});
+}
+async function bannerRestoreAfterCapture(tabId) {
+  await execInTab(tabId, () => { if (window.__eabBanner) window.__eabBanner.restoreAfterCapture(); }).catch(() => {});
+}
+async function bannerFadeForPoint(tabId, x, y) {
+  await execInTab(tabId, (px, py) => { if (window.__eabBanner) window.__eabBanner.fadeForPoint(px, py); }, [x, y]).catch(() => {});
 }
 
 const FOCUS_BACKOFF_MS = [50, 100, 200];
@@ -245,11 +261,27 @@ async function releaseAssert(tabId, frameId, uuid) {
   } catch (e) {}
 }
 
+// Presence pill hooks, registered by background.js (the worker owns pause state).
+export const USER_TAKEOVER_ERROR = "The user took control of this tab. Do not retry. Tell the user and wait for them to resume.";
+let pauseGate = null;
+let activityHook = null;
+export function setPauseGate(fn) { pauseGate = fn; }
+export function setActivityHook(fn) { activityHook = fn; }
+export function isPausedFor(tabId, action) {
+  return Boolean(pauseGate && typeof tabId === "number" && pauseGate(tabId, action));
+}
+
 export async function execute(cmd) {
   const action = cmd.action;
   const p = cmd.params || {};
   const tabId = p.tabId;
   log(`Executing: ${action} (${JSON.stringify(p)})`);
+  // Execution-time gate: checked here, inside the queue, so a command admitted
+  // before the user took over still stops before it acts. Batch steps funnel
+  // through execute() too, so the batch loop inherits the check per step.
+  if (isPausedFor(tabId, action)) {
+    return fail("user_takeover", USER_TAKEOVER_ERROR);
+  }
 
   try {
     switch (action) {
@@ -522,6 +554,7 @@ export async function execute(cmd) {
 
       case "screenshot": {
         const tab = await chrome.tabs.get(tabId);
+        await bannerHideForCapture(tabId);
         const format = p.format === "png" ? "png" : "jpeg";
         let clip = p.clip || null;
         if (!clip && p.of) {
@@ -534,6 +567,7 @@ export async function execute(cmd) {
         if (hasDbg) {
           try {
             const dataUrl = await captureScreenshot(tabId, { format, quality: p.quality, clip });
+            await bannerRestoreAfterCapture(tabId);
             return { success: true, dataUrl, format, clip, tabId: tab.id, title: tab.title, url: tab.url };
           } catch (e) {
             cdpError = e.message;
@@ -547,6 +581,7 @@ export async function execute(cmd) {
         }
         const opts = format === "jpeg" ? { format, quality: Math.max(1, Math.min(100, Number(p.quality) || 80)) } : { format };
         const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, opts);
+        await bannerRestoreAfterCapture(tabId);
         if (prev && prev.id !== tab.id) {
           try { await chrome.tabs.update(prev.id, { active: true }); } catch (e) {}
         }
@@ -921,6 +956,11 @@ export async function execute(cmd) {
         return await runOnTab(tab.id, async () => {
           const results = [];
           for (const step of steps) {
+            if (isPausedFor(tab.id, step.action)) {
+              const r = fail("user_takeover", USER_TAKEOVER_ERROR);
+              results.push(r);
+              return fail(r.code, r.error, { stoppedAt: step.action, results, tab: tabInfo(tab) });
+            }
             if (step.action === "sleep" || step.action === "wait_ms") {
               await new Promise(r => setTimeout(r, Number(step.ms || 100)));
               results.push({ action: "sleep", success: true, ms: step.ms });
@@ -1002,6 +1042,20 @@ export async function execute(cmd) {
   }
 }
 
+const executeImpl = execute;
+export async function executeTracked(cmd) {
+  const p = cmd.params || {};
+  const tabId = typeof p.tabId === "number" ? p.tabId : undefined;
+  if (activityHook && tabId !== undefined) {
+    activityHook(tabId, cmd.action, "start", typeof cmd.agent === "string" ? cmd.agent : undefined);
+  }
+  try {
+    return await executeImpl(cmd);
+  } finally {
+    if (activityHook && tabId !== undefined) activityHook(tabId, cmd.action, "end");
+  }
+}
+
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
 const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab"]);
 const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete", "group_list", "group_move", "group_ungroup"]);
@@ -1010,7 +1064,7 @@ const TAB_LEVEL = new Set(["nav", "back", "forward", "reload", "tab", "get_activ
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};
-  if (TABLESS.has(cmd.action)) return execute(cmd);
+  if (TABLESS.has(cmd.action)) return executeTracked(cmd);
   const tab = await getTargetTab(p.tabId);
   if (!tab) {
     return (p.tabId !== undefined && p.tabId !== null && p.tabId !== "")
@@ -1026,7 +1080,7 @@ export async function dispatch(cmd) {
   if (open && !NOQUEUE.has(cmd.action)) {
     return fail("dialog_open", `A ${open.type} dialog is open: "${open.message}". Call dialog with policy accept or dismiss.`, { dialog: open, tab: tabInfo(tab) });
   }
-  const result = NOQUEUE.has(cmd.action) ? await execute(cmd) : await runOnTab(tab.id, () => execute(cmd));
+  const result = NOQUEUE.has(cmd.action) ? await executeTracked(cmd) : await runOnTab(tab.id, () => executeTracked(cmd));
   if (result && typeof result === "object" && !result.tab) {
     let t = tab;
     try { t = await chrome.tabs.get(tab.id); } catch (e) {}

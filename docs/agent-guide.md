@@ -109,6 +109,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `desktop_error` | point outside the view, blocked input, capture failed, unknown key | read `error`; take a fresh shot before retrying a coordinate |
 | `desktop_aborted` | the user held Escape | stop and ask |
 | `bad_params` (desktop) | wrong shape or range | fix the param; nothing moved |
+| `user_takeover` | the user paused you from the browser (pill click, their own hands on the page, popup, or `Alt+Shift+B`) | do not retry and do not work around it; tell the user and wait for them to resume, or poll `edge_status` — there is no call that resumes |
 
 ## Setup (once per machine)
 
