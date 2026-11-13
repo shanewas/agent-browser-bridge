@@ -374,6 +374,64 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
     return 0 if all(c["ok"] for c in checks) else 1
 
 
+def _open_log_read_win32(p):
+    """The CreateFileW half of _open_log_read; None when the Win32 route fails."""
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        create_file = ctypes.windll.kernel32.CreateFileW
+        create_file.restype = wintypes.HANDLE
+        create_file.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        handle = create_file(
+            str(p),
+            0x80000000,  # GENERIC_READ
+            0x00000001 | 0x00000002 | 0x00000004,  # FILE_SHARE_READ | WRITE | DELETE
+            None,
+            3,  # OPEN_EXISTING
+            0x00000080,  # FILE_ATTRIBUTE_NORMAL
+            None,
+        )
+        if not handle or handle == wintypes.HANDLE(-1).value:
+            return None
+        try:
+            fd = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+        except OSError:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return None
+        try:
+            return os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            os.close(fd)
+            return None
+    except Exception:
+        return None
+
+
+def _open_log_read(p):
+    """Open the daemon log for reading without blocking its rotation on Windows.
+
+    Windows refuses to rename a file another handle holds open unless that
+    handle was created with FILE_SHARE_DELETE, and Python's open() never asks
+    for delete sharing: a plain reader (notably `logs --follow`, which holds
+    the file open indefinitely) makes the daemon's RotatingFileHandler fail
+    its rename with WinError 32 for as long as it stays open. On win32 the
+    handle is created with CreateFileW with read/write/delete sharing and
+    handed to Python — open_osfhandle transfers ownership, so closing the
+    returned file closes the handle. Any failure of the Win32 route falls
+    back to a plain open. Other platforms are exactly open().
+    """
+    if sys.platform == "win32":
+        fh = _open_log_read_win32(p)
+        if fh is not None:
+            return fh
+    return open(p, "r", encoding="utf-8", errors="replace")
+
+
 def _log_rotated(p, fh, inode: int) -> bool:
     """True when the log at p is no longer the file fh is reading: a new inode, or truncated in place."""
     try:
@@ -394,7 +452,8 @@ def _handle_logs(args, opt_json: bool) -> int:
             print(f"Error ({err['code']}): {err['error']}", file=sys.stderr)
         return 1
     tail_n = max(0, args.tail)
-    text = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    with _open_log_read(p) as fh:
+        text = fh.read().splitlines()
     lines = text[-tail_n:] if tail_n else []
     if opt_json:
         print(json.dumps({"success": True, "path": str(p), "lines": lines}))
@@ -405,7 +464,7 @@ def _handle_logs(args, opt_json: bool) -> int:
         try:
             at_start = False
             while True:
-                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                with _open_log_read(p) as fh:
                     if not at_start:
                         fh.seek(0, 2)
                     inode = os.fstat(fh.fileno()).st_ino
