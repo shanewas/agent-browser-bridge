@@ -116,7 +116,10 @@ console.log(JSON.stringify(out));
 
 
 COVER_HARNESS = r"""
-const page = await import(process.argv[2]);
+import { pathToFileURL } from "node:url";
+// process.argv[2] is a plain filesystem path; on Windows a drive-letter path
+// parses as a "c:" URL scheme and import() rejects it, so convert first.
+const page = await import(pathToFileURL(process.argv[2]).href);
 const host = { id: "__eab_banner_host", style: { display: "" }, tagName: "DIV" };
 const iframe = { id: "", tagName: "IFRAME", style: {} };
 const div = { id: "", tagName: "DIV", style: {} };

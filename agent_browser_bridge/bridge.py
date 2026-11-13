@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import __version__, config
 from .desktop import Desktop
@@ -72,6 +73,15 @@ def _clean_agent_label(value) -> str | None:
 
 def _is_tab_scoped(action: str) -> bool:
     return action not in LOCK_EXEMPT_ACTIONS and not action.startswith("desktop_")
+
+
+def _tab_id(tab_info) -> int | None:
+    if not isinstance(tab_info, dict):
+        return None
+    try:
+        return int(tab_info.get("id"))
+    except (TypeError, ValueError):
+        return None
 
 logger = logging.getLogger("edge_bridge")
 
@@ -252,6 +262,12 @@ class BridgeState:
         old = self.ext
         if old is not ws:
             if old is not None:
+                # Commands sent on the old socket can never be answered once it is
+                # replaced; fail them now rather than leaving callers to time out.
+                for cmd_id, event in list(self.pending.items()):
+                    self.results[cmd_id] = {"success": False, "code": "extension_offline",
+                                            "error": "Edge extension disconnected while the command was in flight."}
+                    event.set()
                 old.close()
             self.ext = ws
             now = time.monotonic()
@@ -544,7 +560,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         state = self.server.state
 
-        if self.path.startswith("/status"):
+        if urlsplit(self.path).path == "/status":
             state.mark_seen()
             with state.lock:
                 ext_connected = bool(state.ext and not state.ext.closed)
@@ -584,7 +600,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        if self.path.startswith("/ws"):
+        if urlsplit(self.path).path == "/ws":
             upgrade = self.headers.get("Upgrade", "").lower()
             conn_hdr = self.headers.get("Connection", "").lower()
             if upgrade != "websocket" or "upgrade" not in conn_hdr:
@@ -617,8 +633,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 # after a short grace window.
                 def grace_timeout():
                     with state.lock:
-                        if state.ext is not ws_conn:
-                            state.accept_extension_locked(ws_conn, None)
+                        if state.ext is ws_conn:
+                            return
+                        current = state.ext
+                        if (current is not None and state.ext_accepted and not current.closed
+                                and time.monotonic() - state.last_pong <= state.pong_timeout_sec):
+                            # A live extension holds the slot; a socket that sent no hello
+                            # must not displace it (see accept_extension_locked).
+                            return
+                        state.accept_extension_locked(ws_conn, None)
                 with state.lock:
                     ws_conn.grace_timer = threading.Timer(1.0, grace_timeout)
                     ws_conn.grace_timer.daemon = True
@@ -629,7 +652,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self._run_ws_loop(ws_conn)
             return
 
-        if self.path.startswith("/poll") or self.path.startswith("/result"):
+        if urlsplit(self.path).path in ("/poll", "/result"):
             self._respond(404, {"success": False, "code": "not_found", "error": "/poll and /result are removed in v2; use WebSocket /ws"})
             return
 
@@ -789,6 +812,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         if "id" in data and "result" in data:
             cmd_id = data["id"]
             result = data["result"]
+            if not isinstance(cmd_id, str) or not isinstance(result, dict):
+                logger.warning("Dropping malformed extension result: id=%r result type=%s",
+                               cmd_id, type(result).__name__)
+                return
             with state.lock:
                 if cmd_id in state.pending and state.is_active_locked(ws_conn):
                     err = result.get("error") if isinstance(result, dict) else ""
@@ -812,7 +839,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         state = self.server.state
 
-        if self.path.startswith("/exec"):
+        if urlsplit(self.path).path == "/exec":
             if self._is_browser_request():
                 self._respond(403, {"success": False, "code": "browser_context", "error": "/exec is not reachable from browser context"})
                 return
@@ -842,6 +869,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             timeout = config.call_timeout(req.get("timeout", 20))
             req_agent = _clean_agent_label(req.get("agent"))
             session_token = req.get("sessionToken")
+            if session_token is not None and not isinstance(session_token, str):
+                self._respond(200, {"success": False, "code": "unknown_session",
+                                    "error": "Unknown or expired sessionToken. Mint one with session_start."})
+                return
 
             if action == "session_start":
                 name = params.get("name")
@@ -936,6 +967,11 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                         "error": "Pinned tab is closed. Use switch or new to re-pin."})
                     return
 
+            if tab_scoped and params.get("tabId") is not None and type(params["tabId"]) is not int:
+                self._respond(200, {"success": False, "code": "bad_params",
+                                    "error": "tabId must be an integer"})
+                return
+
             if action == "batch":
                 # Hold the session in flight for the whole batch, including
                 # its sleep steps, not just each dispatched step.
@@ -969,7 +1005,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self._respond(status_code, res)
             return
 
-        if self.path.startswith("/poll") or self.path.startswith("/result"):
+        if urlsplit(self.path).path in ("/poll", "/result"):
             self._respond(404, {"success": False, "code": "not_found", "error": "/poll and /result are removed in v2; use WebSocket /ws"})
             return
 
@@ -980,10 +1016,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             return None
         explicit = params.get("tabId")
         if explicit is not None:
-            try:
-                return int(explicit)
-            except (TypeError, ValueError):
+            if type(explicit) is not int:
                 return None
+            params["tabId"] = explicit
+            return explicit
         if action in CLOSING_ACTIONS:
             return None
         if session is not None:
@@ -1096,14 +1132,14 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             # set it, the first successful tab-bound result sets it while empty,
             # an explicit tabId is a one-shot override that leaves it alone.
             tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
+            tab_id = _tab_id(tab_info)
             with state.lock:
-                if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
-                        and tab_info.get("id") is not None:
-                    state.cli_pin = int(tab_info["id"])
+                if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_id is not None:
+                    state.cli_pin = tab_id
                     state.cli_pin_closed = False
                 elif state.cli_pin is None and forward_tab is None and res.get("success") \
-                        and tab_info is not None and tab_info.get("id") is not None:
-                    state.cli_pin = int(tab_info["id"])
+                        and tab_id is not None:
+                    state.cli_pin = tab_id
                 if forward_tab is not None and forward_tab == state.cli_pin:
                     if res.get("code") == "tab_not_found":
                         if not state.cli_pin_closed:
@@ -1122,13 +1158,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if sess is None:
                 return
             tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
-            if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
-                    and tab_info.get("id") is not None:
-                sess["tabId"] = int(tab_info["id"])
+            tab_id = _tab_id(tab_info)
+            if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_id is not None:
+                sess["tabId"] = tab_id
                 sess["tabClosed"] = False
-            elif sess.get("tabId") is None and res.get("success") and tab_info is not None \
-                    and tab_info.get("id") is not None:
-                sess["tabId"] = int(tab_info["id"])
+            elif sess.get("tabId") is None and res.get("success") and tab_id is not None:
+                sess["tabId"] = tab_id
             if forward_tab is not None and forward_tab == sess.get("tabId"):
                 if res.get("code") == "tab_not_found" \
                         or (action in CLOSING_ACTIONS and res.get("success")):
@@ -1149,7 +1184,11 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         deadline = time.time() + timeout
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
-                continue
+                err = f"step {i + 1} needs an action string"
+                results.append({"success": False, "code": "bad_params", "error": err})
+                self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                    "stoppedAt": None, "results": results})
+                return
             s_action = step.get("action")
             if not isinstance(s_action, str) or not s_action:
                 err = f"step {i + 1} needs an action string"
@@ -1191,6 +1230,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if "tabId" not in s_params and top_tab is not None:
                 s_params["tabId"] = top_tab
             s_tab_scoped = _is_tab_scoped(s_action)
+            if s_tab_scoped and s_params.get("tabId") is not None and type(s_params["tabId"]) is not int:
+                err = "tabId must be an integer"
+                results.append({"success": False, "code": "bad_params", "error": err})
+                self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                    "stoppedAt": s_action, "results": results})
+                return
             forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab,
                                             session_token=session_token, agent=agent)
@@ -1285,8 +1330,9 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Agent Browser Bridge daemon")
     parser.add_argument("--port", type=int, default=None, help="Port to listen on")
-    parser.add_argument("--require-pairing", action="store_true", help="Require pairing token")
-    parser.add_argument("--no-pairing", action="store_true", help="Disable pairing token")
+    pairing_group = parser.add_mutually_exclusive_group()
+    pairing_group.add_argument("--require-pairing", action="store_true", help="Require pairing token")
+    pairing_group.add_argument("--no-pairing", action="store_true", help="Disable pairing token")
     args = parser.parse_args(argv)
 
     pairing = None
