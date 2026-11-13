@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Browser Bridge",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "description": "Let an AI agent drive the browser tabs you already have open, using page snapshots with stable element refs and trusted input.",
   "permissions": [
     "tabs",
@@ -34,8 +34,29 @@
       "run_at": "document_start",
       "all_frames": true,
       "match_about_blank": true
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": [
+        "banner.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_about_blank": false
     }
   ],
+  "commands": {
+    "takeover-toggle": {
+      "suggested_key": {
+        "default": "Alt+Shift+B"
+      },
+      "description": "Pause or resume the agent driving this tab"
+    }
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Agent Browser Bridge",

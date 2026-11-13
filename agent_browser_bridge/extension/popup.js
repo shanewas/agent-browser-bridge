@@ -12,6 +12,7 @@ const FIXES = {
   file_not_found: "The upload path does not exist. Pass an existing file.",
   file_access_required: "Turn on 'Allow access to file URLs' for Agent Browser Bridge in edge://extensions > Details.",
   unknown_session: "The session expired (daemon restarted). Run: agent-bridge session start",
+  user_takeover: "You paused the agent on this tab. It resumes when you press Resume on the pill or in this popup.",
 };
 
 let lastStatus = null;
@@ -117,6 +118,58 @@ document.getElementById("reconnectBtn").addEventListener("click", async () => {
   setText("actionMsg", "Reconnecting…");
   setTimeout(() => setText("actionMsg", ""), 2000);
 });
+
+// Presence pill controls: pause/resume the agent on the active tab or the
+// desktop, force-clear every pause, and the show-pill toggle.
+const bannerEls = {
+  status: document.getElementById("bannerStatus"),
+  pauseBtn: document.getElementById("pauseBtn"),
+  desktopBtn: document.getElementById("desktopPauseBtn"),
+  forceRow: document.getElementById("forceClearRow"),
+  forceBtn: document.getElementById("forceClearBtn"),
+  toggle: document.getElementById("bannerToggle"),
+};
+let bannerState = { paused: false, working: false, agent: null, tabId: null, pausedCount: 0, desktopPaused: false };
+
+async function refreshBanner() {
+  try {
+    const st = await chrome.runtime.sendMessage({ type: "BANNER_STATE_QUERY" });
+    if (st && st.ok) bannerState = st;
+  } catch (e) {}
+  if (bannerEls.status) {
+    if (bannerState.paused) bannerEls.status.textContent = "Paused — you are in control of this tab";
+    else if (bannerState.working) bannerEls.status.textContent = `${bannerState.agent || "Agent"} is working on this tab`;
+    else bannerEls.status.textContent = bannerState.pausedCount > 0
+      ? `${bannerState.pausedCount} tab(s) paused`
+      : (bannerState.desktopPaused ? "Desktop paused" : "Idle");
+  }
+  if (bannerEls.pauseBtn) bannerEls.pauseBtn.textContent = bannerState.paused ? "Resume this tab" : "Pause this tab";
+  if (bannerEls.desktopBtn) bannerEls.desktopBtn.textContent = bannerState.desktopPaused ? "Resume desktop" : "Pause desktop";
+  if (bannerEls.forceRow) bannerEls.forceRow.style.display = bannerState.pausedCount > 0 ? "" : "none";
+}
+
+if (bannerEls.pauseBtn) bannerEls.pauseBtn.addEventListener("click", async () => {
+  const type = bannerState.paused ? "RESUME_TAB" : "PAUSE_TAB";
+  try { await chrome.runtime.sendMessage({ type, tabId: bannerState.tabId }); } catch (e) {}
+  refreshBanner();
+});
+if (bannerEls.desktopBtn) bannerEls.desktopBtn.addEventListener("click", async () => {
+  try { await chrome.runtime.sendMessage({ type: "DESKTOP_PAUSE", paused: !bannerState.desktopPaused }); } catch (e) {}
+  refreshBanner();
+});
+if (bannerEls.forceBtn) bannerEls.forceBtn.addEventListener("click", async () => {
+  try { await chrome.runtime.sendMessage({ type: "FORCE_CLEAR" }); } catch (e) {}
+  refreshBanner();
+});
+if (bannerEls.toggle) {
+  chrome.storage.local.get("bannerEnabled").then((d) => {
+    bannerEls.toggle.checked = !(d && d.bannerEnabled === false);
+  }).catch(() => {});
+  bannerEls.toggle.addEventListener("change", () => {
+    chrome.storage.local.set({ bannerEnabled: bannerEls.toggle.checked }).catch(() => {});
+  });
+}
+refreshBanner();
 
 document.getElementById("diagBtn").addEventListener("click", async () => {
   const st = lastStatus || {};

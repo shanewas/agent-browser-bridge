@@ -516,7 +516,10 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
             return 0
     if sub == "start":
         name = getattr(args, "name", None)
-        res = edge._send_once("session_start", {"name": name} if name else {})
+        start_params = {"name": name} if name else {}
+        if getattr(edge, "agent", None):
+            start_params["agent"] = edge.agent
+        res = edge._send_once("session_start", start_params)
         if not res.get("success"):
             if opt_json:
                 print(json.dumps(res))
@@ -702,6 +705,7 @@ def main(argv=None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output raw result as single JSON line")
     common.add_argument("--no-highlight", action="store_true", default=argparse.SUPPRESS, help="Disable visual highlight ring and cursor")
+    common.add_argument("--agent-name", dest="agent_name", default=argparse.SUPPRESS, help="Name shown on the presence pill in the browser (default: $AGENT_BRIDGE_AGENT_NAME)")
     common.add_argument("--tab", type=int, default=argparse.SUPPRESS, help="Target specific tab ID")
     common.add_argument("--port", type=int, default=argparse.SUPPRESS, help="Bridge port override")
     common.add_argument("--session", default=argparse.SUPPRESS, help="Daemon session token (or EDGE_BRIDGE_SESSION)")
@@ -1005,6 +1009,7 @@ def main(argv=None) -> int:
         port=port,
         highlight=not opt_no_highlight,
         pin=False,
+        agent=getattr(args, "agent_name", None),
         # A freshly started daemon has no sessions, so only session start is worth starting one for.
         auto_start=args.cmd != "status" and (args.cmd != "session" or args.session_action == "start"),
         session_token=opt_session,

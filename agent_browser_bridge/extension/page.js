@@ -424,7 +424,7 @@ export async function pageSnapshot(opts) {
   function walk(el, depth) {
     for (const child of L.childElements(el)) {
       const tag = child.tagName.toUpperCase();
-      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE" || child.id === "__eab_cursor" || child.id === "__eab_ring") continue;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE" || child.id === "__eab_cursor" || child.id === "__eab_ring" || child.id === "__eab_banner_host") continue;
       const role = L.roleOf(child);
       const isFile = role === "file";
       if (!isFile && !L.isVisible(child)) continue;
@@ -609,6 +609,7 @@ export async function pageResolve(query, opts) {
   // light-DOM ancestor means the target has pointer-events:none and would miss.
   const hitReaches = (top) => {
     if (!top) return false;
+    if (top.id === "__eab_banner_host") return true; // the presence pill never counts as covering a target
     if (top === el || el.contains(top)) return true;
     let node = el;
     for (;;) {
@@ -686,6 +687,14 @@ export function pageAwaitStill(quiet, max) {
 export function pageCoverCheck(cx, cy) {
   let top = null;
   try { top = document.elementFromPoint(cx, cy); } catch (e) {}
+  if (top && top.id === "__eab_banner_host") {
+    // The presence pill sits at top-centre; look underneath it before judging.
+    const prev = top.style.display;
+    top.style.display = "none";
+    try { top = document.elementFromPoint(cx, cy); } catch (e) { top = null; }
+    const host = document.getElementById("__eab_banner_host");
+    if (host) host.style.display = prev;
+  }
   if (top && top.shadowRoot) {
     try { top = top.shadowRoot.elementFromPoint(cx, cy) || top; } catch (e) {}
   }

@@ -593,8 +593,18 @@ def handle(msg: dict, edge: Edge) -> dict | None:
         return None
 
     if method == "initialize":
-        client_ver = msg.get("params", {}).get("protocolVersion")
+        params = msg.get("params", {})
+        client_ver = params.get("protocolVersion")
         proto_ver = client_ver if client_ver in SUPPORTED_PROTOCOL_VERSIONS else "2025-11-25"
+        # The client names itself here; until now the handler dropped it. It labels
+        # the presence pill in the user's browser. An explicit flag or the
+        # AGENT_BRIDGE_AGENT_NAME environment variable (already on the Edge
+        # instance) outranks it, so only fill an empty label.
+        info = params.get("clientInfo")
+        if getattr(edge, "agent", None) is None and isinstance(info, dict):
+            name = info.get("name")
+            if isinstance(name, str) and name.strip():
+                edge.agent = name.strip()[:40]
         return {
             "jsonrpc": "2.0",
             "id": msg_id,
@@ -602,6 +612,12 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 "protocolVersion": proto_ver,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "agent-browser-bridge", "version": __version__},
+                "instructions": (
+                    "If a call returns code user_takeover, the user has paused you from "
+                    "their browser. Do not retry or work around it: tell the user, and "
+                    "wait until they resume you from the pill, the popup, or the shortcut. "
+                    "Poll edge_status if you need to know when the pause clears."
+                ),
             },
         }
 
@@ -874,7 +890,7 @@ def serve(stdin=None, stdout=None) -> None:
     out_stream = stdout or sys.stdout.buffer
 
     edge = Edge(pin=True, auto_start=True)
-    mint = edge.send("session_start", {"name": "mcp"})
+    mint = edge.send("session_start", {"name": "mcp", **({"agent": edge.agent} if getattr(edge, "agent", None) else {})})
     if mint.get("success") and mint.get("sessionToken"):
         edge.session_token = mint["sessionToken"]
     else:

@@ -142,6 +142,7 @@ class Edge:
         highlight=True,
         pin=True,
         auto_start=True,
+        agent=None,
         token=None,
         session_token=None,
     ):
@@ -151,6 +152,9 @@ class Edge:
         self.highlight = highlight
         self.pin = pin
         self.auto_start = auto_start
+        # Presence-pill label: who is driving. Explicit argument wins, then the
+        # environment; the daemon falls back per request when this is unset.
+        self.agent = agent if agent is not None else (os.environ.get("AGENT_BRIDGE_AGENT_NAME") or None)
         self.token = token
         self.session_token = session_token
         self._ref_texts = {}
@@ -209,6 +213,10 @@ class Edge:
             }
         t = max(config.call_timeout(timeout or self.timeout), asked_s + RESPONSE_MARGIN_SEC)
         body = {"action": action, "params": p, "timeout": t}
+        if self.agent:
+            # Per-request stamp: most traffic never opens a session, so a label
+            # that only rides session_start would almost never reach the pill.
+            body["agent"] = self.agent
         if self.session_token is not None:
             body["sessionToken"] = self.session_token
         payload = json.dumps(body).encode("utf-8")
@@ -291,7 +299,7 @@ class Edge:
         if data.get("code") == "unknown_session" and self.session_token and not self._reminting:
             self._reminting = True
             try:
-                mint = self._send_once("session_start", {})
+                mint = self._send_once("session_start", {"agent": self.agent} if self.agent else {})
                 if mint.get("success") and mint.get("sessionToken"):
                     self.session_token = mint["sessionToken"]
                     if self._last_tab_id is not None:
