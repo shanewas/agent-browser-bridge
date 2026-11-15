@@ -11,6 +11,20 @@ Two extension tails from the 2.6.0 review (#64).
   reaches the scrollable element there instead of scrolling the
   window.
 
+## 4.3.0
+
+The working pill stays up while the agent works, and the extension channel is paired by default.
+
+- Presence follows real activity: the pill no longer hides on a timer. It stays until 10 seconds after the last command on that tab finishes. A thin gradient frame rings the page while the agent works that tab; it is off when the tab is yielded or idle, and it stays out of screenshots.
+- Yield and resume: watching never pauses the agent, mouse movement and scrolling included. A click or a key press hands the tab to the user; the pill then reads "You're in control" with a single Done button, and Done is how the agent resumes.
+- Pairing is required by default: a fresh daemon writes pairing=1 and only the paired extension can connect. Setting pairing=0 in the config keeps the old tokenless behaviour as a legacy mode, and doctor fails when pairing is off. The extension answers a per-connection challenge with an HMAC proof instead of sending the token; the previous raw-token hello is still accepted, so the 4.2.0 extension keeps working.
+- /status answers unauthenticated callers with only the running state, the daemon version and whether the extension is connected. The full payload needs the bridge token.
+- desktop_launch is off unless the config sets desktop_launch=allow. The other desktop actions are unchanged.
+- New command: agent-bridge daemon token rotate writes a fresh token with 0600 permissions and prints the re-pair steps.
+- The extension worker no longer logs command parameters (typed text, eval source) to its console.
+- The manifest drops the redundant activeTab and http://127.0.0.1/* permissions.
+- Release pipeline: workflow actions are pinned to commit SHAs, both workflows declare contents: read by default, and CI installs are version-pinned. The Chrome publisher reads the upload state from the upload response and recognises SUCCEEDED, so synchronous uploads no longer time out after landing.
+
 ## 4.2.0
 
 The user can see the agent working, and can take the browser back.
