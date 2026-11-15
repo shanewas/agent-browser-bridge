@@ -30,6 +30,9 @@ Desktop.ini
 .env
 *.token
 *.pat
+*.pem
+*.key
+id_*
 
 # agent scratch
 .superpowers/

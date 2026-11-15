@@ -1,9 +1,5 @@
 Store listing description (Chrome + Edge) — keyword-spam safe.
 
-Do NOT add third-party product names (assistant apps, editors, model
-brands) to this text. Chrome rejected v1 for "Keyword Spam" over a client
-list; keep the wording generic.
-
 ---
 
 Agent Browser Bridge lets an AI coding assistant drive the browser tabs

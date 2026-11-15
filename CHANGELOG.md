@@ -1,11 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Two extension tails from the 2.6.0 review (#64).
+
+- The fallback ladder's exact rung no longer falls back to a bare tag:
+  a target name that is also a tag word ("main", "table") must not
+  resolve to the first such element.
+- A no-debugger scroll at a point inside an open shadow root now
+  reaches the scrollable element there instead of scrolling the
+  window.
+
 ## 4.2.0
 
 The user can see the agent working, and can take the browser back.
 
 - A presence pill at the top centre of the page shows who is driving
-  ("Sigil Working...", with a plain verb for longer actions: Clicking, Typing,
+  ("Agent Working...", with a plain verb for longer actions: Clicking, Typing,
   Navigating, Reading). The name comes from the client per request
   (--agent-name, $AGENT_BRIDGE_AGENT_NAME, the Edge(agent=...) argument,
   or the MCP client's own name); it falls back to "Agent". The close button hides the
@@ -23,8 +34,6 @@ The user can see the agent working, and can take the browser back.
   through it, screenshots hide it, and an action headed for the point under
   it fades it first.
 
-## Unreleased
-
 Four new desktop actions for driving native applications.
 
 - `desktop_windows` lists the open windows with title, pid, process, rect, minimized and
@@ -38,15 +47,6 @@ Four new desktop actions for driving native applications.
   route for long or non-Latin text.
 
 Four new MCP tools bring the list to 51. The extension is unchanged.
-
-Two extension tails from the 2.6.0 review (#64).
-
-- The fallback ladder's exact rung no longer falls back to a bare tag:
-  a target name that is also a tag word ("main", "table") must not
-  resolve to the first such element.
-- A no-debugger scroll at a point inside an open shadow root now
-  reaches the scrollable element there instead of scrolling the
-  window.
 
 ## 4.1.1
 
