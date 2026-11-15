@@ -8,7 +8,7 @@ Agent Browser Bridge (formerly Edge Agent Bridge, "the Extension") is an open-so
 
 ### 1. Zero Data Collection
 
-- The Extension does **not** collect, store, track, or transmit any personally identifiable information (PII), browsing history, web credentials, cookies, or telemetry.
+- The Extension does **not** collect, store, track, or transmit any personally identifiable information (PII), web credentials, cookies, or telemetry. Browsing history is never collected or sent anywhere; it is read or deleted only when a local agent explicitly runs a history command, and the results stay on your machine (see Sections 3 and 4).
 - No analytics or third-party tracking libraries are included in the Extension.
 
 ---
