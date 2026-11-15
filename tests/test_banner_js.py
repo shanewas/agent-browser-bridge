@@ -145,7 +145,7 @@ def test_cover_check_sees_through_the_pill(tmp_path):
     harness.write_text(COVER_HARNESS, encoding="utf-8")
     proc = subprocess.run(
         ["node", str(harness), str(EXT / "page.js")],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     # The subframe case: the iframe under the pill is the frame itself, not a cover.
@@ -161,7 +161,7 @@ def test_banner_behaviour(tmp_path):
     harness.write_text(HARNESS, encoding="utf-8")
     proc = subprocess.run(
         ["node", str(harness), str(EXT / "banner.js")],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     assert out["api"] and out["host_mounted"] and out["query_sent"]
@@ -422,7 +422,7 @@ def test_banner_yield_on_click_and_done_resume(tmp_path):
     harness.write_text(YIELD_HARNESS, encoding="utf-8")
     proc = subprocess.run(
         ["node", str(harness), str(EXT / "banner.js")],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     assert out["press_listeners"] and out["no_watch_listeners"]
@@ -440,7 +440,7 @@ def test_banner_sticky_working_and_frame(tmp_path):
     harness.write_text(PRESENCE_HARNESS, encoding="utf-8")
     proc = subprocess.run(
         ["node", str(harness), str(EXT / "banner.js")],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     assert out["frame_host_mounted"] and out["frame_mounted"]
