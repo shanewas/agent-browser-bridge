@@ -98,7 +98,10 @@ class Store:
         status, raw = _send("POST", url, payload, self._auth(**{"Content-Type": "application/zip"}))
         if status not in (200, 202):
             raise PublishError(f"upload returned HTTP {status}, expected 200 or 202")
-        return raw
+        try:
+            return json.loads(raw.decode("utf-8", "replace") or "{}")
+        except json.JSONDecodeError:
+            return {}
 
     def fetch_status(self):
         raw = _send("GET", self._path("fetchStatus"), None, self._auth(), timeout=60)[1]
@@ -115,22 +118,53 @@ class Store:
         return raw.decode("utf-8", "replace")
 
 
-def wait_for_upload(store, timeout, interval):
-    """Poll until the asynchronous upload settles.
+def _state_of(body):
+    """The upload state in an upload or fetchStatus response body, "" when absent."""
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get("uploadState") or body.get("lastAsyncUploadState") or "").strip()
 
-    The reference documents the field but not its enum members, so anything still reading as
-    in-progress keeps the loop running and everything else is reported verbatim rather than
-    matched against values that might not exist.
+
+def _is_success(state):
+    s = state.upper()
+    return s in ("SUCCESS", "UPLOAD_SUCCESS", "NOT_APPLICABLE") or s.endswith("SUCCEEDED")
+
+
+def _is_failure(state):
+    s = state.upper()
+    return "FAIL" in s or s == "NOT_FOUND"
+
+
+def wait_for_upload(store, timeout, interval, initial_state=""):
+    """Poll fetchStatus until the upload settles; the upload response may settle it first.
+
+    The v2 API answers a small upload synchronously: its response carries
+    uploadState=SUCCEEDED and fetchStatus never reports a lastAsyncUploadState for it
+    (that field is only set for async uploads). The 4.2.0 release hit exactly that: the
+    draft sat complete in the dashboard while this loop timed out on "no state", and it
+    would not have recognised the real terminal value anyway — the API's success state
+    is SUCCEEDED, which a check for the substring "SUCCESS" never matches.
     """
+    state = initial_state
+    if _is_success(state):
+        print(f"upload: {state}")
+        return {}
+    if _is_failure(state):
+        raise PublishError(f"upload failed: {state}")
     deadline = time.monotonic() + timeout
+    first_poll = True
     while True:
         body = store.fetch_status()
-        state = str(body.get("lastAsyncUploadState") or "").strip()
-        if state and "PROGRESS" not in state.upper():
-            if "SUCCESS" in state.upper() or state.upper() in ("NOT_APPLICABLE", "UPLOAD_SUCCESS"):
-                print(f"upload: {state}")
-                return body
+        state = _state_of(body)
+        if _is_success(state):
+            print(f"upload: {state}")
+            return body
+        if _is_failure(state):
             raise PublishError(f"upload failed: {json.dumps(body, ensure_ascii=False)}")
+        if not state and not initial_state and first_poll:
+            print("upload: settled (synchronous upload, no async state reported)")
+            return body
+        first_poll = False
         if time.monotonic() >= deadline:
             raise PublishError(f"upload still in progress after {timeout}s: {state or 'no state'}")
         print(f"upload: {state or 'pending'}")
@@ -166,8 +200,8 @@ def main(argv=None):
     try:
         store = load_config(args)
         print(f"uploading {os.path.basename(args.package)}")
-        store.upload(args.package)
-        wait_for_upload(store, args.timeout, args.interval)
+        uploaded = store.upload(args.package)
+        wait_for_upload(store, args.timeout, args.interval, initial_state=_state_of(uploaded))
         if args.upload_only:
             print("draft updated; item not submitted for review")
             return 0

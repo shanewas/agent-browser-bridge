@@ -15,9 +15,10 @@ import publish_chrome  # noqa: E402
 class StoreStub:
     """Minimal stand-in for chromewebstore.googleapis.com plus the OAuth token endpoint."""
 
-    def __init__(self, states, token_ok=True):
+    def __init__(self, states, token_ok=True, upload_state=None):
         self.states = list(states)
         self.token_ok = token_ok
+        self.upload_state = upload_state
         self.calls = []
         self.uploaded = b""
         self.token_form = {}
@@ -50,6 +51,11 @@ class StoreStub:
                     return
                 if self.path.endswith(":upload"):
                     stub.uploaded = body
+                    payload = {"ok": True}
+                    if stub.upload_state is not None:
+                        payload["uploadState"] = stub.upload_state
+                    self._json(200, payload)
+                    return
                 self._json(200, {"ok": True})
 
             def do_GET(self):
@@ -115,6 +121,38 @@ def test_upload_only_skips_publish(package, creds):
     with StoreStub(["SUCCESS"]) as stub:
         assert run(stub, package, "--upload-only") == 0
     assert not any(p.endswith(":publish") for _, p in stub.calls)
+
+
+def test_synchronous_upload_state_skips_polling(package, creds):
+    with StoreStub([], upload_state="SUCCEEDED") as stub:
+        assert run(stub, package) == 0
+    assert not any(p.endswith(":fetchStatus") for _, p in stub.calls)
+    assert any(p.endswith(":publish") for _, p in stub.calls)
+
+
+def test_upload_response_failure_fails_fast(package, creds, capsys):
+    with StoreStub([], upload_state="FAILED") as stub:
+        assert run(stub, package) == 1
+    assert "FAILED" in capsys.readouterr().err
+    assert not any(p.endswith(":publish") for _, p in stub.calls)
+
+
+def test_async_upload_polls_to_succeeded(package, creds):
+    # The API's real terminal value is SUCCEEDED; the old substring check for
+    # "SUCCESS" never matched it and reported the upload as failed.
+    with StoreStub(["IN_PROGRESS", "SUCCEEDED"], upload_state="IN_PROGRESS") as stub:
+        assert run(stub, package) == 0
+    assert any(p.endswith(":publish") for _, p in stub.calls)
+
+
+def test_stateless_upload_settles_on_first_poll(package, creds):
+    # The 4.2.0 release shape: the upload landed synchronously, fetchStatus
+    # carried no lastAsyncUploadState, and the old loop timed out at 900s.
+    with StoreStub([""]) as stub:
+        assert run(stub, package) == 0
+    fetches = [p for _, p in stub.calls if p.endswith(":fetchStatus")]
+    assert len(fetches) == 1
+    assert any(p.endswith(":publish") for _, p in stub.calls)
 
 
 def test_failed_upload_state_reports_the_body(package, creds, capsys):
