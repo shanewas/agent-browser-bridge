@@ -19,7 +19,12 @@ let lastStatus = null;
 
 async function fetchStatus() {
   try {
-    const res = await fetch("http://127.0.0.1:18999/status", { cache: "no-store" });
+    // The daemon answers an unauthenticated /status with a minimal payload; the
+    // stored pair token buys the full one (pairing state, data dir).
+    const data = await chrome.storage.local.get("pairToken");
+    const headers = {};
+    if (data && data.pairToken) headers["X-Bridge-Token"] = data.pairToken;
+    const res = await fetch("http://127.0.0.1:18999/status", { cache: "no-store", headers });
     if (res.ok) return await res.json();
   } catch (e) {}
   return null;

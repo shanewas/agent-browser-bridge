@@ -14,6 +14,7 @@ import json
 import logging
 import logging.handlers
 import os
+import secrets
 import socket
 import socketserver
 import struct
@@ -118,6 +119,9 @@ class WebSocketConnection:
         self.closed = False
         self._write_lock = threading.Lock()
         self.grace_timer: threading.Timer | None = None
+        # The pairing challenge sent on connect; a pairing hello answers it with
+        # an HMAC proof over this nonce instead of the raw token.
+        self.challenge_nonce: str | None = None
 
     def send_frame(self, opcode: int, data: bytes) -> bool:
         if self.closed:
@@ -180,7 +184,7 @@ class HeldCommand:
 
 
 class BridgeState:
-    def __init__(self, port: int, home: Path, token: str, pairing_required: bool = False,
+    def __init__(self, port: int, home: Path, token: str, pairing_required: bool = True,
                  heartbeat_sec: float = 20.0, pong_timeout_sec: float = 45.0,
                  lock_timeout_sec: float = 10.0, daemon_version: str | None = None,
                  session_idle_ttl_sec: float | None = None):
@@ -577,7 +581,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 desktop_paused = state.desktop_paused
                 agent_label = state.last_agent
 
-            self._respond(200, {
+            payload = {
                 "bridge_running": True,
                 "daemon_version": state.daemon_version,
                 "pid": os.getpid(),
@@ -597,7 +601,18 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "pin": pin_tab,
                 "pairing_required": state.pairing_required,
                 "data_dir": str(config.home()),
-            })
+            }
+            token_hdr = self.headers.get(config.TOKEN_HEADER)
+            authed = bool(token_hdr) and hmac.compare_digest(
+                token_hdr.encode("utf-8", "replace"), state.token.encode("utf-8"))
+            if not authed:
+                # The full payload is a fingerprinting kit for any local process
+                # (pid, data dir, agent name, pairing state), so an unauthenticated
+                # probe gets only what liveness checks and the onboarding page need.
+                payload = {k: payload[k] for k in (
+                    "bridge_running", "daemon_version", "extension_connected",
+                    "websocket_active", "extension_outdated")}
+            self._respond(200, payload)
             return
 
         if urlsplit(self.path).path == "/ws":
@@ -628,9 +643,14 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             # The Origin header is spoofable by any local process, so the new socket stays a
             # candidate and does not touch the live extension connection until it is accepted.
             ws_conn = WebSocketConnection(self.connection)
+            # Challenge first: a current extension answers with an HMAC proof over
+            # this nonce, so the pair token never crosses the wire. Extensions that
+            # predate the challenge ignore the frame and hello as before.
+            ws_conn.challenge_nonce = secrets.token_hex(32)
+            ws_conn.send_text(json.dumps({"type": "challenge", "nonce": ws_conn.challenge_nonce}))
             if not state.pairing_required:
-                # Extensions older than 2.0 send no hello; without pairing they are accepted
-                # after a short grace window.
+                # Legacy mode (pairing=0): extensions older than 2.0 send no hello;
+                # without pairing they are accepted after a short grace window.
                 def grace_timeout():
                     with state.lock:
                         if state.ext is ws_conn:
@@ -734,6 +754,23 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             ws_conn.close()
             state.on_ws_closed(ws_conn)
 
+    @staticmethod
+    def _hello_authorized(state, hello: dict, ws_conn: WebSocketConnection) -> bool:
+        """Pairing check for an extension hello. Current extensions answer the
+        connect challenge with proof = HMAC-SHA256(token, nonce), so the token
+        itself never crosses the wire; the legacy raw-token hello the store
+        extension still sends is accepted as well."""
+        proof = hello.get("proof")
+        nonce = getattr(ws_conn, "challenge_nonce", None)
+        if isinstance(proof, str) and nonce:
+            expected = hmac.new(state.token.encode("utf-8"), nonce.encode("utf-8"),
+                                hashlib.sha256).hexdigest()
+            if hmac.compare_digest(proof.encode("utf-8"), expected.encode("utf-8")):
+                return True
+        token = hello.get("token")
+        return isinstance(token, str) and hmac.compare_digest(
+            token.encode("utf-8"), state.token.encode("utf-8"))
+
     def _handle_ws_json(self, data: dict, ws_conn: WebSocketConnection):
         state = self.server.state
         if not isinstance(data, dict):
@@ -745,11 +782,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if not isinstance(version, str):
                 version = None
             if state.pairing_required:
-                token = hello.get("token")
-                if not isinstance(token, str) or not hmac.compare_digest(
-                        token.encode("utf-8"), state.token.encode("utf-8")):
+                if not self._hello_authorized(state, hello, ws_conn):
                     # Closing only this socket: the accepted extension, if any, stays connected.
-                    logger.warning("Pairing token mismatch from extension hello; closing 4001")
+                    logger.warning("Pairing check failed for extension hello; closing 4001")
                     ws_conn.close_with_code(4001, "pairing_failed")
                     return
             instance = hello.get("instance")
@@ -1274,7 +1309,16 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
 
     if require_pairing is None:
         cfg = config.read_config()
-        require_pairing = (cfg.get("pairing") == "1")
+        if "pairing" in cfg:
+            require_pairing = cfg["pairing"] != "0"
+        else:
+            # Pairing is the default: without it any local process can impersonate
+            # the extension on the WebSocket channel. Persist the choice so it is
+            # visible in the config file and survives restarts; pairing=0 is the
+            # legacy opt-out for pre-pairing extensions.
+            require_pairing = True
+            cfg["pairing"] = "1"
+            config.write_config(cfg)
 
     token = config.ensure_token()
     setup_logging(home)
@@ -1331,8 +1375,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Agent Browser Bridge daemon")
     parser.add_argument("--port", type=int, default=None, help="Port to listen on")
     pairing_group = parser.add_mutually_exclusive_group()
-    pairing_group.add_argument("--require-pairing", action="store_true", help="Require pairing token")
-    pairing_group.add_argument("--no-pairing", action="store_true", help="Disable pairing token")
+    pairing_group.add_argument("--require-pairing", action="store_true", help="Require pairing token (the default)")
+    pairing_group.add_argument("--no-pairing", action="store_true",
+                               help="Disable pairing (legacy: the extension channel accepts any local process)")
     args = parser.parse_args(argv)
 
     pairing = None

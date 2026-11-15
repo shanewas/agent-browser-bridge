@@ -5,7 +5,6 @@
   "description": "Let an AI agent drive the browser tabs you already have open, using page snapshots with stable element refs and trusted input.",
   "permissions": [
     "tabs",
-    "activeTab",
     "scripting",
     "storage",
     "alarms",
@@ -14,8 +13,7 @@
     "history"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "http://127.0.0.1/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js",

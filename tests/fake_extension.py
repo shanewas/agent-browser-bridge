@@ -1,5 +1,7 @@
 """A stdlib WebSocket client that behaves like the Edge extension."""
 import base64
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -14,7 +16,7 @@ from agent_browser_bridge import __version__
 class FakeExtension:
     def __init__(self, port, version=None, token=None, send_hello=True, handler=None,
                  origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-                 file_access=True, instance=None):
+                 file_access=True, instance=None, use_proof=False):
         self.port = port
         self.version = version if version is not None else __version__
         self.token = token
@@ -23,9 +25,13 @@ class FakeExtension:
         self.origin = origin
         self.file_access = file_access
         self.instance = instance
+        # use_proof: answer the daemon's challenge with HMAC(token, nonce) instead
+        # of sending the raw token, like a current extension.
+        self.use_proof = use_proof
         self.sock = None
         self.received = []
         self.closed_with = None
+        self._buf = b""
         self._thread = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -63,14 +69,38 @@ class FakeExtension:
         if status != b"101":
             self.sock.close()
             raise ConnectionError(f"upgrade rejected: {resp[:80]!r}")
+        # The daemon's challenge frame can share a segment with the 101 response;
+        # keep any bytes past the headers for the frame reader.
+        self._buf = resp.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in resp else b""
         if self.send_hello:
             hello = {"version": self.version, "id": "fakeextensionid"}
-            if self.token is not None:
+            if self.use_proof:
+                nonce = self._await_challenge()
+                if nonce is not None and self.token is not None:
+                    hello["proof"] = hmac.new(self.token.encode("utf-8"), nonce.encode("utf-8"),
+                                              hashlib.sha256).hexdigest()
+            elif self.token is not None:
                 hello["token"] = self.token
             if self.instance is not None:
                 hello["instance"] = self.instance
             self.send_text(json.dumps({"hello": hello}))
         return self
+
+    def _await_challenge(self):
+        """Read frames until the daemon's challenge arrives; return its nonce."""
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            opcode, payload = self._read_frame()
+            if opcode is None:
+                return None
+            if opcode == 1 and payload:
+                try:
+                    msg = json.loads(payload.decode("utf-8"))
+                except ValueError:
+                    continue
+                if msg.get("type") == "challenge" and isinstance(msg.get("nonce"), str):
+                    return msg["nonce"]
+        return None
 
     def send_frame(self, opcode, payload):
         mask = os.urandom(4)
@@ -96,6 +126,8 @@ class FakeExtension:
 
     def _read_exact(self, n):
         buf = b""
+        if self._buf:
+            buf, self._buf = self._buf[:n], self._buf[n:]
         while len(buf) < n:
             chunk = self.sock.recv(n - len(buf))
             if not chunk:

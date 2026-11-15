@@ -542,7 +542,7 @@ def test_status_non_object_body_is_daemon_unreachable(monkeypatch, body):
             return body
 
     class Connection:
-        def request(self, method, url):
+        def request(self, method, url, headers=None):
             pass
 
         def getresponse(self):

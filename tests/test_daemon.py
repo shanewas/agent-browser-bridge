@@ -194,6 +194,23 @@ def test_status_fields(daemon, fake_ext):
     assert st["extension_version"] == __version__ and st["extension_outdated"] is False and st["websocket_active"] is True
 
 
+def test_status_without_token_is_minimal(daemon):
+    # An unauthenticated probe gets liveness only: pid, data dir, agent name and
+    # pairing state are a targeting kit for local processes.
+    code, body = daemon._request("GET", "/status")
+    assert code == 200
+    assert set(body) == {"bridge_running", "daemon_version", "extension_connected",
+                         "websocket_active", "extension_outdated"}
+    code, body = daemon._request("GET", "/status", headers={config.TOKEN_HEADER: "0" * 64})
+    assert code == 200 and "pid" not in body and "data_dir" not in body
+
+
+def test_status_with_token_is_full(daemon):
+    st = daemon.status()
+    for k in ("pid", "data_dir", "pairing_required", "sessions", "agent", "pin"):
+        assert k in st
+
+
 def test_poll_and_result_gone(daemon):
     assert daemon._request("GET", "/poll?client=sw")[0] == 404
     assert daemon._request("POST", "/result", {"id": "x"})[0] == 404
@@ -248,7 +265,10 @@ def test_oversized_frame_closes_1009(daemon):
     hdr = bytes([0x81, 0x80 | 127]) + struct.pack("!Q", 17 * 1024 * 1024) + b"\x00\x00\x00\x00"
     ext.sock.sendall(hdr)
     ext.sock.settimeout(5)
+    # The daemon's pairing challenge (a text frame) precedes the close.
     op, payload = ext._read_frame()
+    while op == 1:
+        op, payload = ext._read_frame()
     assert op == 8 and struct.unpack("!H", payload[:2])[0] == 1009
 
 
@@ -429,6 +449,49 @@ def paired_daemon(tmp_path):
     assert handle.status()["pairing_required"] is True
     yield handle
     handle.stop()
+
+
+@pytest.fixture
+def default_daemon(tmp_path):
+    # No config at all: the production first-run path, pairing default and all.
+    handle = DaemonHandle(free_port(), tmp_path, default_pairing=True).start()
+    yield handle
+    handle.stop()
+
+
+def test_pairing_is_the_default_and_persists(default_daemon, tmp_path):
+    assert default_daemon.status()["pairing_required"] is True
+    assert "pairing=1" in (tmp_path / "config").read_text(encoding="utf-8")
+
+
+def test_tokenless_hello_is_rejected_by_default(default_daemon):
+    ext = FakeExtension(default_daemon.port).connect().run()
+    assert _wait_closed(ext) == 4001
+    assert default_daemon.status()["websocket_active"] is False
+    ext.close()
+
+
+def test_legacy_raw_token_hello_is_accepted_when_pairing_required(paired_daemon):
+    ext = FakeExtension(paired_daemon.port, token=paired_daemon.token).connect().run()
+    assert _wait_active(paired_daemon)
+    code, body = paired_daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True
+    ext.close()
+
+
+def test_challenge_response_hello_is_accepted(paired_daemon):
+    ext = FakeExtension(paired_daemon.port, token=paired_daemon.token, use_proof=True).connect().run()
+    assert _wait_active(paired_daemon)
+    code, body = paired_daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True
+    ext.close()
+
+
+def test_challenge_response_with_wrong_proof_is_rejected(paired_daemon):
+    ext = FakeExtension(paired_daemon.port, token="0" * 64, use_proof=True).connect().run()
+    assert _wait_closed(ext) == 4001
+    assert paired_daemon.status()["websocket_active"] is False
+    ext.close()
 
 
 def test_bad_pairing_token_does_not_disconnect_paired_extension(paired_daemon):

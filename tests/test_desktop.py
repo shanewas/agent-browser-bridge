@@ -393,7 +393,24 @@ def test_focus_without_selector_is_bad_params(keyboard, overlay):
     assert r["success"] is False and r["code"] == "bad_params"
 
 
-def test_launch_reports_pid_and_found_window(keyboard, overlay):
+def _allow_launch(tmp_path, monkeypatch):
+    """desktop_launch is gated off by default; these tests opt in via config."""
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    (tmp_path / "config").write_text("desktop_launch=allow\n", encoding="utf-8")
+
+
+def test_launch_is_denied_until_enabled_in_config(keyboard, overlay, tmp_path, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    calls = []
+    d = _window_desk(keyboard, overlay, launcher=lambda command, args: calls.append((command, args)))
+    r = d.handle("desktop_launch", {"command": "mspaint.exe", "waitSeconds": 0})
+    assert r["success"] is False and r["code"] == "desktop_launch_disabled"
+    assert "desktop_launch=allow" in r["error"]
+    assert calls == []
+
+
+def test_launch_reports_pid_and_found_window(keyboard, overlay, tmp_path, monkeypatch):
+    _allow_launch(tmp_path, monkeypatch)
     calls = []
 
     class Proc:
@@ -410,7 +427,8 @@ def test_launch_reports_pid_and_found_window(keyboard, overlay):
     assert r["window"]["pid"] == 4242
 
 
-def test_launch_with_non_string_arg_is_bad_params(keyboard, overlay):
+def test_launch_with_non_string_arg_is_bad_params(keyboard, overlay, tmp_path, monkeypatch):
+    _allow_launch(tmp_path, monkeypatch)
     d = _window_desk(keyboard, overlay, launcher=lambda command, args: None)
     r = d.handle("desktop_launch", {"command": "mspaint.exe", "args": [1]})
     assert r["success"] is False and r["code"] == "bad_params"

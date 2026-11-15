@@ -112,6 +112,15 @@ def _restrict_token_file(p: Path) -> None:
         logger.warning("Could not set 0600 permissions on token file %s: %s", p, e)
 
 
+def _write_token(p: Path, token: str) -> None:
+    # Created 0600 rather than written then chmodded: the write-first order leaves the token
+    # world-readable for the window in between, which is the window pairing exists to close.
+    fd = os.open(p, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token)
+    _restrict_token_file(p)
+
+
 def ensure_token() -> str:
     p = token_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -121,12 +130,17 @@ def ensure_token() -> str:
             _restrict_token_file(p)
             return existing
     token = secrets.token_hex(32)
-    # Created 0600 rather than written then chmodded: the write-first order leaves the token
-    # world-readable for the window in between, which is the window pairing exists to close.
-    fd = os.open(p, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(token)
-    _restrict_token_file(p)
+    _write_token(p, token)
+    return token
+
+
+def rotate_token() -> str:
+    """Replace the token with a fresh one and return it. A running daemon keeps the
+    old token in memory until it restarts, and the extension must re-pair."""
+    p = token_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(32)
+    _write_token(p, token)
     return token
 
 

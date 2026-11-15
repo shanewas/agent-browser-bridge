@@ -82,6 +82,17 @@ def test_ensure_token_rotated_token_file_is_0600(monkeypatch, tmp_path):
         assert stat.S_IMODE(p.stat().st_mode) == 0o600
 
 
+def test_rotate_token_replaces_and_stays_0600(monkeypatch, tmp_path):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    old = config.ensure_token()
+    new = config.rotate_token()
+    assert len(new) == 64 and new != old
+    assert config.read_token() == new
+    assert config.ensure_token() == new
+    if os.name == "posix":
+        assert stat.S_IMODE(config.token_path().stat().st_mode) == 0o600
+
+
 def test_read_token_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
     assert config.read_token() is None
