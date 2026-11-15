@@ -47,6 +47,18 @@ def _doctor_json_in_process(monkeypatch, tmp_path, capsys):
     return rc, {c["name"]: c for c in body["checks"]}
 
 
+@pytest.fixture
+def paired_daemon(tmp_path):
+    """A daemon with pairing on, as a fresh install now runs: doctor's healthy
+    tree requires a paired extension, so these tests cannot use the legacy
+    (pairing=0) daemon fixture."""
+    from tests.support import DaemonHandle
+    (tmp_path / "config").write_text("pairing=1\n", encoding="utf-8")
+    handle = DaemonHandle(free_port(), tmp_path).start()
+    yield handle
+    handle.stop()
+
+
 def _tabs_handler(action, params):
     if action == "tabs":
         return {"success": True, "tabs": [{"id": 1, "title": "T", "url": "http://x/", "active": True}]}
@@ -55,33 +67,33 @@ def _tabs_handler(action, params):
     return {"success": True}
 
 
-def test_doctor_healthy_tree(daemon, tmp_path):
+def test_doctor_healthy_tree(paired_daemon, tmp_path):
     _skip_unless_desktop_green()
-    ext = FakeExtension(daemon.port, handler=_tabs_handler).connect().run()
+    ext = FakeExtension(paired_daemon.port, token=paired_daemon.token, handler=_tabs_handler).connect().run()
     time.sleep(0.3)
-    env = _stub_env(tmp_path, daemon)
+    env = _stub_env(tmp_path, paired_daemon)
     code, out, err = run_cli(["doctor"], env=env)
     assert code == 0, out
     assert "FAIL" not in out
-    for name in ("daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "desktop", "pid",
-                 "launcher", "path", "elevation", "mcp"):
+    for name in ("daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "desktop",
+                 "desktop-launch", "pid", "launcher", "path", "elevation", "mcp"):
         assert f"[ok  ] {name}:" in out
     ext.close()
 
 
-def test_doctor_json_shape_hides_token(daemon, tmp_path):
+def test_doctor_json_shape_hides_token(paired_daemon, tmp_path):
     _skip_unless_desktop_green()
-    ext = FakeExtension(daemon.port, handler=_tabs_handler).connect().run()
+    ext = FakeExtension(paired_daemon.port, token=paired_daemon.token, handler=_tabs_handler).connect().run()
     time.sleep(0.3)
-    env = _stub_env(tmp_path, daemon)
+    env = _stub_env(tmp_path, paired_daemon)
     code, out, err = run_cli(["--json", "doctor"], env=env)
     assert code == 0, out
     body = json.loads(out)
     assert body["success"] is True
     assert [c["name"] for c in body["checks"]] == [
-        "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "desktop", "pid",
-        "launcher", "package", "path", "elevation", "mcp"]
-    token = (daemon.home / "token").read_text(encoding="utf-8").strip()
+        "daemon", "token", "extension", "versions", "tabs", "file-access", "pairing", "desktop",
+        "desktop-launch", "pid", "launcher", "package", "path", "elevation", "mcp"]
+    token = (paired_daemon.home / "token").read_text(encoding="utf-8").strip()
     assert token not in out
     ext.close()
 
@@ -432,11 +444,12 @@ def test_daemon_version_drift_fails_doctor_and_warns_in_status(tmp_path):
         daemon.stop()
 
 
-def test_doctor_extension_newer_than_daemon_passes(daemon, tmp_path):
+def test_doctor_extension_newer_than_daemon_passes(paired_daemon, tmp_path):
     _skip_unless_desktop_green()
-    ext = FakeExtension(daemon.port, version="99.0.0", handler=_tabs_handler).connect().run()
+    ext = FakeExtension(paired_daemon.port, token=paired_daemon.token, version="99.0.0",
+                        handler=_tabs_handler).connect().run()
     time.sleep(0.3)
-    env = _stub_env(tmp_path, daemon)
+    env = _stub_env(tmp_path, paired_daemon)
     code, out, err = run_cli(["--json", "doctor"], env=env)
     assert code == 0
     checks = {c["name"]: c for c in json.loads(out)["checks"]}
@@ -461,19 +474,44 @@ def _wait_closed(ext, timeout=5):
     return ext.closed_with
 
 
-def test_doctor_reports_rejected_instance(daemon, tmp_path):
+def test_doctor_reports_rejected_instance(paired_daemon, tmp_path):
     _skip_unless_desktop_green()
-    ext1 = FakeExtension(daemon.port, instance="inst-1", handler=_tabs_handler).connect().run()
-    assert _wait_active(daemon)
-    ext2 = FakeExtension(daemon.port, instance="inst-2").connect().run()
+    ext1 = FakeExtension(paired_daemon.port, token=paired_daemon.token, instance="inst-1",
+                         handler=_tabs_handler).connect().run()
+    assert _wait_active(paired_daemon)
+    ext2 = FakeExtension(paired_daemon.port, token=paired_daemon.token, instance="inst-2").connect().run()
     assert _wait_closed(ext2) == 4002
-    env = _stub_env(tmp_path, daemon)
+    env = _stub_env(tmp_path, paired_daemon)
     code, out, err = run_cli(["doctor"], env=env)
     assert code == 0, out
     assert "another browser rejected: instance inst-2" in out
     ext1.close()
     ext2.close()
 
+
+
+def test_doctor_fails_pairing_on_a_legacy_daemon(daemon, tmp_path):
+    # Pairing off used to pass doctor as "not required"; it is the legacy mode
+    # now and must read as a failure with the way out named.
+    ext = FakeExtension(daemon.port, handler=_tabs_handler).connect().run()
+    time.sleep(0.3)
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    assert code == 1
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["pairing"]["ok"] is False
+    assert "legacy" in checks["pairing"]["detail"]
+    assert "--require-pairing" in checks["pairing"]["fix"]
+    ext.close()
+
+
+def test_doctor_reports_the_desktop_launch_gate(daemon, tmp_path):
+    env = _stub_env(tmp_path, daemon)
+    code, out, err = run_cli(["--json", "doctor"], env=env)
+    checks = {c["name"]: c for c in json.loads(out)["checks"]}
+    assert checks["desktop-launch"]["ok"] is True
+    assert "disabled (default)" in checks["desktop-launch"]["detail"]
+    assert "desktop_launch=allow" in checks["desktop-launch"]["fix"]
 
 
 def test_doctor_desktop_green_with_pillow_on_windows(monkeypatch, tmp_path, capsys):

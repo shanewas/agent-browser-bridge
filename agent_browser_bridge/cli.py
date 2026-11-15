@@ -167,6 +167,16 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 1
         return _handle_daemon_cmd(argparse.Namespace(daemon_action="start", require_pairing=getattr(args, "require_pairing", False)), port)
 
+    elif sub == "token":
+        if getattr(args, "token_action", None) != "rotate":
+            print("Usage: agent-bridge daemon token rotate", file=sys.stderr)
+            return 2
+        config.rotate_token()
+        print(f"Token rotated: the new token is in {config.token_path()}")
+        print("Restart the daemon (agent-bridge daemon restart), then paste the new token "
+              "into the extension popup to re-pair.")
+        return 0
+
     elif sub == "status":
         with Edge(port=port, auto_start=False) as client:
             st = client.status()
@@ -299,7 +309,9 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
                 add("pairing", False, "required but unpaired",
                     f"paste the token from {Path(data_dir) / 'token'} into the extension popup")
         else:
-            add("pairing", True, "not required", "")
+            add("pairing", False,
+                "not required (legacy): any local process can impersonate the extension",
+                "agent-bridge daemon restart --require-pairing")
     else:
         for name in ("extension", "versions", "tabs", "file-access", "pairing"):
             add(name, False, "skipped: daemon not running", "agent-bridge daemon start")
@@ -310,6 +322,13 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("desktop", True, f"available (Pillow {pillow})", "")
     else:
         add("desktop", False, "Pillow is not installed", "pip install agent-browser-bridge[desktop]")
+
+    if config.read_config().get("desktop_launch") == "allow":
+        add("desktop-launch", True, "enabled (desktop_launch=allow in the bridge config)", "")
+    else:
+        add("desktop-launch", True,
+            "disabled (default): desktop_launch runs arbitrary commands, so it stays off until enabled",
+            f"set desktop_launch=allow in {config.config_path()} to enable it")
 
     pid_p = config.pid_path()
     if pid_p.exists() and not up:
@@ -804,7 +823,9 @@ def main(argv=None) -> int:
 
     # daemon
     p_daemon = add_cmd("daemon", help="Manage daemon process")
-    p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status"])
+    p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status", "token"])
+    p_daemon.add_argument("token_action", nargs="?", choices=["rotate"],
+                          help="token: rotate the daemon token (the extension must re-pair)")
     p_daemon.add_argument("--require-pairing", action="store_true", help="Require pairing token")
     p_daemon.add_argument("--force", action="store_true",
                           help="stop/restart: kill the PID in bridge.pid even if /status does not confirm it")

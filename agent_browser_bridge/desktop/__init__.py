@@ -72,6 +72,17 @@ def _failure(code: str, error: str) -> dict:
     return {"success": False, "code": code, "error": error}
 
 
+def _launch_gate_failure() -> dict | None:
+    """desktop_launch runs arbitrary commands, so it stays off until the user opts
+    in with desktop_launch=allow in the bridge config. None means allowed."""
+    from .. import config
+    if config.read_config().get("desktop_launch") == "allow":
+        return None
+    return _failure("desktop_launch_disabled",
+                    "desktop_launch is disabled because it runs arbitrary commands; "
+                    f"set desktop_launch=allow in {config.config_path()} to enable it")
+
+
 def _is_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -259,6 +270,10 @@ class Desktop:
         if verb not in ACTIONS:
             known = ", ".join("desktop_" + name for name in ACTIONS)
             return _failure("unknown_action", f"no such desktop action: {action}; actions: {known}")
+        if verb == "launch":
+            gate = _launch_gate_failure()
+            if gate is not None:
+                return gate
         if not isinstance(params, dict):
             params = {}
         need = estimate_seconds(action, params)

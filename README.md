@@ -268,9 +268,11 @@ your browser profile, so the daemon doesn't try to defend against it.
   A request carrying an `Origin` or `Sec-Fetch-*` header is refused outright, so a page you are
   browsing can't reach the daemon even if it guesses the token.
 - `/ws` requires an `Origin` beginning `chrome-extension://`, which keeps stray local clients off
-  the extension channel, though a second OS user on a shared machine could forge that header. If that is
-  your situation, run `agent-bridge daemon start --require-pairing` and paste the token into the
-  extension popup once; unpaired sockets are then rejected.
+  the extension channel, though a local process could forge that header. Pairing is therefore on by
+  default: paste the token into the extension popup once, and unpaired sockets are rejected. The
+  extension answers the daemon's challenge with an HMAC proof, so the token itself never crosses
+  the wire. `agent-bridge daemon start --no-pairing` turns pairing off (legacy mode, for
+  pre-pairing extensions); any local process can then impersonate the extension.
 - WebSocket frames above 16 MB close the connection, and the socket carries a read timeout, so a
   local client can't make the daemon buffer without bound or pin a worker thread forever.
 - Nothing leaves the machine: no telemetry, no outbound requests of any kind.

@@ -799,7 +799,11 @@ class Edge:
         for _ in range(2):
             try:
                 conn = self._get_connection(config.call_timeout(self.timeout))
-                conn.request("GET", "/status")
+                # The daemon answers an unauthenticated /status with a minimal
+                # payload; the token buys the full one (pid, sessions, pairing).
+                token = self.token or config.read_token()
+                headers = {config.TOKEN_HEADER: token} if token else {}
+                conn.request("GET", "/status", headers=headers)
                 data = json.loads(conn.getresponse().read().decode("utf-8"))
                 if not isinstance(data, dict):
                     raise ValueError("daemon status response was not a JSON object")

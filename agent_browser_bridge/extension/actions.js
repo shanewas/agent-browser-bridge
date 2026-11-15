@@ -275,7 +275,9 @@ export async function execute(cmd) {
   const action = cmd.action;
   const p = cmd.params || {};
   const tabId = p.tabId;
-  log(`Executing: ${action} (${JSON.stringify(p)})`);
+  // Action and tab only: params carry typed text and eval source, which do not
+  // belong in the worker console log.
+  log(`Executing: ${action} (tab ${tabId === undefined || tabId === null ? "?" : tabId})`);
   // Execution-time gate: checked here, inside the queue, so a command admitted
   // before the user took over still stops before it acts. Batch steps funnel
   // through execute() too, so the batch loop inherits the check per step.

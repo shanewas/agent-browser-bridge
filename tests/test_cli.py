@@ -620,7 +620,11 @@ def test_cli_autostarts_daemon_but_status_does_not(tmp_path):
         body = json.loads(out)
         assert body["code"] == "extension_offline", (code, out, err)
         assert probe(port) and probe(port)["bridge_running"] is True
-        ext = FakeExtension(port, handler=lambda a, p: {"success": True, "tabs": []}).connect().run()
+        # A first-use daemon pairs by default, so the fake extension must present
+        # the token the daemon wrote to its data directory.
+        token = (home / "token").read_text(encoding="utf-8").strip()
+        ext = FakeExtension(port, token=token,
+                            handler=lambda a, p: {"success": True, "tabs": []}).connect().run()
         try:
             time.sleep(0.3)
             code, out, err = run_cli(["--json", "tabs"], env=env)
@@ -994,6 +998,17 @@ def test_cli_session_success_and_no_session_exit_codes(capsys):
     edge = FakeEdge()
     edge.session_token = None
     assert cli._handle_session_cmd(args, edge, True) == 3
+
+
+def test_cli_daemon_token_rotate(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(tmp_path))
+    old = config.ensure_token()
+    assert cli.main(["daemon", "token", "rotate"]) == 0
+    new = config.read_token()
+    assert new and len(new) == 64 and new != old
+    out = capsys.readouterr().out
+    assert "re-pair" in out and "daemon restart" in out
+    assert cli.main(["daemon", "token"]) == 2
 
 
 def test_cli_daemon_restart_propagates_require_pairing(tmp_path, monkeypatch):

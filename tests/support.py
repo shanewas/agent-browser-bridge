@@ -46,8 +46,9 @@ def free_port():
 
 
 class DaemonHandle:
-    def __init__(self, port, home):
+    def __init__(self, port, home, default_pairing=False):
         self.port, self.home = port, home
+        self.default_pairing = default_pairing
         self.proc = None
 
     @property
@@ -71,7 +72,12 @@ class DaemonHandle:
             return r.status, {"raw": raw}
 
     def status(self):
-        return self._request("GET", "/status")[1]
+        # The full /status payload needs the token; without it the daemon answers
+        # with the minimal liveness payload.
+        headers = {}
+        if self.token:
+            headers[config.TOKEN_HEADER] = self.token
+        return self._request("GET", "/status", headers=headers)[1]
 
     def exec(self, action, params=None, timeout=5, token="auto", headers=None, session_token=None):
         h = dict(headers or {})
@@ -85,6 +91,13 @@ class DaemonHandle:
         return self._request("POST", "/exec", body, headers=h, timeout=timeout + 5)
 
     def start(self, extra_env=None):
+        # Test daemons run in legacy pairing mode (pairing=0) unless the test wrote
+        # its own config or asked for the production default: most of the suite
+        # drives tokenless fake extensions and is not about pairing.
+        cfg = self.home / "config"
+        if not self.default_pairing and not cfg.exists():
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text("pairing=0\n", encoding="utf-8")
         env = dict(os.environ, EDGE_BRIDGE_HOME=str(self.home), EDGE_BRIDGE_PORT=str(self.port),
                    EDGE_BRIDGE_NO_OVERLAY="1",
                    EDGE_BRIDGE_HEARTBEAT="1", EDGE_BRIDGE_PONG_TIMEOUT="3", PYTHONUNBUFFERED="1")

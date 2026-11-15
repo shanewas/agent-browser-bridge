@@ -34,6 +34,14 @@ async function pairToken() {
   }
 }
 
+async function hmacSha256Hex(keyText, msgText) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(keyText), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(msgText));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function getOrCreateInstanceId() {
   try {
     const data = await chrome.storage.local.get("instanceId");
@@ -73,17 +81,43 @@ async function connectWebSocket(force = false) {
     const ws = new WebSocket(WS_URL);
     bridgeWs = ws;
     let accepted = false;
+    let helloSent = false;
+    let helloTimer = null;
 
-    ws.onopen = async () => {
-      wsBackoffMs = 1000;
+    // The daemon speaks first with a challenge; answer it with an HMAC proof so
+    // the pair token never crosses the wire. A daemon too old to send a challenge
+    // gets the legacy hello (raw token) once the wait below lapses.
+    const sendHello = async (nonce) => {
+      if (helloSent || ws.readyState !== WebSocket.OPEN) return;
+      helloSent = true;
+      if (helloTimer) {
+        clearTimeout(helloTimer);
+        helloTimer = null;
+      }
       const hello = { version: chrome.runtime.getManifest().version, id: chrome.runtime.id };
       const token = await pairToken();
-      if (token) hello.token = token;
+      if (token) {
+        let proof = null;
+        if (nonce) {
+          try {
+            proof = await hmacSha256Hex(token, nonce);
+          } catch (e) {
+            proof = null;
+          }
+        }
+        if (proof) hello.proof = proof;
+        else hello.token = token;
+      }
       const inst = await getOrCreateInstanceId();
       if (inst) hello.instance = inst;
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ hello }));
       sendPauseSnapshot();
       log("Connected to bridge daemon");
+    };
+
+    ws.onopen = () => {
+      wsBackoffMs = 1000;
+      helloTimer = setTimeout(() => sendHello(null), 750);
     };
 
     ws.onmessage = async (event) => {
@@ -94,6 +128,10 @@ async function connectWebSocket(force = false) {
         return;
       }
       if (!msg || typeof msg !== "object") return;
+      if (msg.type === "challenge" && typeof msg.nonce === "string") {
+        sendHello(msg.nonce);
+        return;
+      }
       if (!accepted) {
         // Any message means the daemon kept us after hello: a stale rejection notice is wrong now.
         accepted = true;
