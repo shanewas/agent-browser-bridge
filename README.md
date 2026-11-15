@@ -1,7 +1,7 @@
 # Agent Browser Bridge
 
 [![PyPI - Version](https://img.shields.io/pypi/v/agent-browser-bridge?color=0078D4&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/agent-browser-bridge/)
-[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v4.1.1-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
+[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v4.2.0-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/lknjdleggnheadkkjfngphdbcglalmmg?color=4285F4&logo=googlechrome&logoColor=white&label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/lknjdleggnheadkkjfngphdbcglalmmg)
 [![GitHub Release](https://img.shields.io/github/v/release/shanewas/agent-browser-bridge?color=2ea44f&logo=github&label=Release)](https://github.com/shanewas/agent-browser-bridge/releases/latest)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/agent-browser-bridge?color=3776AB&logo=python&logoColor=white)](https://pypi.org/project/agent-browser-bridge/)
@@ -54,7 +54,7 @@ agent-bridge daemon status
 
 ```text
 Daemon: running on 127.0.0.1:18999 (PID 24188)
-Extension: 4.1.1 (connected)
+Extension: 4.2.0 (connected)
 ```
 
 CLI commands and Python's `with Edge()` start the daemon on first use if it isn't running, but
@@ -190,6 +190,27 @@ ring drawn around the element about to be acted on.
 
 Each CLI call pays roughly 600 ms of Python startup. For anything repetitive use MCP, the Python
 API, or `run` (one process for a whole step file).
+
+---
+
+## The presence pill and taking a tab back
+
+While the agent works in a tab, a small pill at the top centre of the page names it
+("Agent Working...", or a plain verb: Clicking, Typing, Navigating, Reading). The name comes
+from the client — `--agent-name`, `$AGENT_BRIDGE_AGENT_NAME`, `Edge(agent=...)`, or the MCP
+client's own name. The pill is how you take the tab back:
+
+- Click the pill, press **Alt+Shift+B**, or just start typing and clicking in the page
+  yourself: the agent pauses on that tab.
+- Paused calls answer `user_takeover`. Tab metadata still reads; page content does not.
+- Nothing resumes the agent over the API. Only you resume, from the pill, the extension
+  popup's Pause/Resume controls, or the shortcut. The pause also clears when the session
+  stops, the tab closes, or 30 minutes pass.
+- The toolbar icon mirrors the state (green dot working, amber bars paused), the popup shows
+  the same status line, and the desktop layer pauses from the popup the same way.
+
+The pill never gets in the agent's way: snapshots skip it, screenshots hide it, and an action
+headed for the point under it fades it first.
 
 ---
 
