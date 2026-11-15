@@ -5,10 +5,15 @@
 // reports genuine user page input as a boolean signal ({type:"USER_INPUT"}) - never a
 // key value, a target, or text. The worker decides what that signal means; the agent's
 // own CDP input also arrives trusted, so the in-flight guard lives worker-side.
+// A "working" pill stays until the worker sends paused/hidden - visibility follows
+// the agent's real activity, never a local display timer. While working, a subtle
+// animated gradient frame also rings the viewport (its own host, below), so the tab
+// the agent is driving is recognisable at a glance.
 (function () {
   if (window.__eabBanner) return;
 
   var HOST_ID = "__eab_banner_host";
+  var FRAME_HOST_ID = "__eab_frame_host";
   var PALETTE = ["#5b6abf", "#3f7f6a", "#8a6d3b", "#7a4f8c", "#4f6d8c", "#8c4f5e", "#5e7a3a", "#6a5acd"];
   var state = "hidden"; // hidden | working | paused
   var agentName = "Agent";
@@ -93,20 +98,46 @@
   wrap.appendChild(tip);
   shadow.appendChild(wrap);
 
+  // ---- Viewport frame ------------------------------------------------------------
+  // Own host: the pill host is transformed (translateX(-50%)), which would make a
+  // fixed-position child resolve against the pill box instead of the viewport.
+  // pointer-events:none throughout, so the frame never intercepts a click or a
+  // selection, and fixed positioning keeps it out of document flow.
+  var frameHost = document.createElement("div");
+  frameHost.id = FRAME_HOST_ID;
+  frameHost.style.cssText = "position:fixed!important;inset:0!important;z-index:2147483646!important;pointer-events:none!important;margin:0!important;padding:0!important;border:0!important;";
+  var frameShadow = frameHost.attachShadow({ mode: "closed" });
+  var frameStyle = document.createElement("style");
+  frameStyle.textContent = [
+    ".frame{position:fixed;inset:0;pointer-events:none;opacity:0;transition:opacity .25s ease-out;border:2px solid transparent;background:linear-gradient(120deg,rgba(99,102,241,.50),rgba(34,211,238,.40),rgba(167,139,250,.50),rgba(99,102,241,.50)) border-box;background-size:300% 300%;-webkit-mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);mask-composite:exclude;animation:eabframeflow 6s ease-in-out infinite}",
+    ".frame.on{opacity:1}",
+    "@keyframes eabframeflow{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}",
+    "@media (prefers-reduced-motion: reduce){.frame{animation:none}}"
+  ].join("\n");
+  frameShadow.appendChild(frameStyle);
+  var frame = document.createElement("div");
+  frame.className = "frame";
+  frameShadow.appendChild(frame);
+
+  function syncFrame() {
+    frame.classList.toggle("on", state === "working");
+  }
+
   var printStyle = document.createElement("style");
   printStyle.id = "__eab_banner_print";
-  printStyle.textContent = "@media print{#" + HOST_ID + "{display:none!important}}";
+  printStyle.textContent = "@media print{#" + HOST_ID + ",#" + FRAME_HOST_ID + "{display:none!important}}";
 
   function mount() {
     if (!document.documentElement) return;
     if (!host.isConnected) document.documentElement.appendChild(host);
+    if (!frameHost.isConnected) document.documentElement.appendChild(frameHost);
     if (!printStyle.isConnected && document.head) document.head.appendChild(printStyle);
   }
   mount();
   // A hostile or careless page can remove the host; put it back. The badge in the
   // browser toolbar stays the ground truth - this only covers ordinary breakage.
   var mo = new MutationObserver(function () {
-    if (!host.isConnected) mount();
+    if (!host.isConnected || !frameHost.isConnected) mount();
   });
   function armObserver() {
     if (document.documentElement) mo.observe(document.documentElement, { childList: true });
@@ -136,6 +167,7 @@
     }
     wrap.classList.toggle("dot", Boolean(document.fullscreenElement));
     wrap.classList.add("on");
+    syncFrame();
   }
 
   function show(nextState, msg) {
@@ -145,29 +177,29 @@
     state = nextState;
     if (wasHidden) shownAt = Date.now();
     if (msg && msg.mutating) minUntil = Math.max(minUntil, shownAt + 800);
+    // Fresh activity cancels a deferred hide (see hide()): the pill now stays
+    // for as long as the worker keeps reporting state.
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     render();
-    scheduleHide(msg && msg.workingUntil);
     if (state === "working" && msg && msg.teachTooltip) {
       showTip();
       setTimeout(function () { tip.classList.remove("on"); }, 2500);
     }
   }
 
-  function scheduleHide(workingUntil) {
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-    if (state === "paused") return;
-    var until = Math.max(workingUntil || 0, minUntil);
-    if (!until) return;
-    hideTimer = setTimeout(function () {
-      if (state !== "paused") hide();
-    }, Math.max(0, until - Date.now()));
-  }
-
-  function hide() {
+  function hide(force) {
+    // A mutating action keeps the pill up for its minimum display time even if
+    // the worker's hide lands sooner; a local hide (the x button) is immediate.
+    if (!force && minUntil && Date.now() < minUntil) {
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(function () { hide(true); }, minUntil - Date.now());
+      return;
+    }
     state = "hidden";
     minUntil = 0;
     wrap.classList.remove("on");
     tip.classList.remove("on");
+    syncFrame();
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
   }
 
@@ -203,7 +235,7 @@
   closeBtn.addEventListener("click", function (e) {
     if (!e.isTrusted) return;
     e.stopPropagation();
-    hide();
+    hide(true);
     send({ type: "BANNER_HIDE_SESSION" });
   });
   resumeBtn.addEventListener("click", function (e) {
@@ -248,8 +280,8 @@
 
   var fadeTimer = null;
   window.__eabBanner = {
-    hideForCapture: function () { host.style.visibility = "hidden"; },
-    restoreAfterCapture: function () { host.style.visibility = ""; },
+    hideForCapture: function () { host.style.visibility = "hidden"; frameHost.style.visibility = "hidden"; },
+    restoreAfterCapture: function () { host.style.visibility = ""; frameHost.style.visibility = ""; },
     // An agent action is heading for the point under the pill: get out of its way.
     fadeForPoint: function (x, y) {
       var r = host.getBoundingClientRect();

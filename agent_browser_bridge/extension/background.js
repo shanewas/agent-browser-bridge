@@ -242,7 +242,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Fallback wake-up when no web tab is open to send keepalives (30 s floor for packed extensions).
 chrome.alarms.create("sw_watchdog", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "sw_watchdog") connectWebSocket();
+  if (alarm.name === "sw_watchdog") {
+    connectWebSocket();
+    // A suspended worker's interval dies with it; on wake, retire any working
+    // state that went idle while it slept.
+    sweepWorkingTabs();
+  }
 });
 
 // Open onboarding tab on initial extension install
@@ -255,9 +260,11 @@ chrome.runtime.onInstalled.addListener((details) => {
 // ---------------------------------------------------------------------------
 // Presence pill ("banner"): per-tab working state, takeover pause, icon mirror.
 // The worker owns the paused set (persisted in session storage so a restart
-// keeps a pause) and transient working state (memory only). Deadlines ride each
-// BANNER message as workingUntil; the content script hides the pill locally
-// when the deadline passes, so worker suspension cannot strand a stale pill.
+// keeps a pause) and transient working state (memory only). Working state is
+// activity-driven: a tab stays "working" from its first command until the
+// watchdog below sees WORKING_IDLE_MS with no command in flight and none
+// started, and only then does the worker tell the banner to hide. The banner
+// never hides a working pill on its own timer.
 // ---------------------------------------------------------------------------
 
 const BANNER_METADATA = new Set(["ping", "status", "tabs", "list_tabs", "tab", "get_active_tab"]);
@@ -283,7 +290,7 @@ const pausedReady = Promise.all([
   }).catch(() => {}),
 ]);
 pausedReady.then(() => sendPauseSnapshot());
-const workingTabs = new Map(); // tabId -> {agent, verb, inflight, until, readTimer, detailTimer, shown}
+const workingTabs = new Map(); // tabId -> {agent, verb, inflight, lastActivity, readTimer, detailTimer, shown}
 const pendingControl = new Map(); // control id -> {frame, timer, tries}
 let controlSeq = 0;
 let bannerTookOver = false;
@@ -328,7 +335,7 @@ function pushWorking(tabId) {
   if (!w || pausedTabs.has(tabId) || hiddenBannerTabs.has(tabId)) return;
   bannerSend(tabId, {
     state: "working", agent: w.agent || undefined, verb: w.detail ? (w.verb || undefined) : undefined,
-    workingUntil: w.until, mutating: w.mutating, teachTooltip: !bannerTookOver,
+    mutating: w.mutating, teachTooltip: !bannerTookOver,
   });
   iconFor(tabId);
 }
@@ -338,16 +345,16 @@ function bannerActivity(tabId, action, phase, agent) {
   let w = workingTabs.get(tabId);
   if (phase === "start") {
     if (!w) {
-      w = { agent: undefined, verb: undefined, inflight: 0, until: 0, readTimer: null, detailTimer: null, shown: false, mutating: false, detail: false };
+      w = { agent: undefined, verb: undefined, inflight: 0, lastActivity: 0, readTimer: null, detailTimer: null, shown: false, mutating: false, detail: false };
       workingTabs.set(tabId, w);
     }
     if (agent) w.agent = agent;
     w.verb = VERB_FOR[action] || w.verb;
     w.inflight += 1;
+    w.lastActivity = Date.now();
     const mutating = !BANNER_METADATA.has(action) && !BANNER_READONLY.has(action);
     if (mutating) {
       w.mutating = true;
-      w.until = Math.max(w.until, Date.now() + 1500);
       if (w.readTimer) { clearTimeout(w.readTimer); w.readTimer = null; }
       w.shown = true;
       pushWorking(tabId);
@@ -360,17 +367,34 @@ function bannerActivity(tabId, action, phase, agent) {
     }
     return;
   }
-  // phase "end"
+  // phase "end": the entry lingers so a burst of commands reads as one stretch
+  // of work; the watchdog retires it after WORKING_IDLE_MS of quiet.
   if (!w) return;
   w.inflight = Math.max(0, w.inflight - 1);
+  w.lastActivity = Date.now();
   if (w.inflight > 0) return;
   if (w.readTimer) { clearTimeout(w.readTimer); w.readTimer = null; }
   if (w.detailTimer) { clearTimeout(w.detailTimer); w.detailTimer = null; }
-  w.until = Date.now() + 1500;
-  if (w.shown) pushWorking(tabId);
-  const stale = w;
-  setTimeout(() => { if (workingTabs.get(tabId) === stale && stale.inflight === 0) { workingTabs.delete(tabId); iconFor(tabId); } }, 1600);
 }
+
+// A tab is working while commands flow: retire its state only after this long
+// with nothing in flight and no new command started.
+const WORKING_IDLE_MS = 10000;
+
+function sweepWorkingTabs() {
+  const now = Date.now();
+  for (const [tabId, w] of workingTabs) {
+    if (w.inflight > 0 || now - w.lastActivity < WORKING_IDLE_MS) continue;
+    workingTabs.delete(tabId);
+    if (w.readTimer) { clearTimeout(w.readTimer); w.readTimer = null; }
+    if (w.detailTimer) { clearTimeout(w.detailTimer); w.detailTimer = null; }
+    if (w.shown && !pausedTabs.has(tabId) && !hiddenBannerTabs.has(tabId)) {
+      bannerSend(tabId, { state: "hidden" });
+    }
+    iconFor(tabId);
+  }
+}
+setInterval(sweepWorkingTabs, 2000);
 
 function bannerPauseGate(tabId, action) {
   if (!pausedTabs.has(tabId)) return false;
@@ -489,7 +513,7 @@ function handleBannerMessage(msg, sender, sendResponse) {
       chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
         const t = tabs && tabs[0] ? tabs[0].id : null;
         const w = t !== null ? workingTabs.get(t) : null;
-        sendResponse({ ok: true, tabId: t, paused: t !== null && pausedTabs.has(t), working: Boolean(w && w.inflight > 0), agent: w ? (w.agent || null) : null, pausedCount: pausedTabs.size, desktopPaused });
+        sendResponse({ ok: true, tabId: t, paused: t !== null && pausedTabs.has(t), working: Boolean(w), agent: w ? (w.agent || null) : null, pausedCount: pausedTabs.size, desktopPaused });
       }).catch(() => sendResponse({ ok: false }));
       return "async";
     }

@@ -173,3 +173,143 @@ def test_banner_behaviour(tmp_path):
     assert out["paused_label"].startswith("You")
     assert out["paused_class"]
     assert out["faded"] and out["still_faded_only_for_pill"]
+
+
+PRESENCE_HARNESS = r"""
+import fs from "node:fs";
+
+const sent = [];
+let msgListener = null;
+
+function makeEl(tag) {
+  const el = {
+    tagName: String(tag || "div").toUpperCase(),
+    id: "",
+    children: [],
+    style: {},
+    _text: "",
+    _listeners: {},
+    _classes: new Set(),
+    isConnected: false,
+    classList: {
+      add: (c) => el._classes.add(c),
+      remove: (c) => el._classes.delete(c),
+      toggle: (c, force) => { if (force) el._classes.add(c); else el._classes.delete(c); },
+      contains: (c) => el._classes.has(c),
+    },
+    appendChild(child) { el.children.push(child); child.isConnected = true; return child; },
+    addEventListener(type, fn) { (el._listeners[type] = el._listeners[type] || []).push(fn); },
+    setAttribute() {},
+    attachShadow() { el._shadow = makeEl("shadow"); return el._shadow; },
+    getBoundingClientRect: () => ({ left: 400, right: 600, top: 12, bottom: 50 }),
+  };
+  Object.defineProperty(el, "className", {
+    get: () => [...el._classes].join(" "),
+    set: (v) => { el._classes = new Set(String(v).split(/\s+/).filter(Boolean)); },
+  });
+  Object.defineProperty(el, "textContent", {
+    get: () => el._text + el.children.map((c) => c.textContent).join(""),
+    set: (v) => { el._text = String(v); el.children = []; },
+  });
+  return el;
+}
+
+const documentElement = makeEl("html");
+const head = makeEl("head");
+globalThis.document = {
+  documentElement,
+  head,
+  fullscreenElement: null,
+  createElement: (t) => makeEl(t),
+  addEventListener() {},
+  getElementById: () => null,
+};
+globalThis.window = {
+  addEventListener() {},
+  __eabBanner: undefined,
+};
+globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.chrome = {
+  runtime: {
+    onMessage: { addListener: (fn) => { msgListener = fn; } },
+    sendMessage: (m) => { sent.push(m); return undefined; },
+  },
+};
+
+const src = fs.readFileSync(process.argv[2], "utf8");
+eval(src);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const out = {};
+const banner = globalThis.window.__eabBanner;
+const host = documentElement.children.find((c) => c.id === "__eab_banner_host");
+const frameHost = documentElement.children.find((c) => c.id === "__eab_frame_host");
+out.frame_host_mounted = Boolean(frameHost);
+out.frame_host_passive = String(frameHost.style.cssText || "").includes("pointer-events:none");
+out.frame_below_pill = String(frameHost.style.cssText || "").includes("2147483646")
+  && String(host.style.cssText || "").includes("2147483647");
+const frame = frameHost._shadow.children.find((c) => c._classes.has("frame"));
+out.frame_mounted = Boolean(frame);
+const frameCss = frameHost._shadow.children.map((c) => c._text || "").join("\n");
+out.frame_gradient = frameCss.includes("linear-gradient") && frameCss.includes("eabframeflow");
+out.frame_reduced_motion = frameCss.includes("prefers-reduced-motion");
+out.frame_off_initially = !frame._classes.has("on");
+const wrap = host._shadow.children.find((c) => c._classes.has("wrap"));
+
+// A mutating action shows the pill + frame. workingUntil is a relic the worker
+// no longer sends; a stale one in the past must not hide a working pill.
+msgListener({ type: "BANNER", state: "working", agent: "Sigil", mutating: true, workingUntil: Date.now() + 100 });
+out.working_state = banner._state();
+out.frame_on_working = frame._classes.has("on");
+
+// The worker's hide lands inside the 800 ms minimum display for a mutating
+// action: the pill stays until the minimum passes, then hides.
+msgListener({ type: "BANNER", state: "hidden" });
+await sleep(250);
+out.min_display_holds = banner._state() === "working" && frame._classes.has("on");
+await sleep(1100);
+out.min_display_then_hides = banner._state() === "hidden" && !frame._classes.has("on") && !wrap._classes.has("on");
+
+// Working again: no local timer may hide it, however long the stretch runs.
+// The old banner hid at max(workingUntil, shownAt + 800) - long past by now.
+msgListener({ type: "BANNER", state: "working", agent: "Sigil", mutating: true, workingUntil: Date.now() + 100 });
+await sleep(1500);
+out.working_sticky = banner._state() === "working" && wrap._classes.has("on");
+out.frame_sticky = frame._classes.has("on");
+
+// Paused: pill stays (user is in control), frame goes away.
+msgListener({ type: "BANNER", state: "paused", agent: "Sigil" });
+out.paused_state = banner._state();
+out.frame_off_paused = !frame._classes.has("on") && wrap._classes.has("on");
+
+// Working again: frame returns, and capture hiding covers the frame host too.
+msgListener({ type: "BANNER", state: "working", agent: "Sigil" });
+out.frame_back_on_resume = frame._classes.has("on");
+banner.hideForCapture();
+out.capture_hides_both = host.style.visibility === "hidden" && frameHost.style.visibility === "hidden";
+banner.restoreAfterCapture();
+out.capture_restores_both = host.style.visibility === "" && frameHost.style.visibility === "";
+
+console.log(JSON.stringify(out));
+"""
+
+
+def test_banner_sticky_working_and_frame(tmp_path):
+    harness = tmp_path / "presence_harness.mjs"
+    harness.write_text(PRESENCE_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(harness), str(EXT / "banner.js")],
+        capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["frame_host_mounted"] and out["frame_mounted"]
+    assert out["frame_host_passive"] and out["frame_below_pill"]
+    assert out["frame_gradient"] and out["frame_reduced_motion"]
+    assert out["frame_off_initially"]
+    assert out["working_state"] == "working" and out["frame_on_working"]
+    assert out["min_display_holds"] and out["min_display_then_hides"]
+    assert out["working_sticky"] and out["frame_sticky"]
+    assert out["paused_state"] == "paused" and out["frame_off_paused"]
+    assert out["frame_back_on_resume"]
+    assert out["capture_hides_both"] and out["capture_restores_both"]
