@@ -80,7 +80,7 @@
   verbEl.className = "verb";
   var resumeBtn = document.createElement("button");
   resumeBtn.className = "resume";
-  resumeBtn.textContent = "Resume";
+  resumeBtn.textContent = "Done";
   resumeBtn.style.display = "none";
   var closeBtn = document.createElement("button");
   closeBtn.className = "x";
@@ -151,7 +151,7 @@
     avatar.style.background = colorFor(agentName);
     if (state === "paused") {
       pill.classList.add("paused");
-      label.textContent = "You\u2019re in control \u2014 agent paused";
+      label.textContent = "You\u2019re in control";
       verbEl.textContent = "";
       resumeBtn.style.display = "";
       tip.classList.remove("on");
@@ -254,7 +254,12 @@
     lastInputSent = now;
     send({ type: "USER_INPUT" });
   }
+  // A press or a key yields; moving the mouse and scrolling are just watching,
+  // so they get no listener at all. pointerdown covers mouse/touch/pen and
+  // mousedown the plain mouse press - the 1 s throttle folds the pair into one
+  // signal when both fire for the same click.
   window.addEventListener("pointerdown", onUserInput, true);
+  window.addEventListener("mousedown", onUserInput, true);
   window.addEventListener("keydown", onUserInput, true);
 
   document.addEventListener("fullscreenchange", function () {
