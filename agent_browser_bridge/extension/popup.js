@@ -12,7 +12,7 @@ const FIXES = {
   file_not_found: "The upload path does not exist. Pass an existing file.",
   file_access_required: "Turn on 'Allow access to file URLs' for Agent Browser Bridge in edge://extensions > Details.",
   unknown_session: "The session expired (daemon restarted). Run: agent-bridge session start",
-  user_takeover: "You paused the agent on this tab. It resumes when you press Resume on the pill or in this popup.",
+  user_takeover: "You paused the agent on this tab. It resumes when you press Done on the pill or Resume in this popup.",
 };
 
 let lastStatus = null;
