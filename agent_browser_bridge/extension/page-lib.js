@@ -292,7 +292,10 @@
     // queryAllDeep, not querySelectorAll: the resolver pierces open shadow
     // roots, so the safety scan must see the same elements it can resolve.
     if (queryAllDeep(el, "input").some(isSensitiveInput)) return true;
-    return queryAllDeep(el, "iframe").some(isPaymentFrame);
+    if (queryAllDeep(el, "iframe").some(isPaymentFrame)) return true;
+    // Editable fields are not INPUT elements; a container wrapping one must
+    // agree with the direct-target check, which flags them by their hints.
+    return queryAllDeep(el, "[contenteditable]").some(isSensitiveInput);
   }
 
   function descriptorOf(el) {

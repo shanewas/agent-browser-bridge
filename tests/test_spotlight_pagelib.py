@@ -40,6 +40,7 @@ function makeEl(tag, attrs = {}, opts = {}) {
     getAttribute(name) { return name in el.__attrs ? el.__attrs[name] : null; },
     hasAttribute(name) { return name in el.__attrs; },
     querySelectorAll(sel) {
+      if (sel === "[contenteditable]") return el.__light.filter((c) => c.isContentEditable);
       const want = sel.toUpperCase();
       return el.__light.filter((c) => c.tagName.toUpperCase() === want);
     },
@@ -71,6 +72,13 @@ out.contains_shadow_pw = L.containsSensitiveInput(wrapShadow);
 
 const wrapPlain = makeEl("DIV", {}, { light: [makeEl("INPUT", { type: "text", name: "city" })], descendants: [] });
 out.contains_plain = L.containsSensitiveInput(wrapPlain);
+
+// A container wrapping an editable card field: the container check must
+// agree with the direct-target check, which flags the field by its hint.
+const wrapEditable = makeEl("DIV", {}, { light: [makeEl("DIV", { "aria-label": "Card number" }, { editable: true })], descendants: [] });
+out.contains_editable_card = L.containsSensitiveInput(wrapEditable);
+const wrapEditablePlain = makeEl("DIV", {}, { light: [makeEl("DIV", { "aria-label": "Notes" }, { editable: true })], descendants: [] });
+out.contains_editable_plain = L.containsSensitiveInput(wrapEditablePlain);
 
 const stripeFrame = makeEl("IFRAME", { src: "https://js.stripe.com/v3/elements.html" });
 out.stripe_frame = L.isSensitiveInput(stripeFrame);
@@ -105,6 +113,8 @@ def test_sensitive_input_signals(lib):
 def test_contenteditable_fields(lib):
     assert lib["editable_card"] is True
     assert lib["editable_plain"] is False
+    assert lib["contains_editable_card"] is True
+    assert lib["contains_editable_plain"] is False
 
 
 def test_shadow_root_fields_are_seen(lib):
