@@ -73,7 +73,12 @@ globalThis.scrollX = 0;
 globalThis.scrollY = 0;
 globalThis.addEventListener = (type, fn) => { (windowListeners[type] = windowListeners[type] || []).push(fn); };
 globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
-globalThis.MutationObserver = class { observe() {} disconnect() {} };
+const moInstances = [];
+globalThis.MutationObserver = class {
+  constructor(cb) { this.cb = cb; moInstances.push(this); }
+  observe() {}
+  disconnect() {}
+};
 globalThis.chrome = {
   runtime: {
     sendMessage: (msg) => { sent.push(msg); return Promise.resolve({}); },
@@ -149,11 +154,42 @@ msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
   generation: 4, session: 2, descriptor: { tag: "button", role: "button", name: "Save" } }, {}, () => {});
 out.new_session = api._state();
 
+// A sibling mutation under the target's parent is not target-gone; the
+// target's own removal is.
+sent.length = 0;
+const targetMO = moInstances[moInstances.length - 1];
+targetMO.cb([{ type: "childList", removedNodes: [] }]);
+out.sibling_mutation_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+targetEl.isConnected = false;
+targetMO.cb([{ type: "childList", removedNodes: [targetEl] }]);
+out.removal_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+targetEl.isConnected = true;
+
+// A draw inside the fade window of a local clear survives the fade timer.
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Fade one", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 5, session: 2, descriptor: { tag: "button", role: "button", name: "Save" } }, {}, () => {});
+for (const fn of windowListeners.keydown || []) fn({ key: "Escape" });
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Fade two", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 6, session: 2, descriptor: { tag: "button", role: "button", name: "Save" } }, {}, () => {});
+await new Promise((r) => setTimeout(r, 220));
+out.fade_race_showing = api._state().showing;
+out.fade_race_stage_on = stage._classes.has("on");
+
+// An off-screen point still signals, via the edge indicator.
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "point", point: { x: 5000, y: 60 },
+  label: "Far point", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 7, session: 2, descriptor: null }, {}, () => {});
+const edgeEl = findByClass(stage, "edge");
+out.offscreen_point_edge_display = edgeEl.style.display;
+out.offscreen_point_edge_text = edgeEl.textContent;
+
 // Expiry fires on the deadline.
 sent.length = 0;
 msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
   label: "Short", agent: "Sigil", highlightUntil: Date.now() + 60,
-  generation: 5, session: 2, descriptor: { tag: "button", role: "button", name: "Save" } }, {}, () => {});
+  generation: 8, session: 2, descriptor: { tag: "button", role: "button", name: "Save" } }, {}, () => {});
 await new Promise((r) => setTimeout(r, 140));
 out.after_expiry = api._state();
 out.expiry_report = sent.filter((m) => m.type === "SPOTLIGHT_CLEARED").map((m) => m.reason);
@@ -210,3 +246,18 @@ def test_new_session_replaces(spot):
 def test_expiry_clears_and_reports(spot):
     assert spot["after_expiry"]["showing"] is False
     assert spot["expiry_report"] == ["expired"]
+
+
+def test_sibling_mutation_is_not_target_gone(spot):
+    assert spot["sibling_mutation_gone_reports"] == 0
+    assert spot["removal_gone_reports"] == 1
+
+
+def test_draw_inside_fade_window_survives(spot):
+    assert spot["fade_race_showing"] is True
+    assert spot["fade_race_stage_on"] is True
+
+
+def test_offscreen_point_shows_edge_indicator(spot):
+    assert spot["offscreen_point_edge_display"] == ""
+    assert spot["offscreen_point_edge_text"]

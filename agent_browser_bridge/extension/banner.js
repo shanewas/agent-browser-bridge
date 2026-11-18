@@ -108,6 +108,9 @@
   function clearLastpoint() {
     lastpoint.classList.remove("on");
     wrap.classList.remove("lponly");
+    // When the row was the only thing holding the wrap visible (pill hidden),
+    // the wrap must hide with it; hide() removes "on" itself on its own path.
+    if (state === "hidden") wrap.classList.remove("on");
     if (lastpointTimer) { clearTimeout(lastpointTimer); lastpointTimer = null; }
   }
   function showLastpoint(labelText) {

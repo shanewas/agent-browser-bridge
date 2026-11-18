@@ -585,6 +585,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 setActivityHook(bannerActivity);
 setPauseGate(bannerPauseGate);
 
+// Spotlight content scripts hold a named port open so they can tell a dead
+// worker (highlights must not outlive the session) from a live one. Accept
+// and track the ports; a port disconnects when this worker's context dies.
+const spotlightPorts = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "spotlight") return;
+  spotlightPorts.add(port);
+  port.onDisconnect.addListener(() => spotlightPorts.delete(port));
+});
+
 // Spotlight settings are live transitions, not just draw-time inputs: turning
 // the feature off clears showing highlights, never-dim converts them.
 chrome.storage.onChanged.addListener((changes, area) => {

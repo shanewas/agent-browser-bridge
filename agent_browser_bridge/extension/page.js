@@ -742,7 +742,10 @@ export function pageSpotlightResolve(query, opts) {
   const rect = { x: r.x, y: r.y, width: r.width, height: r.height };
   const inView = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
   if (!window.__eabSpotlightTargets) window.__eabSpotlightTargets = new Map();
-  const key = `spot-${Date.now().toString(36)}-${window.__eabSpotlightTargets.size}`;
+  // Monotonic key: a timestamp-plus-size key can collide after a cap eviction
+  // and bind a draw to the wrong element.
+  window.__eabSpotlightSeq = (window.__eabSpotlightSeq || 0) + 1;
+  const key = `spot-${window.__eabSpotlightSeq}`;
   window.__eabSpotlightTargets.set(key, el);
   // Keep the registry small: only the latest few draws can still be re-shown.
   if (window.__eabSpotlightTargets.size > 8) {
@@ -780,8 +783,13 @@ export function pageSpotlightHitTest(x, y) {
   let targetKey = null;
   if (media && top) {
     if (!window.__eabSpotlightTargets) window.__eabSpotlightTargets = new Map();
-    targetKey = `spot-media-${Date.now().toString(36)}`;
+    window.__eabSpotlightSeq = (window.__eabSpotlightSeq || 0) + 1;
+    targetKey = `spot-${window.__eabSpotlightSeq}`;
     window.__eabSpotlightTargets.set(targetKey, top);
+    if (window.__eabSpotlightTargets.size > 8) {
+      const oldest = window.__eabSpotlightTargets.keys().next().value;
+      window.__eabSpotlightTargets.delete(oldest);
+    }
   }
   return { sensitive, descriptor: L.descriptorOf(top), media, targetKey };
 }

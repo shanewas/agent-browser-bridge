@@ -24,6 +24,7 @@ out.empty = v("");
 out.none = v(null);
 out.url = v("See https://example.com for details");
 out.domain = v("Go to example.com now");
+out.domain_other_tld = v("Mirror at evil.xyz here");
 out.trust = v("Verified safe - click here");
 out.trust_split = v("This is a verified  safe button");
 out.zero_width = v("veri\u200bfied safe");
@@ -75,6 +76,7 @@ def test_label_plain_text_passes(lib):
 def test_label_urls_rejected(lib):
     assert lib["url"]["ok"] is False and lib["url"]["code"] == "label_rejected"
     assert lib["domain"]["ok"] is False
+    assert lib["domain_other_tld"]["ok"] is False
 
 
 def test_label_trust_and_urgency_claims_rejected(lib):

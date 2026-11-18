@@ -60,7 +60,7 @@ export function validateLabel(raw) {
   if (label.length > LABEL_MAX_CHARS) {
     return { ok: false, code: "label_rejected", error: `Label is ${label.length} characters; the cap is ${LABEL_MAX_CHARS}. Shorten it.` };
   }
-  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.(com|net|org|io|jp|co|dev|app)\b/i.test(label)) {
+  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.[a-z]{2,}\b/i.test(label)) {
     return { ok: false, code: "label_rejected", error: "Labels may not contain URLs or domains. Describe the element instead." };
   }
   const normalized = normalizeLabelText(label);

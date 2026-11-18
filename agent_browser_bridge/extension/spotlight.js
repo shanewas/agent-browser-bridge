@@ -17,6 +17,7 @@
   var hideDepth = 0;
   var writing = false; // re-entrancy guard around our own DOM writes
   var expiryTimer = null;
+  var fadeTimer = null;
   var rafPending = false;
   var mediaTimer = null;
   var lastScrollSent = 0;
@@ -206,7 +207,7 @@
       edge.style.display = "none";
       leaderSvg.style.display = "none";
 
-      if (!visible && hasRect && cur.mode !== "point") {
+      if (!visible && hasRect) {
         // Edge indicator: arrow + short text at the nearest edge.
         var cx = Math.max(0, Math.min(v.w, rectE.left + rectE.width / 2));
         var cy = Math.max(0, Math.min(v.h, rectE.top + rectE.height / 2));
@@ -296,7 +297,16 @@
       if (writing || !cur) return;
       for (var i = 0; i < records.length; i++) {
         var rec = records[i];
-        if (rec.type === "childList") { onTargetGone(); return; }
+        if (rec.type === "childList") {
+          // Only the target's own removal counts as gone; a sibling change
+          // under the same parent leaves the target untouched.
+          if (!cur.el || !cur.el.isConnected) { onTargetGone(); return; }
+          var removed = rec.removedNodes || [];
+          for (var j = 0; j < removed.length; j++) {
+            if (removed[j] === cur.el) { onTargetGone(); return; }
+          }
+          scheduleRender();
+        }
         if (rec.type === "attributes") {
           // Material change: the element's accessible identity moved.
           var L = window.__eabLib;
@@ -343,8 +353,14 @@
       stage.style.display = "none";
     } else {
       stage.classList.add("out");
-      setTimeout(function () { stage.classList.remove("out"); stage.classList.remove("on"); }, 160);
       stage.classList.remove("on");
+      // The fade timer must never hide a later draw: it is cancelled by draw()
+      // and re-checks that nothing is showing before touching the classes.
+      if (fadeTimer) clearTimeout(fadeTimer);
+      fadeTimer = setTimeout(function () {
+        fadeTimer = null;
+        if (!cur) { stage.classList.remove("out"); stage.classList.remove("on"); }
+      }, 160);
     }
     if (done.label) announce("Agent highlight cleared");
     if (!opts || !opts.fromWorker) {
@@ -402,6 +418,7 @@
         width: 0, height: 0
       };
     }
+    if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
     stage.classList.remove("out");
     stage.classList.add("on");
     render(true);
