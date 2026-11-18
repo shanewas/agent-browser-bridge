@@ -865,6 +865,24 @@ def main(argv=None) -> int:
     p_history.add_argument("--start-time", type=float, default=None, help="history search: only items after this time (ms since epoch)")
     p_history.add_argument("--end-time", type=float, default=None, help="history search: only items before this time (ms since epoch)")
 
+    # spotlight
+    p_spot = add_cmd("spotlight", help="Point at something in the page (ring, spotlight, point)")
+    p_spot.add_argument("spot_action", nargs="?", choices=["show", "clear", "status"], default="show")
+    p_spot.add_argument("target", nargs="?", default=None, help="show: element name or text to point at")
+    p_spot.add_argument("--selector", default=None, help="show: CSS selector")
+    p_spot.add_argument("--ref", default=None, help="show: snapshot ref (main frame only)")
+    p_spot.add_argument("--x", type=float, default=None, help="show: point x (viewport CSS px)")
+    p_spot.add_argument("--y", type=float, default=None, help="show: point y (viewport CSS px)")
+    p_spot.add_argument("--mode", choices=["ring", "spotlight", "point"], default=None)
+    p_spot.add_argument("--label", default=None, help="show: chip text (plain text, max 120 chars)")
+    p_spot.add_argument("--index", type=int, default=None, help="show: pick the nth match (0-based)")
+    p_spot.add_argument("--persist", action="store_true", help="show: stay until next spotlight, clear, or takeover")
+    p_spot.add_argument("--ttl-ms", type=int, default=None, help="show: lifetime in ms (1000-30000)")
+    p_spot.add_argument("--generic", action="store_true", help="show: point at a sensitive field with a fixed extension-written chip")
+    p_spot.add_argument("--rect", default=None, help='show: rectangle as JSON, e.g. \'{"x":10,"y":10,"width":200,"height":80}\'')
+    p_spot.add_argument("--media-time", type=float, default=None, help="show: media timestamp in seconds for a point on a video or audio element")
+    p_spot.add_argument("--scale-factor", type=float, default=None, help="show: screenshot-to-CSS pixel ratio used to compute the point, echoed back in the result")
+
     # group
     p_group = add_cmd("group", help="List or manage tab groups")
     p_group.add_argument("group_action", choices=["list", "move", "ungroup"])
@@ -1184,6 +1202,48 @@ def main(argv=None) -> int:
         else:
             action = "history_delete"
             params["url"] = args.query
+    elif action == "spotlight":
+        if args.spot_action == "clear":
+            action = "spotlight_clear"
+        elif args.spot_action == "status":
+            action = "spotlight_status"
+        else:
+            action = "spotlight"
+            if args.target is not None:
+                params["target"] = args.target
+            if args.selector is not None:
+                params["selector"] = args.selector
+            if args.ref is not None:
+                params["ref"] = args.ref
+            if args.x is not None and args.y is not None:
+                params["x"] = args.x
+                params["y"] = args.y
+            if args.mode is not None:
+                params["mode"] = args.mode
+            if args.label is not None:
+                params["label"] = args.label
+            if args.index is not None:
+                params["index"] = args.index
+            if args.persist:
+                params["persist"] = True
+            if args.ttl_ms is not None:
+                params["ttl_ms"] = args.ttl_ms
+            if args.generic:
+                params["generic"] = True
+            if args.rect is not None:
+                try:
+                    rect = json.loads(args.rect)
+                except ValueError:
+                    print("error: --rect must be JSON like '{\"x\":10,\"y\":10,\"width\":200,\"height\":80}'", file=sys.stderr)
+                    return 2
+                if not isinstance(rect, dict):
+                    print("error: --rect must be a JSON object", file=sys.stderr)
+                    return 2
+                params["rect"] = rect
+            if args.media_time is not None:
+                params["media_time"] = args.media_time
+            if args.scale_factor is not None:
+                params["scale_factor"] = args.scale_factor
     elif action == "group":
         if args.group_action == "list":
             action = "group_list"

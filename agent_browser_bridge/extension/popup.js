@@ -174,6 +174,61 @@ if (bannerEls.toggle) {
     chrome.storage.local.set({ bannerEnabled: bannerEls.toggle.checked }).catch(() => {});
   });
 }
+
+const spotlightEls = {
+  toggle: document.getElementById("spotlightToggle"),
+  neverDim: document.getElementById("spotlightNeverDim"),
+  duration: document.getElementById("spotlightDuration"),
+  allowlist: document.getElementById("spotlightAllowlist"),
+};
+if (spotlightEls.toggle) {
+  chrome.storage.local.get(["spotlightEnabled", "spotlightNeverDim", "spotlightDurationMultiplier", "spotlightAllowlist"]).then((d) => {
+    spotlightEls.toggle.checked = !(d && d.spotlightEnabled === false);
+    spotlightEls.neverDim.checked = Boolean(d && d.spotlightNeverDim === true);
+    if (d && typeof d.spotlightDurationMultiplier === "number") {
+      spotlightEls.duration.value = String(d.spotlightDurationMultiplier);
+    }
+    if (d && Array.isArray(d.spotlightAllowlist)) {
+      spotlightEls.allowlist.value = d.spotlightAllowlist.join(", ");
+    }
+  }).catch(() => {});
+  spotlightEls.toggle.addEventListener("change", () => {
+    chrome.storage.local.set({ spotlightEnabled: spotlightEls.toggle.checked }).catch(() => {});
+  });
+  spotlightEls.neverDim.addEventListener("change", () => {
+    chrome.storage.local.set({ spotlightNeverDim: spotlightEls.neverDim.checked }).catch(() => {});
+  });
+  spotlightEls.duration.addEventListener("change", () => {
+    chrome.storage.local.set({ spotlightDurationMultiplier: Number(spotlightEls.duration.value) || 1 }).catch(() => {});
+  });
+  spotlightEls.allowlist.addEventListener("change", () => {
+    const hosts = spotlightEls.allowlist.value.split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+    chrome.storage.local.set({ spotlightAllowlist: hosts }).catch(() => {});
+  });
+}
+
+const spotlightLogEl = document.getElementById("spotlightLog");
+if (spotlightLogEl) {
+  chrome.storage.local.get("spotlightLog").then((d) => {
+    const list = d && Array.isArray(d.spotlightLog) ? d.spotlightLog.slice(-8).reverse() : [];
+    if (!list.length) return;
+    spotlightLogEl.textContent = "";
+    for (const e of list) {
+      const row = document.createElement("div");
+      row.style.cssText = "margin-bottom:6px;font-size:11px;color:#ccc;";
+      const when = String(e.at || "").replace("T", " ").slice(0, 19);
+      row.textContent = `${when} · ${e.mode || ""} · ${e.target || ""}${e.label ? ` · "${e.label}"` : ""}${e.clearedReason ? ` · cleared: ${e.clearedReason}` : ""}`;
+      spotlightLogEl.appendChild(row);
+      if (typeof e.capture === "string" && e.capture.startsWith("data:image")) {
+        const img = document.createElement("img");
+        img.src = e.capture;
+        img.style.cssText = "max-width:100%;border-radius:4px;margin:2px 0 4px;";
+        spotlightLogEl.appendChild(img);
+      }
+    }
+  }).catch(() => {});
+}
+
 refreshBanner();
 
 document.getElementById("diagBtn").addEventListener("click", async () => {

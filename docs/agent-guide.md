@@ -151,6 +151,58 @@ moves tabs into an existing group, or a new one when `groupId` is omitted;
 `agent-bridge history search "query"`, `history delete <url>`, `group list [--window-id N]`,
 `group move <tab ids> [--group-id N] [--title T] [--color C]`, `group ungroup <tab ids>`.
 
+## Spotlight: pointing at things (v4.4.0+)
+
+`edge_spotlight` draws the user's eye to one thing in the page. Modes: `ring`
+(a gradient outline around an element), `spotlight` (the page dims, the
+element stays lit), `point` (a dot at `x`/`y` coordinates, for charts, images,
+canvas and maps). The default mode is `ring` for element targets and `point`
+for coordinates. CLI mirror: `agent-bridge spotlight show "Save" --label "About to
+click Save"`, `spotlight clear`, `spotlight status`.
+
+- Targets: `ref` (main frame only), `target`/`text` (name matching),
+  `selector` (CSS), `x`/`y`, or `rect {x, y, width, height}` — viewport CSS
+  pixels, the same space as click coordinates. Coordinates read off a
+  screenshot must be divided by that screenshot's `scale_factor` (screenshot
+  results now report `image_width`, `image_height`, `viewport_width`,
+  `viewport_height` and `scale_factor`); pass `scaleFactor` back so the result
+  echoes what you assumed.
+- Matching is strict. Several matches fail with `target_ambiguous` (with
+  `count` and `candidates`) unless `index` picks one; Spotlight never silently
+  points at the first match. A highlight never scrolls the page: an off-screen
+  target draws an edge indicator and reports `in_view: false`.
+- Labels: plain text, max 120 characters, rendered in a chip that always
+  carries your agent name. URLs and trust/urgency claims ("verified",
+  "session expired", "re-enter your password") are rejected with
+  `label_rejected` — describe what the element is, not why it should be
+  trusted. Point mode requires a label.
+- Sensitive targets: a target that is, or contains, a password, one-time-code
+  or payment field fails with `sensitive_target`. Point at the field's visible
+  label, error message or container instead; or pass `generic: true` to point
+  at the field itself with a fixed chip the extension writes (your label is
+  suppressed). On banking, payment, password-manager and webmail origins
+  Spotlight is off entirely (`sensitive_origin`) unless the user allowlists
+  the host in the popup.
+- Lifetime: a labelled highlight lasts max(4s, ~350ms per label word), capped
+  at 30s; an unlabelled ring lasts 4s. `persist: true` keeps an instructional
+  highlight up until the next `spotlight`, a clear, or a takeover (hard cap
+  300s); `ttlMs` sets an explicit 1000–30000 ms. Read-only actions never clear
+  a highlight; an action on the highlighted element clears it just after it
+  runs. A second labelled draw within 2s fails with `rate_limited` and leaves
+  the current highlight up.
+- The result reports `mode_effective` and `downgraded_reason` (`never_dim`,
+  `viewport_fill`) when the drawn mode differs from the requested one, plus
+  the resolved `descriptor`, the drawn `rect`, `count`, `in_view`, `covered`,
+  `ttl_ms` and `expires_at`.
+- `edge_spotlight_clear` is idempotent and returns `was_showing`.
+  `edge_spotlight_status` reports `showing`, and after a highlight ends,
+  `cleared_reason` (`expired`, `esc`, `pill`, `takeover`, `target_gone`,
+  `scroll`, `navigation`, `session_end`, `settings`, `replaced`, `cleared`,
+  `action`).
+  Check status instead of assuming a pointer is still on screen.
+- Draws on a user-paused tab fail with `tab_paused`; clear and status still
+  work. The user can dismiss a highlight with Esc or the pill at any time.
+
 ## Verified writes: `match`, `write_mismatch`, `focus_stolen`
 
 `edge_fill`/`edge_type` verify every write. Results carry `written` (expected full value), `readback` (value read back after 100ms), and `match`:

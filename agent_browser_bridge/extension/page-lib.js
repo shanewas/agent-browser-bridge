@@ -234,9 +234,79 @@
     return el;
   }
 
+  // Spotlight safety: a field whose value must never be framed by an agent
+  // treatment - password, one-time-code and payment inputs.
+  const SENSITIVE_AUTOCOMPLETE = new Set([
+    "current-password", "new-password", "one-time-code",
+    "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-type", "cc-name",
+  ]);
+  const SENSITIVE_NAME_RX = /(card.?number|cc.?num|cvv|cvc|otp|one.?time|passcode|password|passwd|passphrase)/i;
+  const SENSITIVE_TOKENS = new Set(["pwd", "pin"]);
+  // Hosted payment fields live in cross-origin iframes whose contents no page
+  // script can inspect; the frame element itself is the only signal, so a
+  // frame served by a payment processor counts as a sensitive field.
+  const PAYMENT_FRAME_HOSTS = [
+    "stripe.com", "adyen.com", "paypal.com", "checkout.com", "squareup.com",
+    "braintreepayments.com", "worldpay.com", "payjp.jp", "paidy.com",
+  ];
+
+  function sensitiveHintOf(el) {
+    return [el.getAttribute("name"), el.getAttribute("id"),
+            el.getAttribute("aria-label"), el.getAttribute("placeholder")]
+      .filter(Boolean).join(" ");
+  }
+
+  function hintIsSensitive(hint) {
+    if (SENSITIVE_NAME_RX.test(hint)) return true;
+    return hint.toLowerCase().split(/[^a-z0-9]+/).some((t) => SENSITIVE_TOKENS.has(t));
+  }
+
+  function isPaymentFrame(el) {
+    if (!el || (el.tagName || "").toUpperCase() !== "IFRAME") return false;
+    const title = `${el.getAttribute("name") || ""} ${el.getAttribute("title") || ""}`;
+    if (/card/i.test(title)) return true;
+    let host = "";
+    const base = typeof location !== "undefined" ? location.href : "about:blank";
+    try { host = new URL(el.getAttribute("src") || "", base).hostname.toLowerCase(); } catch (e) { return false; }
+    return PAYMENT_FRAME_HOSTS.some((h) => host === h || host.endsWith("." + h));
+  }
+
+  function isSensitiveInput(el) {
+    if (!el || !el.getAttribute) return false;
+    const tag = (el.tagName || "").toUpperCase(); // XML documents keep authored case
+    if (tag !== "INPUT") {
+      // A card or OTP box built as an editable element is a field all the same.
+      if (el.isContentEditable) return hintIsSensitive(sensitiveHintOf(el));
+      return isPaymentFrame(el);
+    }
+    const type = (el.getAttribute("type") || "text").toLowerCase();
+    if (type === "password") return true;
+    const ac = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/).pop();
+    if (ac && SENSITIVE_AUTOCOMPLETE.has(ac)) return true;
+    return hintIsSensitive(sensitiveHintOf(el));
+  }
+
+  function containsSensitiveInput(el) {
+    if (!el || !el.querySelectorAll) return false;
+    if (isSensitiveInput(el)) return true;
+    // queryAllDeep, not querySelectorAll: the resolver pierces open shadow
+    // roots, so the safety scan must see the same elements it can resolve.
+    if (queryAllDeep(el, "input").some(isSensitiveInput)) return true;
+    if (queryAllDeep(el, "iframe").some(isPaymentFrame)) return true;
+    // Editable fields are not INPUT elements; a container wrapping one must
+    // agree with the direct-target check, which flags them by their hints.
+    return queryAllDeep(el, "[contenteditable]").some(isSensitiveInput);
+  }
+
+  function descriptorOf(el) {
+    if (!el || !el.tagName) return { tag: "", role: "", name: "" };
+    const role = roleOf(el);
+    return { tag: el.tagName.toLowerCase(), role, name: nameOf(el, role) || labelText(el) || "" };
+  }
+
   window.__eabLib = {
     INTERACTIVE_ROLES, CONTAINER_TAGS, roleOf, nameOf, ownText, collapse, labelText, isVisible,
     childElements, queryAllDeep, rectOf, center, highlight, frameInfo, iframeIndex,
-    deepFromPoint, deepActive, controlAt
+    deepFromPoint, deepActive, controlAt, isSensitiveInput, containsSensitiveInput, descriptorOf
   };
 })();

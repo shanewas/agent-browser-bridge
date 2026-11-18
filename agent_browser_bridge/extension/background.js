@@ -1,6 +1,6 @@
 // Agent Browser Bridge - service worker transport.
 // One WebSocket to the local daemon; hello on open, pong on ping, commands go to dispatch().
-import { dispatch, setActivityHook, setPauseGate } from "./actions.js";
+import { dispatch, setActivityHook, setPauseGate, spotlightEvent, spotlightTakeover, spotlightSessionEnd, spotlightSettingsChanged, spotlightTabClosed, spotlightNavigation, spotlightModeOf } from "./actions.js";
 
 const WS_URL = "ws://127.0.0.1:18999/ws";
 const MAX_BACKOFF_MS = 5000;
@@ -181,6 +181,17 @@ async function connectWebSocket(force = false) {
 
     ws.onclose = (event) => {
       bridgeWs = null;
+      // The daemon session ended: no highlight may outlive it, and neither
+      // may the pill's retained label or a dimmed frame from that session.
+      try { spotlightSessionEnd(); } catch (e) {}
+      try {
+        chrome.tabs.query({}).then((tabs) => {
+          for (const t of tabs || []) {
+            bannerSend(t.id, { state: "lastpoint_clear" });
+            bannerSend(t.id, { state: "frame_dim", dim: false });
+          }
+        }).catch(() => {});
+      } catch (e) {}
       if (event && (event.code === 4001 || event.code === 4002)) {
         // Rejected (4001 pairing, 4002 another browser holds the bridge): reconnecting only
         // repeats the rejection, including from the watchdog alarm. Stay down until a token
@@ -268,7 +279,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 // ---------------------------------------------------------------------------
 
 const BANNER_METADATA = new Set(["ping", "status", "tabs", "list_tabs", "tab", "get_active_tab"]);
-const BANNER_READONLY = new Set(["snapshot", "text", "elements", "interactive", "console", "wait", "wait_for", "history_search", "group_list"]);
+const BANNER_READONLY = new Set(["snapshot", "text", "elements", "interactive", "console", "wait", "wait_for", "history_search", "group_list", "spotlight", "spotlight_clear", "spotlight_status"]);
 const VERB_FOR = {
   click: "Clicking", dblclick: "Clicking", rightclick: "Clicking", drag: "Dragging",
   fill: "Typing", type: "Typing", key: "Typing", nav: "Navigating", back: "Navigating",
@@ -340,6 +351,11 @@ function pushWorking(tabId) {
   iconFor(tabId);
 }
 
+// The presence frame dims while a spotlight-mode highlight owns the tab.
+function syncSpotlightFrame(tabId) {
+  bannerSend(tabId, { state: "frame_dim", dim: spotlightModeOf(tabId) === "spotlight" });
+}
+
 function bannerActivity(tabId, action, phase, agent) {
   if (typeof tabId !== "number") return;
   let w = workingTabs.get(tabId);
@@ -372,6 +388,7 @@ function bannerActivity(tabId, action, phase, agent) {
   if (!w) return;
   w.inflight = Math.max(0, w.inflight - 1);
   w.lastActivity = Date.now();
+  syncSpotlightFrame(tabId);
   if (w.inflight > 0) return;
   if (w.readTimer) { clearTimeout(w.readTimer); w.readTimer = null; }
   if (w.detailTimer) { clearTimeout(w.detailTimer); w.detailTimer = null; }
@@ -426,7 +443,14 @@ function sendPauseSnapshot() {
   } catch (e) {}
 }
 
-async function setPaused(tabId, paused, sendToDaemon = true) {
+// Pause transitions are sequenced per tab: setPaused awaits the spotlight
+// takeover mid-flight, and a quick resume must not let the suspended pause
+// post its "Last point" row after the resume already cleared it.
+const pauseSeq = new Map();
+
+async function setPaused(tabId, paused, sendToDaemon = true, source = "takeover") {
+  const seq = (pauseSeq.get(tabId) || 0) + 1;
+  pauseSeq.set(tabId, seq);
   await pausedReady;
   if (paused) pausedTabs.add(tabId); else pausedTabs.delete(tabId);
   persistPaused();
@@ -435,7 +459,12 @@ async function setPaused(tabId, paused, sendToDaemon = true) {
     try { chrome.storage.local.set({ bannerTookOver: true }); } catch (e) {}
     const w = workingTabs.get(tabId);
     bannerSend(tabId, { state: "takenover", agent: w && w.agent });
+    // A takeover ends any Spotlight pointing on the tab; a labelled one leaves
+    // its text in the pill as a re-showable "Last point".
+    const label = await spotlightTakeover(tabId, source === "pill" ? "pill" : "takeover");
+    if (label && pauseSeq.get(tabId) === seq) bannerSend(tabId, { state: "lastpoint", label });
   } else {
+    bannerSend(tabId, { state: "lastpoint_clear" });
     bannerSend(tabId, { state: "hidden" });
   }
   iconFor(tabId);
@@ -446,6 +475,13 @@ function applyDaemonPauseState(tabId, paused) {
   if (paused) pausedTabs.add(tabId); else pausedTabs.delete(tabId);
   persistPaused();
   bannerSend(tabId, paused ? { state: "paused", agent: (workingTabs.get(tabId) || {}).agent } : { state: "hidden" });
+  if (paused) {
+    spotlightTakeover(tabId, "takeover").then((label) => {
+      if (label && pausedTabs.has(tabId)) bannerSend(tabId, { state: "lastpoint", label });
+    }).catch(() => {});
+  } else {
+    bannerSend(tabId, { state: "lastpoint_clear" });
+  }
   iconFor(tabId);
 }
 
@@ -453,7 +489,42 @@ function handleBannerMessage(msg, sender, sendResponse) {
   const tabId = sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : (typeof msg.tabId === "number" ? msg.tabId : null);
   switch (msg.type) {
     case "TAKEOVER":
-      if (tabId !== null) setPaused(tabId, true);
+      if (tabId !== null) setPaused(tabId, true, true, "pill");
+      sendResponse({ ok: true });
+      return true;
+    case "SPOTLIGHT_CLEARED": {
+      // The content script ended a highlight itself (expiry, Esc, target gone
+      // is separate). Esc/pill/takeover endings keep the label in the pill.
+      if (tabId !== null) {
+        spotlightEvent(tabId, { type: "cleared", reason: msg.reason || "cleared", generation: msg.generation }).then((info) => {
+          if (info && info.label && (msg.reason === "esc" || msg.reason === "pill" || msg.reason === "takeover")) {
+            bannerSend(tabId, { state: "lastpoint", label: info.label });
+          }
+          syncSpotlightFrame(tabId);
+        }).catch(() => {});
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+    case "SPOTLIGHT_TARGET_GONE":
+      if (tabId !== null) {
+        spotlightEvent(tabId, { type: "target_gone", generation: msg.generation })
+          .then(() => syncSpotlightFrame(tabId)).catch(() => {});
+      }
+      sendResponse({ ok: true });
+      return true;
+    case "SPOTLIGHT_USER_SCROLL": {
+      // Same in-flight guard as USER_INPUT: a scroll signal while no command
+      // runs is the user's hand, not the agent's own programmatic scroll.
+      const w = tabId !== null ? workingTabs.get(tabId) : null;
+      if (tabId !== null && (!w || w.inflight === 0)) {
+        spotlightEvent(tabId, { type: "user_scroll" }).catch(() => {});
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+    case "SPOTLIGHT_RESHOW":
+      if (tabId !== null) spotlightEvent(tabId, { type: "reshow" }).catch(() => {});
       sendResponse({ ok: true });
       return true;
     case "RESUME":
@@ -531,12 +602,54 @@ chrome.commands.onCommand.addListener((command) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   workingTabs.delete(tabId);
+  spotlightTabClosed(tabId);
   if (hiddenBannerTabs.delete(tabId)) persistPaused();
   // A paused entry for a closed tab is evicted daemon-side on tab_not_found;
   // the next snapshot resync keeps both sides converged.
 });
 
+// A fresh document ends the highlight that was drawn into the old one. The
+// status:"loading" signal is a real navigation; SPA history changes keep
+// the same document (and the same content script) and do not fire it.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "loading") return;
+  spotlightNavigation(tabId);
+  bannerSend(tabId, { state: "lastpoint_clear" });
+  bannerSend(tabId, { state: "frame_dim", dim: false });
+});
+
 setActivityHook(bannerActivity);
 setPauseGate(bannerPauseGate);
+
+// Spotlight content scripts hold a named port open so they can tell a dead
+// worker (highlights must not outlive the session) from a live one. Holding
+// the reference is the mechanism: an unreferenced port can be collected,
+// which the content script would read as a worker death. A port disconnects
+// on its own when this worker's context dies.
+const spotlightPorts = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "spotlight") return;
+  spotlightPorts.add(port);
+  port.onDisconnect.addListener(() => spotlightPorts.delete(port));
+});
+
+// Spotlight settings are live transitions, not just draw-time inputs: turning
+// the feature off clears showing highlights, never-dim converts them. Only
+// the four settings keys trigger a pass - the audit log's own key
+// (spotlightLog) writes on every draw and must not.
+const SPOTLIGHT_SETTING_KEYS = new Set([
+  "spotlightEnabled", "spotlightNeverDim", "spotlightDurationMultiplier", "spotlightAllowlist",
+]);
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (!Object.keys(changes).some((k) => SPOTLIGHT_SETTING_KEYS.has(k))) return;
+  spotlightSettingsChanged().then(() => {
+    try {
+      chrome.tabs.query({}).then((tabs) => {
+        for (const t of tabs || []) syncSpotlightFrame(t.id);
+      }).catch(() => {});
+    } catch (e) {}
+  }).catch(() => {});
+});
 
 connectWebSocket();

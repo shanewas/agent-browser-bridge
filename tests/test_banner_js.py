@@ -435,6 +435,138 @@ def test_banner_yield_on_click_and_done_resume(tmp_path):
     assert out["done_sends_resume"]
 
 
+LASTPOINT_HARNESS = r"""
+import fs from "node:fs";
+
+const sent = [];
+let msgListener = null;
+const winListeners = {};
+let focused = false;
+
+function makeEl(tag) {
+  const el = {
+    tagName: String(tag || "div").toUpperCase(),
+    id: "",
+    children: [],
+    style: {},
+    _text: "",
+    _listeners: {},
+    _classes: new Set(),
+    isConnected: false,
+    classList: {
+      add: (c) => el._classes.add(c),
+      remove: (c) => el._classes.delete(c),
+      toggle: (c, force) => { if (force) el._classes.add(c); else el._classes.delete(c); },
+      contains: (c) => el._classes.has(c),
+    },
+    appendChild(child) { el.children.push(child); child.isConnected = true; return child; },
+    addEventListener(type, fn) { (el._listeners[type] = el._listeners[type] || []).push(fn); },
+    setAttribute() {},
+    attachShadow() { el._shadow = makeEl("shadow"); return el._shadow; },
+    getBoundingClientRect: () => ({ left: 400, right: 600, top: 12, bottom: 50 }),
+  };
+  Object.defineProperty(el, "className", {
+    get: () => [...el._classes].join(" "),
+    set: (v) => { el._classes = new Set(String(v).split(/\s+/).filter(Boolean)); },
+  });
+  Object.defineProperty(el, "textContent", {
+    get: () => el._text + el.children.map((c) => c.textContent).join(""),
+    set: (v) => { el._text = String(v); el.children = []; },
+  });
+  return el;
+}
+
+const documentElement = makeEl("html");
+const head = makeEl("head");
+globalThis.document = {
+  documentElement,
+  head,
+  fullscreenElement: null,
+  createElement: (t) => makeEl(t),
+  addEventListener() {},
+  getElementById: () => null,
+};
+globalThis.window = {
+  addEventListener(type, fn) { (winListeners[type] = winListeners[type] || []).push(fn); },
+  __eabBanner: undefined,
+  __eabSpotlight: {
+    interactionInside: (x, y) => x < 300,
+    targetFocused: () => focused,
+  },
+};
+globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.chrome = {
+  runtime: {
+    onMessage: { addListener: (fn) => { msgListener = fn; } },
+    sendMessage: (m) => { sent.push(m); return undefined; },
+  },
+};
+
+const src = fs.readFileSync(process.argv[2], "utf8");
+eval(src);
+
+const fire = (type, ev) => { for (const fn of winListeners[type] || []) fn(ev); };
+const inputs = () => sent.filter((m) => m.type === "USER_INPUT").length;
+const out = {};
+const host = documentElement.children.find((c) => c.id === "__eab_banner_host");
+const wrap = host._shadow.children.find((c) => c._classes.has("wrap"));
+const lastpoint = wrap.children.find((c) => c._classes.has("lastpoint"));
+const frameHost = documentElement.children.find((c) => c.id === "__eab_frame_host");
+const frame = frameHost._shadow.children.find((c) => c._classes.has("frame"));
+
+msgListener({ type: "BANNER", state: "working", agent: "Sigil", mutating: true, workingUntil: Date.now() + 60000 });
+out.frame_on_working = frame._classes.has("on");
+
+// Spotlight mode dims the presence frame to 40%.
+msgListener({ type: "BANNER", state: "frame_dim", dim: true });
+out.frame_dimmed = frame.style.opacity;
+msgListener({ type: "BANNER", state: "frame_dim", dim: false });
+out.frame_undimmed = frame.style.opacity;
+
+// Input inside the highlighted rect is not a takeover signal; typing into
+// the highlighted element is not either. Input outside still is.
+focused = true;
+fire("keydown", { isTrusted: true, type: "keydown" });
+out.keydown_focused_suppressed = inputs() === 0;
+focused = false;
+fire("mousedown", { isTrusted: true, type: "mousedown", clientX: 900, clientY: 100 });
+out.outside_input_signals = inputs() === 1;
+fire("mousedown", { isTrusted: true, type: "mousedown", clientX: 100, clientY: 100 });
+out.inside_input_suppressed = inputs() === 1;
+
+// The retained label shows after a takeover and re-shows on click.
+msgListener({ type: "BANNER", state: "takenover", agent: "Sigil" });
+msgListener({ type: "BANNER", state: "lastpoint", label: "Save button" });
+out.lastpoint_text = lastpoint.textContent;
+out.lastpoint_on = lastpoint._classes.has("on");
+sent.length = 0;
+const lpClick = (lastpoint._listeners.click || [])[0];
+lpClick({ isTrusted: true, stopPropagation() {} });
+out.click_reshows = sent.some((m) => m.type === "SPOTLIGHT_RESHOW");
+msgListener({ type: "BANNER", state: "lastpoint_clear" });
+out.lastpoint_cleared = !lastpoint._classes.has("on");
+
+console.log(JSON.stringify(out));
+"""
+
+
+def test_banner_lastpoint_frame_dim_and_input_exemption(tmp_path):
+    harness = tmp_path / "lastpoint_harness.mjs"
+    harness.write_text(LASTPOINT_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(harness), str(EXT / "banner.js")],
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["frame_on_working"]
+    assert out["frame_dimmed"] == "0.4" and out["frame_undimmed"] == ""
+    assert out["keydown_focused_suppressed"] and out["inside_input_suppressed"]
+    assert out["outside_input_signals"]
+    assert out["lastpoint_text"] == "Last point: Save button" and out["lastpoint_on"]
+    assert out["click_reshows"] and out["lastpoint_cleared"]
+
+
 def test_banner_sticky_working_and_frame(tmp_path):
     harness = tmp_path / "presence_harness.mjs"
     harness.write_text(PRESENCE_HARNESS, encoding="utf-8")

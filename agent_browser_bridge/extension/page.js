@@ -673,6 +673,137 @@ export async function pageResolve(query, opts) {
 // Main-frame hit-test for a subframe target: at main-frame coords the top element must
 // be an iframe (possibly behind one shadow host), not a main-frame overlay.
 // Resolves once the viewport has gone `quiet` ms without a resize, or after `max` ms.
+// Spotlight target resolution: enumerates matches instead of picking one, and
+// never scrolls. The chosen element is stashed in a registry the spotlight
+// content script shares (same isolated world), so the treatment binds to the
+// live element rather than to a rect snapshot.
+export function pageSpotlightResolve(query, opts) {
+  const L = window.__eabLib;
+  if (!L) return { found: false, code: "lib_missing" };
+  const o = opts || {};
+  const kind = o.kind || "target";
+  const index = (o.index === undefined || o.index === null) ? null : Number(o.index);
+  const q = String(query == null ? "" : query).trim();
+  if (!q) return { found: false, code: "bad_params", error: "Empty target query" };
+  if (/^f\d+e\d+$/.test(q)) {
+    return { found: false, code: "unsupported_frame", error: "Spotlight draws in the main frame only for now; subframe targets are not supported yet" };
+  }
+
+  let matches = [];
+  if (kind === "ref" || /^e\d+$/.test(q)) {
+    if (!window.__eab || !window.__eab.refs) {
+      return { found: false, code: "stale_snapshot", error: "snapshot is stale, call snapshot again" };
+    }
+    const el = window.__eab.refs.get(q);
+    if (!el) return { found: false, code: "stale_snapshot", error: `ref ${q} is not in the current snapshot, call snapshot again` };
+    if (!el.isConnected) return { found: false, code: "stale_ref", error: `ref ${q} was removed from the page, call snapshot again` };
+    matches = [el];
+  } else if (kind === "selector") {
+    let all = [];
+    try {
+      all = L.queryAllDeep(document, q);
+    } catch (e) {
+      return { found: false, code: "bad_selector", error: `Invalid selector: "${q}"` };
+    }
+    matches = all.filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    if (!matches.length) {
+      return { found: false, code: "target_not_found", count: 0, error: `Selector matched no element with a visible box: "${q}"` };
+    }
+  } else {
+    const qLower = q.toLowerCase();
+    const cands = L.queryAllDeep(document, "a[href], button, input, select, textarea, [role], [onclick], [contenteditable], summary")
+      .map((c) => ({ el: c, role: L.roleOf(c) }))
+      .filter((x) => x.role && L.INTERACTIVE_ROLES.has(x.role) && x.role !== "row" && L.isVisible(x.el));
+    let pool = cands.filter((x) => L.nameOf(x.el, x.role).toLowerCase() === qLower);
+    if (!pool.length) pool = cands.filter((x) => L.nameOf(x.el, x.role).toLowerCase().includes(qLower));
+    matches = pool.map((x) => x.el);
+  }
+
+  if (!matches.length) {
+    return { found: false, code: "target_not_found", count: 0, error: `Target not found: "${q}"` };
+  }
+  if (index !== null) {
+    if (!Number.isInteger(index) || index < 0 || index >= matches.length) {
+      return { found: false, code: "target_not_found", count: matches.length, error: `index ${index} is out of range: ${matches.length} match(es) for "${q}"` };
+    }
+  } else if (matches.length > 1) {
+    return {
+      found: false, code: "target_ambiguous", count: matches.length,
+      candidates: matches.slice(0, 5).map((el) => L.descriptorOf(el)),
+      error: `${matches.length} elements match "${q}"; pass index to choose one`,
+    };
+  }
+  const chosenIndex = index === null ? 0 : index;
+  const el = matches[chosenIndex];
+  const r = el.getBoundingClientRect();
+  const rect = { x: r.x, y: r.y, width: r.width, height: r.height };
+  const inView = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
+  if (!window.__eabSpotlightTargets) window.__eabSpotlightTargets = new Map();
+  // Monotonic key: a timestamp-plus-size key can collide after a cap eviction
+  // and bind a draw to the wrong element.
+  window.__eabSpotlightSeq = (window.__eabSpotlightSeq || 0) + 1;
+  const key = `spot-${window.__eabSpotlightSeq}`;
+  window.__eabSpotlightTargets.set(key, el);
+  // Keep the registry small: only the latest few draws can still be re-shown.
+  if (window.__eabSpotlightTargets.size > 8) {
+    const oldest = window.__eabSpotlightTargets.keys().next().value;
+    window.__eabSpotlightTargets.delete(oldest);
+  }
+  return {
+    found: true, count: matches.length, index: chosenIndex, targetKey: key,
+    descriptor: L.descriptorOf(el), rect, inView,
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    sensitive: L.containsSensitiveInput(el),
+    labelText: L.labelText(el),
+  };
+}
+
+// Spotlight geometry safety: what sits under a point, and whether any of it is
+// a sensitive field the treatment must not frame.
+export function pageSpotlightHitTest(x, y) {
+  const L = window.__eabLib;
+  if (!L) return { code: "lib_missing" };
+  // Precise, not subtree-wide: the point is sensitive when a sensitive field's
+  // own box holds it. Scanning every stack ancestor's whole subtree (the old
+  // loop) made any page containing a password field refuse every point.
+  const stack = document.elementsFromPoint(x, y) || [];
+  let sensitive = stack.some((el) => L.isSensitiveInput(el));
+  const top = L.deepFromPoint(x, y);
+  let node = top;
+  while (node && !sensitive) {
+    if (L.isSensitiveInput(node)) sensitive = true;
+    node = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
+  }
+  if (!sensitive && top && top.querySelectorAll) {
+    // A pointer-events:none field inside the hit container never enters the
+    // stack; catch it by its own rect within the top element's subtree only.
+    const fields = L.queryAllDeep ? L.queryAllDeep(top, "input") : [];
+    sensitive = fields.some((f) => {
+      if (!L.isSensitiveInput(f)) return false;
+      const r = f.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    });
+  }
+  const media = top && (top.tagName === "VIDEO" || top.tagName === "AUDIO")
+    ? { currentTime: top.currentTime, duration: top.duration }
+    : null;
+  let targetKey = null;
+  if (media && top) {
+    if (!window.__eabSpotlightTargets) window.__eabSpotlightTargets = new Map();
+    window.__eabSpotlightSeq = (window.__eabSpotlightSeq || 0) + 1;
+    targetKey = `spot-${window.__eabSpotlightSeq}`;
+    window.__eabSpotlightTargets.set(targetKey, top);
+    if (window.__eabSpotlightTargets.size > 8) {
+      const oldest = window.__eabSpotlightTargets.keys().next().value;
+      window.__eabSpotlightTargets.delete(oldest);
+    }
+  }
+  return { sensitive, descriptor: L.descriptorOf(top), media, targetKey };
+}
+
 export function pageAwaitStill(quiet, max) {
   return new Promise((resolve) => {
     let t;

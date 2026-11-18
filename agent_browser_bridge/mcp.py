@@ -393,6 +393,51 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "edge_spotlight",
+        "description": "Point at one thing in the page so the user sees what you mean: a gradient ring around an element (ring), a dimmed page with the element lit (spotlight), or a dot at coordinates (point). Use ring for a control, spotlight for a whole section, point for a spot on a chart, image or map (point requires a label). A label renders in a chip that always carries your agent name; labels are plain text, max 120 chars, no URLs, no trust or urgency claims. Targets that are or contain password, one-time-code or payment fields are refused (sensitive_target): point at the field's label or error text instead, or pass generic=true to point at the field with a fixed extension-written chip. Multiple matches fail with target_ambiguous unless index picks one. The highlight never scrolls the page and clears on its TTL, on takeover, or via edge_spotlight_clear; check edge_spotlight_status instead of assuming it is still up.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "Element ref from a snapshot (main frame only)."},
+                "target": {"type": "string", "description": "Element name or text to match."},
+                "selector": {"type": "string", "description": "CSS selector."},
+                "text": {"type": "string", "description": "Visible text to match."},
+                "x": {"type": "number", "description": "Point mode: viewport CSS pixel x."},
+                "y": {"type": "number", "description": "Point mode: viewport CSS pixel y."},
+                "rect": {"type": "object", "description": "Rect to ring: {x, y, width, height} in viewport CSS pixels."},
+                "mode": {"type": "string", "enum": ["ring", "spotlight", "point"], "description": "Default: ring for element targets, point for coordinates."},
+                "label": {"type": "string", "description": "Short plain-text explanation shown in the chip."},
+                "index": {"type": "integer", "description": "Pick the nth match (0-based) when several elements match."},
+                "persist": {"type": "boolean", "description": "Instructional step: stay until the next spotlight, a clear, or takeover (hard cap 300s)."},
+                "ttlMs": {"type": "integer", "description": "Explicit lifetime, 1000-30000 ms."},
+                "generic": {"type": "boolean", "description": "Point at a sensitive field itself with a fixed extension-written chip; your label is suppressed."},
+                "mediaTime": {"type": "number", "description": "For a point on a video/audio element: show the dot only within 2s of this media timestamp."},
+                "scaleFactor": {"type": "number", "description": "The scale factor of the screenshot the coordinates came from (see screenshot result), echoed back for verification."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+        },
+    },
+    {
+        "name": "edge_spotlight_clear",
+        "description": "Clear the Spotlight highlight on the tab. Idempotent; reports was_showing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **COMMON_TOOL_PROPERTIES,
+            },
+        },
+    },
+    {
+        "name": "edge_spotlight_status",
+        "description": "Whether a Spotlight highlight is showing on the tab, and if it ended, why (cleared_reason: expired, esc, pill, takeover, target_gone, scroll, navigation, session_end, settings, replaced, cleared).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **COMMON_TOOL_PROPERTIES,
+            },
+        },
+    },
+    {
         "name": "edge_group_list",
         "description": "List open tab groups with their titles, colors, and window IDs.",
         "inputSchema": {
@@ -820,6 +865,29 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             )
         elif tool_name == "edge_history_delete":
             res = edge.history_delete(url=args.get("url", ""))
+        elif tool_name == "edge_spotlight":
+            res = edge.spotlight(
+                ref=args.get("ref"),
+                target=args.get("target"),
+                selector=args.get("selector"),
+                text=args.get("text"),
+                x=args.get("x"),
+                y=args.get("y"),
+                rect=args.get("rect"),
+                mode=args.get("mode"),
+                label=args.get("label"),
+                index=args.get("index"),
+                persist=bool(args.get("persist", False)),
+                ttl_ms=args.get("ttlMs"),
+                generic=bool(args.get("generic", False)),
+                media_time=args.get("mediaTime"),
+                scale_factor=args.get("scaleFactor"),
+                tab_id=args.get("tabId"),
+            )
+        elif tool_name == "edge_spotlight_clear":
+            res = edge.spotlight_clear(tab_id=args.get("tabId"))
+        elif tool_name == "edge_spotlight_status":
+            res = edge.spotlight_status(tab_id=args.get("tabId"))
         elif tool_name == "edge_group_list":
             res = edge.group_list(window_id=args.get("windowId"))
         elif tool_name == "edge_group_move":
