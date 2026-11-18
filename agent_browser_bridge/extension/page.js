@@ -766,16 +766,26 @@ export function pageSpotlightResolve(query, opts) {
 export function pageSpotlightHitTest(x, y) {
   const L = window.__eabLib;
   if (!L) return { code: "lib_missing" };
-  let sensitive = false;
+  // Precise, not subtree-wide: the point is sensitive when a sensitive field's
+  // own box holds it. Scanning every stack ancestor's whole subtree (the old
+  // loop) made any page containing a password field refuse every point.
   const stack = document.elementsFromPoint(x, y) || [];
-  for (const el of stack) {
-    if (L.containsSensitiveInput(el)) { sensitive = true; break; }
-  }
+  let sensitive = stack.some((el) => L.isSensitiveInput(el));
   const top = L.deepFromPoint(x, y);
   let node = top;
   while (node && !sensitive) {
     if (L.isSensitiveInput(node)) sensitive = true;
     node = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
+  }
+  if (!sensitive && top && top.querySelectorAll) {
+    // A pointer-events:none field inside the hit container never enters the
+    // stack; catch it by its own rect within the top element's subtree only.
+    const fields = L.queryAllDeep ? L.queryAllDeep(top, "input") : [];
+    sensitive = fields.some((f) => {
+      if (!L.isSensitiveInput(f)) return false;
+      const r = f.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    });
   }
   const media = top && (top.tagName === "VIDEO" || top.tagName === "AUDIO")
     ? { currentTime: top.currentTime, duration: top.duration }

@@ -197,7 +197,8 @@ click Save"`, `spotlight clear`, `spotlight status`.
 - `edge_spotlight_clear` is idempotent and returns `was_showing`.
   `edge_spotlight_status` reports `showing`, and after a highlight ends,
   `cleared_reason` (`expired`, `esc`, `pill`, `takeover`, `target_gone`,
-  `scroll`, `navigation`, `session_end`, `settings`, `replaced`, `cleared`).
+  `scroll`, `navigation`, `session_end`, `settings`, `replaced`, `cleared`,
+  `action`).
   Check status instead of assuming a pointer is still on screen.
 - Draws on a user-paused tab fail with `tab_paused`; clear and status still
   work. The user can dismiss a highlight with Esc or the pill at any time.

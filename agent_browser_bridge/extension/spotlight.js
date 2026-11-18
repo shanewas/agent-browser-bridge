@@ -15,11 +15,15 @@
   var generation = 0;
   var session = 0;
   var hideDepth = 0;
+  var hideGeneration = -1;
+  var hideWatchdog = null;
   var writing = false; // re-entrancy guard around our own DOM writes
   var expiryTimer = null;
   var fadeTimer = null;
   var rafPending = false;
   var mediaTimer = null;
+  var watchdogTimer = null;
+  var goneLatch = -1; // generation a target-gone was already sent for
   var lastScrollSent = 0;
 
   function cleanName(s) {
@@ -108,9 +112,11 @@
   }
   mount();
   var hostGuard = new MutationObserver(function () {
-    if (!host.isConnected || !live.isConnected) mount();
+    if (!host.isConnected || !live.isConnected || !printStyle.isConnected) mount();
   });
-  if (document.documentElement) hostGuard.observe(document.documentElement, { childList: true });
+  // Observe the document, not the documentElement captured at load: a page
+  // that replaces its root element would otherwise detach the guard forever.
+  hostGuard.observe(document, { childList: true });
 
   function announce(text) {
     setTimeout(function () {
@@ -162,6 +168,26 @@
         y: Math.max(M, Math.min(v.h - chipH - M, y))
       };
     }
+    // Prefer empty space: a side whose box would sit on top of another
+    // interactive element loses to a later side that is clear of them.
+    function coversInteractive(b) {
+      if (!document.elementsFromPoint) return false;
+      var L = window.__eabLib;
+      var pts = [
+        [b.left + (b.right - b.left) / 2, b.top + (b.bottom - b.top) / 2],
+        [b.left + 4, b.top + 4], [b.right - 4, b.top + 4],
+        [b.left + 4, b.bottom - 4], [b.right - 4, b.bottom - 4]
+      ];
+      for (var i = 0; i < pts.length; i++) {
+        var stack = document.elementsFromPoint(pts[i][0], pts[i][1]) || [];
+        var top = stack[0];
+        if (!top || !top.tagName) continue;
+        var tag = top.tagName.toUpperCase();
+        if (tag === "A" || tag === "BUTTON" || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return true;
+        if (L && L.INTERACTIVE_ROLES && L.INTERACTIVE_ROLES.has(L.roleOf(top))) return true;
+      }
+      return false;
+    }
     var t = withEdges(rect);
     var sides = [
       { x: t.right + GAP, y: t.top },
@@ -169,11 +195,15 @@
       { x: t.left, y: t.bottom + GAP },
       { x: t.left, y: t.top - GAP - chipH }
     ];
+    var firstFree = null;
     for (var i = 0; i < sides.length; i++) {
       var c = clamp(sides[i].x, sides[i].y);
       var b = box(c.x, c.y);
-      if (!hits(b, t) && !hits(b, pill)) return { x: c.x, y: c.y, covered: false };
+      if (hits(b, t) || hits(b, pill)) continue;
+      if (!firstFree) firstFree = { x: c.x, y: c.y, covered: false };
+      if (!coversInteractive(b)) return { x: c.x, y: c.y, covered: false };
     }
+    if (firstFree) return firstFree;
     // No free side: inside the target's top edge, clear of its first rows where
     // the target is tall enough; otherwise the viewport's bottom centre.
     if (t.height > chipH + 56 && t.width > chipW + 16) {
@@ -181,7 +211,8 @@
       var iy = Math.max(M, Math.min(v.h - chipH - M, t.top + 34));
       return { x: ix, y: iy, covered: true };
     }
-    return { x: Math.max(M, v.w / 2 - chipW / 2), y: v.h - chipH - M, covered: false };
+    var fb = box(Math.max(M, v.w / 2 - chipW / 2), v.h - chipH - M);
+    return { x: fb.left, y: fb.top, covered: hits(fb, t) };
   }
 
   // ---- Rendering -----------------------------------------------------------------
@@ -191,6 +222,9 @@
     try {
       var rect = currentRect();
       var v = viewport();
+      // A bound element collapsed to zero area (display:none and friends) is
+      // gone, not a 12px ring at the viewport origin.
+      if (cur.el && rect && rect.width === 0 && rect.height === 0) { onTargetGone(); return; }
       var hasRect = Boolean(rect) && rect.width >= 0;
       var rectE = hasRect ? withEdges(rect) : null;
       var visible = hasRect && inViewOf(rectE);
@@ -211,17 +245,24 @@
         // Edge indicator: arrow + short text at the nearest edge.
         var cx = Math.max(0, Math.min(v.w, rectE.left + rectE.width / 2));
         var cy = Math.max(0, Math.min(v.h, rectE.top + rectE.height / 2));
-        var arrow = "\u2192", ex = v.w - 150, ey = cy - 16;
-        if (rectE.right < 0) { arrow = "\u2190"; ex = 10; }
-        else if (rectE.bottom < 0) { arrow = "\u2191"; ex = cx - 60; ey = 10; }
-        else if (rectE.top > v.h) { arrow = "\u2193"; ex = cx - 60; ey = v.h - 42; }
+        var arrow = "\u2192", dirWord = "to the right", ex = 0, ey = cy - 16;
+        if (rectE.right < 0) { arrow = "\u2190"; dirWord = "to the left"; }
+        else if (rectE.bottom < 0) { arrow = "\u2191"; dirWord = "above"; ey = 10; }
+        else if (rectE.top > v.h) { arrow = "\u2193"; dirWord = "below"; ey = v.h - 42; }
         edge.textContent = arrow + " " + (cur.shortLabel || "Pointed item");
-        edge.style.left = Math.max(8, Math.min(v.w - 150, ex)) + "px";
-        edge.style.top = Math.max(8, Math.min(v.h - 42, ey)) + "px";
         edge.style.display = "";
+        // Measure the pill: a hardcoded width clips longer short labels.
+        var ew = edge.offsetWidth || 150;
+        if (dirWord === "to the right") ex = v.w - ew - 10;
+        else if (dirWord === "to the left") ex = 10;
+        else ex = cx - ew / 2;
+        edge.style.left = Math.max(8, Math.min(v.w - ew - 8, ex)) + "px";
+        edge.style.top = Math.max(8, Math.min(v.h - 42, ey)) + "px";
         cur.offscreen = true;
+        cur.direction = dirWord;
         return;
       }
+      cur.direction = null;
       cur.offscreen = false;
       if (!hasRect) return;
 
@@ -231,6 +272,18 @@
         hole.style.width = rectE.width + "px";
         hole.style.height = rectE.height + "px";
         hole.style.display = "";
+        // The cut-out edge itself carries the gradient (no second ring on top):
+        // the ring element sits exactly on the cut-out bounds in this mode.
+        ring.style.left = rectE.left + "px";
+        ring.style.top = rectE.top + "px";
+        ring.style.width = rectE.width + "px";
+        ring.style.height = rectE.height + "px";
+        ring.style.display = "";
+        if (pulse) {
+          ring.classList.remove("pulse");
+          void ring.offsetWidth;
+          ring.classList.add("pulse");
+        }
       }
       if (cur.mode === "point") {
         if (!mediaHidden) {
@@ -238,7 +291,7 @@
           dot.style.top = (rectE.top + rectE.height / 2) + "px";
           dot.style.display = "";
         }
-      } else {
+      } else if (cur.mode !== "spotlight") {
         ring.style.left = (rectE.left - 6) + "px";
         ring.style.top = (rectE.top - 6) + "px";
         ring.style.width = (rectE.width + 12) + "px";
@@ -334,6 +387,10 @@
 
   function onTargetGone() {
     if (!cur) return;
+    // Latched per generation: while the target stays disconnected, further
+    // mutation batches must not re-send and make the worker re-resolve again.
+    if (goneLatch === cur.generation) return;
+    goneLatch = cur.generation;
     // Hide now; the worker re-resolves against the stored query and either
     // redraws (new generation) or confirms the clear.
     stage.classList.remove("on");
@@ -348,6 +405,7 @@
     disarmObservers();
     if (expiryTimer) { clearTimeout(expiryTimer); expiryTimer = null; }
     if (mediaTimer) { clearInterval(mediaTimer); mediaTimer = null; }
+    if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
     if (opts && opts.immediate) {
       stage.classList.remove("on");
       stage.style.display = "none";
@@ -362,25 +420,29 @@
         if (!cur) { stage.classList.remove("out"); stage.classList.remove("on"); }
       }, 160);
     }
-    if (done.label) announce("Agent highlight cleared");
+    // Every clear is announced, labelled or not; a replacement is followed
+    // immediately by the new draw's own announcement, so it stays quiet.
+    if (reason !== "replaced") announce("Agent highlight cleared");
     if (!opts || !opts.fromWorker) {
       send({ type: "SPOTLIGHT_CLEARED", reason: reason, generation: done.generation });
     }
   }
 
+  // Returns { applied } so the worker can tell a landed draw from one dropped
+  // for a stale session/generation or an evicted target - the two states must
+  // never be indistinguishable.
   function draw(msg) {
     if (typeof msg.session === "number") {
-      if (msg.session < session) return;
+      if (msg.session < session) return { applied: false, reason: "stale_session" };
       if (msg.session > session) {
         if (cur) clearCurrent("session_end", { fromWorker: true, immediate: true });
         session = msg.session;
       }
     }
     if (typeof msg.generation === "number") {
-      if (msg.generation < generation) return;
+      if (msg.generation < generation) return { applied: false, reason: "stale_generation" };
       generation = msg.generation;
     }
-    if (cur) clearCurrent("replaced", { fromWorker: true, immediate: true });
     var el = null;
     if (msg.targetKey && window.__eabSpotlightTargets) {
       el = window.__eabSpotlightTargets.get(msg.targetKey) || null;
@@ -389,6 +451,11 @@
     if (msg.mediaKey && window.__eabSpotlightTargets) {
       mediaEl = window.__eabSpotlightTargets.get(msg.mediaKey) || null;
     }
+    if (msg.targetKey && !el && !msg.rect && !msg.point) {
+      return { applied: false, reason: "target_missing" };
+    }
+    if (cur) clearCurrent("replaced", { fromWorker: true, immediate: true });
+    goneLatch = -1;
     cur = {
       mode: msg.mode || "ring",
       el: el,
@@ -428,12 +495,20 @@
     if (cur.mediaTs !== null) {
       mediaTimer = setInterval(function () { if (cur) render(false); }, 300);
     }
+    // The observers only watch the target and its parent; an SPA swap that
+    // removes a higher ancestor fires neither. A slow liveness watchdog
+    // bounds how long a ring can sit frozen over unrelated content.
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    watchdogTimer = setInterval(function () {
+      if (cur && cur.el && !cur.el.isConnected) onTargetGone();
+    }, 1000);
     if (cur.label || cur.generic) {
       var where = cur.descriptor && cur.descriptor.name ? cur.descriptor.name : "an element";
       var text = "Agent is pointing at " + where + (cur.label ? ": " + cur.label : "");
-      if (cur.offscreen) text += " (off-screen)";
+      if (cur.offscreen) text += " (off-screen" + (cur.direction ? ", " + cur.direction : "") + ")";
       announce(text);
     }
+    return { applied: true };
   }
 
   // ---- Events ---------------------------------------------------------------------------
@@ -484,10 +559,14 @@
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg || msg.type !== "SPOTLIGHT") return;
     switch (msg.op) {
-      case "draw":
-        draw(msg);
-        if (sendResponse) sendResponse({ covered: cur ? cur.covered : false, offscreen: cur ? cur.offscreen : false });
+      case "draw": {
+        var res = draw(msg);
+        if (sendResponse) sendResponse({
+          applied: res.applied, reason: res.reason || null,
+          covered: cur ? cur.covered : false, offscreen: cur ? cur.offscreen : false
+        });
         break;
+      }
       case "clear":
         clearCurrent(msg.reason || "cleared", { fromWorker: true, immediate: Boolean(msg.immediate) });
         break;
@@ -508,15 +587,43 @@
 
   window.__eabSpotlight = {
     hideForCapture: function () {
+      if (hideDepth === 0) {
+        hideGeneration = generation;
+        // A capture that never completes must not strand the overlay hidden.
+        if (hideWatchdog) clearTimeout(hideWatchdog);
+        hideWatchdog = setTimeout(function () {
+          hideWatchdog = null;
+          hideDepth = 0;
+          host.style.visibility = "";
+        }, 2000);
+      }
       hideDepth += 1;
       host.style.visibility = "hidden";
     },
     restoreAfterCapture: function () {
       hideDepth = Math.max(0, hideDepth - 1);
       if (hideDepth > 0) return;
+      if (hideWatchdog) { clearTimeout(hideWatchdog); hideWatchdog = null; }
       host.style.visibility = "";
-      // A highlight that expired while hidden stays gone.
-      if (cur && Date.now() > cur.until) clearCurrent("expired", { immediate: true });
+      // The deadline re-check applies only to the highlight that was hidden;
+      // one drawn meanwhile has its own timer.
+      if (cur && cur.generation === hideGeneration && Date.now() > cur.until) {
+        clearCurrent("expired", { immediate: true });
+      }
+    },
+    // Takeover exemption support for the banner's input signal: interaction
+    // inside the highlighted rect, or typing into the highlighted element,
+    // is the user doing what the agent pointed at - not a takeover.
+    interactionInside: function (x, y) {
+      if (!cur) return false;
+      var r = currentRect();
+      if (!r) return false;
+      return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
+    },
+    targetFocused: function () {
+      if (!cur || !cur.el) return false;
+      var a = document.activeElement;
+      return Boolean(a) && (a === cur.el || Boolean(cur.el.contains && cur.el.contains(a)));
     },
     _state: function () {
       return cur ? { showing: true, mode: cur.mode, generation: cur.generation } : { showing: false };

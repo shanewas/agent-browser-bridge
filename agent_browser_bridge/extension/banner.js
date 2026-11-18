@@ -148,8 +148,11 @@
   frame.className = "frame";
   frameShadow.appendChild(frame);
 
+  var frameDim = false; // spotlight mode owns the user's attention
   function syncFrame() {
-    frame.classList.toggle("on", state === "working");
+    var on = state === "working";
+    frame.classList.toggle("on", on);
+    frame.style.opacity = on && frameDim ? "0.4" : "";
   }
 
   var printStyle = document.createElement("style");
@@ -280,6 +283,16 @@
   function onUserInput(e) {
     if (!e.isTrusted) return;
     if (state === "hidden") return;
+    // Spotlight exemption: a press inside the highlighted rect, or typing
+    // into the highlighted element, is the user doing what the agent pointed
+    // at - not a takeover. The signal stays boolean; no coordinates leave
+    // this script, the check happens here against the overlay's own state.
+    var sp = window.__eabSpotlight;
+    if (sp) {
+      if ((e.type === "pointerdown" || e.type === "mousedown") && typeof e.clientX === "number"
+          && sp.interactionInside(e.clientX, e.clientY)) return;
+      if (e.type === "keydown" && sp.targetFocused()) return;
+    }
     var now = Date.now();
     if (now - lastInputSent < 1000) return;
     lastInputSent = now;
@@ -302,6 +315,7 @@
     if (!msg || msg.type !== "BANNER") return;
     if (msg.state === "lastpoint") { showLastpoint(msg.label || ""); return; }
     if (msg.state === "lastpoint_clear") { clearLastpoint(); return; }
+    if (msg.state === "frame_dim") { frameDim = Boolean(msg.dim); syncFrame(); return; }
     if (msg.state === "working") show("working", msg);
     else if (msg.state === "paused") show("paused", msg);
     else if (msg.state === "takenover") {

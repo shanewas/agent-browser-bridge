@@ -879,6 +879,9 @@ def main(argv=None) -> int:
     p_spot.add_argument("--persist", action="store_true", help="show: stay until next spotlight, clear, or takeover")
     p_spot.add_argument("--ttl-ms", type=int, default=None, help="show: lifetime in ms (1000-30000)")
     p_spot.add_argument("--generic", action="store_true", help="show: point at a sensitive field with a fixed extension-written chip")
+    p_spot.add_argument("--rect", default=None, help='show: rectangle as JSON, e.g. \'{"x":10,"y":10,"width":200,"height":80}\'')
+    p_spot.add_argument("--media-time", type=float, default=None, help="show: media timestamp in seconds for a point on a video or audio element")
+    p_spot.add_argument("--scale-factor", type=float, default=None, help="show: screenshot-to-CSS pixel ratio used to compute the point, echoed back in the result")
 
     # group
     p_group = add_cmd("group", help="List or manage tab groups")
@@ -1227,6 +1230,20 @@ def main(argv=None) -> int:
                 params["ttl_ms"] = args.ttl_ms
             if args.generic:
                 params["generic"] = True
+            if args.rect is not None:
+                try:
+                    rect = json.loads(args.rect)
+                except ValueError:
+                    print("error: --rect must be JSON like '{\"x\":10,\"y\":10,\"width\":200,\"height\":80}'", file=sys.stderr)
+                    return 2
+                if not isinstance(rect, dict):
+                    print("error: --rect must be a JSON object", file=sys.stderr)
+                    return 2
+                params["rect"] = rect
+            if args.media_time is not None:
+                params["media_time"] = args.media_time
+            if args.scale_factor is not None:
+                params["scale_factor"] = args.scale_factor
     elif action == "group":
         if args.group_action == "list":
             action = "group_list"

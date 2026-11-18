@@ -65,6 +65,16 @@ def _takeover_result() -> dict:
     return {"success": False, "code": "user_takeover", "error": USER_TAKEOVER_ERROR}
 
 
+def _tab_paused_result() -> dict:
+    return {"success": False, "code": "tab_paused",
+            "error": "The user has paused this tab; Spotlight draws wait until they resume. spotlight_clear and spotlight_status still work."}
+
+
+# Spotlight first ships in extension 4.4.0; an older extension paired with a
+# newer daemon must not be told the feature exists.
+SPOTLIGHT_MIN_EXTENSION = "4.4.0"
+
+
 def _clean_agent_label(value) -> str | None:
     """An agent display name from a client: short printable text, or None."""
     if not isinstance(value, str):
@@ -322,7 +332,9 @@ class BridgeState:
             exp = self.paused_tabs.get(tab_id)
             if exp is not None:
                 if exp > now:
-                    return _takeover_result()
+                    # A spotlight draw on a paused tab gets its own code, as
+                    # the agent guide promises; other actions keep takeover.
+                    return _tab_paused_result() if action == "spotlight" else _takeover_result()
                 del self.paused_tabs[tab_id]
                 self.paused_by.pop(tab_id, None)
         return None
@@ -597,7 +609,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "last_seen_seconds_ago": round(time.time() - last_seen, 1) if last_seen > 0 else None,
                 "pending": pending_count,
                 "sessions": session_count,
-                "features": FEATURES,
+                "features": [f for f in FEATURES
+                             if f != "spotlight" or not ext_ver
+                             or parse_version(ext_ver) >= parse_version(SPOTLIGHT_MIN_EXTENSION)],
                 "paused_tabs": paused_count,
                 "desktop_paused": desktop_paused,
                 "agent": agent_label,
@@ -1153,6 +1167,14 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if finished:
                 res = state.results.pop(cmd_id, None)
                 if res is not None:
+                    if (action.startswith("spotlight") and isinstance(res, dict)
+                            and not res.get("success")
+                            and (res.get("code") == "unknown_action"
+                                 or str(res.get("error", "")).startswith("Unknown action"))
+                            and state.ext_version is not None
+                            and parse_version(state.ext_version) < parse_version(SPOTLIGHT_MIN_EXTENSION)):
+                        res = {"success": False, "code": "extension_outdated",
+                               "error": f"Extension {state.ext_version} is connected; Spotlight needs extension {SPOTLIGHT_MIN_EXTENSION} or newer. Update it from the Edge Add-ons store, or reload the unpacked extension from {config.extension_dir()}."}
                     return (res, 200)
             state.results.pop(cmd_id, None)
             return ({"success": False, "code": "timeout",

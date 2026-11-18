@@ -250,13 +250,14 @@ async function screenshotMeta(tabId, dataUrl, clip) {
     const vp = await execInTab(tabId, () => ({ w: window.innerWidth, h: window.innerHeight }));
     const blob = await (await fetch(dataUrl)).blob();
     const bmp = await createImageBitmap(blob);
+    // viewport_* always describe the CSS viewport; a clip's own size stays in
+    // the clip field and only feeds the scale computation.
     const cssW = clip ? clip.width : (vp && vp.w);
-    const cssH = clip ? clip.height : (vp && vp.h);
     return {
       image_width: bmp.width,
       image_height: bmp.height,
-      viewport_width: cssW || null,
-      viewport_height: cssH || null,
+      viewport_width: (vp && vp.w) || null,
+      viewport_height: (vp && vp.h) || null,
       scale_factor: cssW ? Math.round((bmp.width / cssW) * 1000) / 1000 : null,
     };
   } catch (e) {
@@ -322,23 +323,53 @@ export function isPausedFor(tabId, action) {
 // DESIGN v3 notes in the repo history for the full contract.
 // ---------------------------------------------------------------------------
 
-const spotlightTabs = new Map(); // tabId -> {showing, generation, mode, label, clearedReason, clearedAt, lastDraw, labelAt, logId}
+const spotlightTabs = new Map(); // tabId -> {showing, generation, mode, label, clearedReason, clearedAt, lastDraw, labelAt, logId, rect, offscreen}
 let spotlightGeneration = 0;
 let spotlightSession = 1;
-// The epoch must survive MV3 worker restarts: a restarted worker that reset
-// it to 1 would have every later draw rejected by content scripts still
-// holding the higher epoch. chrome.storage.session outlives the worker.
+// Worker state must survive MV3 worker restarts: the epoch and generation
+// reset would make live content scripts reject every later draw as stale,
+// and per-tab state kept only in memory would leave status, clear and
+// takeover blind to a highlight still on screen. chrome.storage.session
+// outlives the worker but not the browser session, which is the right life.
+const SPOTLIGHT_STATE_KEY = "spotlightStateV1";
+function defaultSpotlightState() {
+  return { showing: false, generation: 0, mode: null, label: null, clearedReason: null, clearedAt: null, lastDraw: null, labelAt: 0, logId: null, rect: null, offscreen: false };
+}
+function persistSpotlightState() {
+  try {
+    const tabs = {};
+    for (const [tabId, st] of spotlightTabs) tabs[tabId] = st;
+    const p = chrome.storage.session.set({
+      [SPOTLIGHT_STATE_KEY]: { session: spotlightSession, generation: spotlightGeneration, tabs },
+    });
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
 try {
-  chrome.storage.session.get("spotlightSession").then((d) => {
-    if (d && typeof d.spotlightSession === "number" && d.spotlightSession > spotlightSession) {
-      spotlightSession = d.spotlightSession;
+  chrome.storage.session.get([SPOTLIGHT_STATE_KEY, "spotlightSession"]).then((d) => {
+    const saved = d && d[SPOTLIGHT_STATE_KEY];
+    const legacy = d && typeof d.spotlightSession === "number" ? d.spotlightSession : 0;
+    const savedSession = saved && typeof saved.session === "number" ? saved.session : 0;
+    if (Math.max(legacy, savedSession) > spotlightSession) {
+      spotlightSession = Math.max(legacy, savedSession);
+    }
+    if (saved && typeof saved.generation === "number" && saved.generation > spotlightGeneration) {
+      spotlightGeneration = saved.generation;
+    }
+    if (saved && saved.tabs && typeof saved.tabs === "object") {
+      for (const [tabId, st] of Object.entries(saved.tabs)) {
+        const id = Number(tabId);
+        if (st && typeof st === "object" && !spotlightTabs.has(id)) {
+          spotlightTabs.set(id, { ...defaultSpotlightState(), ...st });
+        }
+      }
     }
   }).catch(() => {});
 } catch (e) {}
 const SPOTLIGHT_LOG_KEY = "spotlightLog";
 const SPOTLIGHT_LOG_MAX_ENTRIES = 200;
 const SPOTLIGHT_LOG_BUDGET_BYTES = 4 * 1024 * 1024;
-const SPOTLIGHT_CAPTURE_MAX_BYTES = 60 * 1024;
+const SPOTLIGHT_CAPTURE_MAX_BYTES = 40 * 1024;
 const LABEL_REPLACE_WINDOW_MS = 2000;
 
 async function spotlightSettings() {
@@ -367,7 +398,7 @@ function spotlightSend(tabId, msg) {
 function spotlightState(tabId) {
   let st = spotlightTabs.get(tabId);
   if (!st) {
-    st = { showing: false, generation: 0, mode: null, label: null, clearedReason: null, clearedAt: null, lastDraw: null, labelAt: 0, logId: null };
+    st = defaultSpotlightState();
     spotlightTabs.set(tabId, st);
   }
   return st;
@@ -379,6 +410,7 @@ function markSpotlightCleared(tabId, reason) {
   st.clearedReason = reason;
   st.clearedAt = Date.now();
   if (st.logId) spotlightLogUpdate(st.logId, { clearedReason: reason });
+  persistSpotlightState();
 }
 
 // Log writes are serialized through one chain: append and update both do a
@@ -393,9 +425,10 @@ function spotlightLogOp(fn) {
 
 async function spotlightLogAppend(entry) {
   return spotlightLogOp(async () => {
+    let list = [];
     try {
       const d = await chrome.storage.local.get(SPOTLIGHT_LOG_KEY);
-      const list = Array.isArray(d[SPOTLIGHT_LOG_KEY]) ? d[SPOTLIGHT_LOG_KEY] : [];
+      list = Array.isArray(d[SPOTLIGHT_LOG_KEY]) ? d[SPOTLIGHT_LOG_KEY] : [];
       list.push(entry);
       while (list.length > SPOTLIGHT_LOG_MAX_ENTRIES) list.shift();
       let size = JSON.stringify(list).length;
@@ -405,7 +438,15 @@ async function spotlightLogAppend(entry) {
       }
       await chrome.storage.local.set({ [SPOTLIGHT_LOG_KEY]: list });
     } catch (e) {
-      log(`Spotlight log write failed: ${e.message}`);
+      // Quota: the capture is dropped, never the text entry - retry once with
+      // stored captures stripped so the failure is visible in the log itself.
+      try {
+        const stripped = list.map((en) => (en.capture && String(en.capture).startsWith("data:")
+          ? { ...en, capture: "skipped:storage_full" } : en));
+        await chrome.storage.local.set({ [SPOTLIGHT_LOG_KEY]: stripped });
+      } catch (e2) {
+        log(`Spotlight log write failed: ${e.message}`);
+      }
     }
   });
 }
@@ -430,6 +471,18 @@ async function spotlightAuditCapture(tabId, logId, generation) {
   await sleep(220);
   const st = spotlightTabs.get(tabId);
   if (!st || !st.showing || st.generation !== generation) return;
+  if (st.offscreen) {
+    await spotlightLogUpdate(logId, { capture: "skipped:target_offscreen" });
+    return;
+  }
+  // An agent screenshot in flight capture-hides the overlays; capturing now
+  // would record the page with the highlight hidden. Wait it out, briefly.
+  for (let i = 0; i < 15 && (captureHideDepth.get(tabId) || 0) > 0; i++) await sleep(100);
+  if ((captureHideDepth.get(tabId) || 0) > 0) {
+    await spotlightLogUpdate(logId, { capture: "skipped:capture_busy" });
+    return;
+  }
+  if (!st.showing || st.generation !== generation) return;
   let tab;
   try { tab = await chrome.tabs.get(tabId); } catch (e) { return; }
   if (!tab.active) {
@@ -480,6 +533,9 @@ async function downscaleCapture(dataUrl) {
 //            query, kind, index, mediaTs, mediaKey, persist, ttlMs}
 async function sendSpotlightDraw(tabId, drawArgs, settings) {
   const st = spotlightState(tabId);
+  // The never-dim downgrade lives here, not only in the execute path, so
+  // redraws and reshows replaying a stored draw honour it too.
+  if (settings.neverDim && drawArgs.mode === "spotlight") drawArgs.mode = "ring";
   const ttlMs = computeTtlMs({ label: drawArgs.label, persist: drawArgs.persist, ttlMs: drawArgs.ttlMs, multiplier: settings.multiplier });
   const generation = ++spotlightGeneration;
   const highlightUntil = Date.now() + ttlMs;
@@ -503,16 +559,27 @@ async function sendSpotlightDraw(tabId, drawArgs, settings) {
   if (resp === null) {
     return fail("spotlight_unavailable", "The Spotlight content script did not answer on this tab; reload the tab and try again");
   }
+  if (resp.applied === false) {
+    // The content script dropped the draw (stale session or generation, or
+    // the resolved target left the registry). State must not claim a
+    // highlight that is not on screen.
+    if (resp.reason === "target_missing") {
+      return fail("target_not_found", "The resolved target left the page before the draw landed; resolve it again and retry");
+    }
+    return fail("spotlight_unavailable", "The Spotlight content script did not apply the draw (stale session); retry the draw");
+  }
   const wasShowing = st.showing;
   const prevLogId = st.logId;
   st.showing = true;
   st.generation = generation;
   st.mode = drawArgs.mode;
   st.label = drawArgs.generic ? null : drawArgs.label;
-  st.labelAt = Date.now();
+  if (st.label) st.labelAt = Date.now(); // the rate window tracks labelled draws only
+  st.offscreen = Boolean(resp.offscreen);
   st.clearedReason = null;
   st.clearedAt = null;
   st.lastDraw = { ...drawArgs };
+  persistSpotlightState();
   if (wasShowing && prevLogId) spotlightLogUpdate(prevLogId, { clearedReason: "replaced" });
   const logId = `spot-${Date.now().toString(36)}-${generation}`;
   st.logId = logId;
@@ -531,6 +598,7 @@ async function sendSpotlightDraw(tabId, drawArgs, settings) {
     ttl_ms: ttlMs,
     expires_at: new Date(highlightUntil).toISOString(),
     covered: Boolean(resp && resp.covered),
+    offscreen: Boolean(resp && resp.offscreen),
   };
 }
 
@@ -539,10 +607,16 @@ export async function spotlightReshow(tabId) {
   if (!st || !st.lastDraw) return;
   const settings = await spotlightSettings();
   if (!settings.enabled) return;
+  // A reshow is a fresh draw for safety purposes: the page under the stored
+  // query may have changed (an SPA step swap, a navigation the worker state
+  // missed), so the origin gate and the sensitive check both run again.
+  let tab = null;
+  try { tab = await chrome.tabs.get(tabId); } catch (e) {}
+  if (tab && isSensitiveOrigin(tab.url, settings.allowlist)) return;
   const draw = { ...st.lastDraw };
   if (draw.query) {
     const r = await execInTab(tabId, page.pageSpotlightResolve, [draw.query, { kind: draw.kind || "target", index: draw.index }]);
-    if (!r || !r.found) return;
+    if (!r || !r.found || r.sensitive) return;
     draw.targetKey = r.targetKey;
     draw.rect = null;
     draw.descriptor = r.descriptor;
@@ -554,6 +628,9 @@ export async function spotlightReshow(tabId) {
 export async function spotlightEvent(tabId, evt) {
   const st = spotlightTabs.get(tabId);
   if (!st) return;
+  // Events carry the generation of the highlight they describe; one from a
+  // replaced draw must never act on the highlight that replaced it.
+  if (typeof evt.generation === "number" && st.generation && evt.generation !== st.generation) return;
   if (evt.type === "cleared") {
     const label = st.showing ? st.label : null;
     if (st.showing) markSpotlightCleared(tabId, evt.reason);
@@ -577,10 +654,19 @@ export async function spotlightEvent(tabId, evt) {
     const r = await execInTab(tabId, page.pageSpotlightResolve, [st.lastDraw.query, { kind: st.lastDraw.kind || "target", index: st.lastDraw.index }]);
     // Rebind only to the same element: an index into a shifted list can land
     // on a different row, and pointing at the wrong element is worse than
-    // reporting the target gone.
+    // reporting the target gone. The check needs a positive identity signal:
+    // matching names when both sides have one, or an anchored query kind
+    // (selector/ref) whose query itself is the identity. Two unnamed same-tag
+    // elements prove nothing.
     const prevDesc = st.lastDraw.descriptor;
-    const sameTarget = !prevDesc || !r || !r.descriptor ||
-      (prevDesc.tag === r.descriptor.tag && prevDesc.name === r.descriptor.name);
+    let sameTarget = false;
+    if (r && r.found && r.descriptor) {
+      if (prevDesc && prevDesc.name && r.descriptor.name) {
+        sameTarget = prevDesc.tag === r.descriptor.tag && prevDesc.name === r.descriptor.name;
+      } else if (st.lastDraw.kind === "selector" || st.lastDraw.kind === "ref") {
+        sameTarget = !prevDesc || prevDesc.tag === r.descriptor.tag;
+      }
+    }
     if (r && r.found && !r.sensitive && sameTarget) {
       const settings = await spotlightSettings();
       const draw = { ...st.lastDraw, targetKey: r.targetKey, descriptor: r.descriptor, rect: null };
@@ -609,15 +695,13 @@ export async function spotlightTakeover(tabId, reason) {
 
 export function spotlightSessionEnd() {
   spotlightSession += 1;
-  try { chrome.storage.session.set({ spotlightSession }); } catch (e) {}
   for (const [tabId, st] of spotlightTabs) {
     if (st.showing) {
       spotlightSend(tabId, { op: "session_end", session: spotlightSession });
-      st.showing = false;
-      st.clearedReason = "session_end";
-      st.clearedAt = Date.now();
+      markSpotlightCleared(tabId, "session_end");
     }
   }
+  persistSpotlightState();
 }
 
 export async function spotlightSettingsChanged() {
@@ -630,12 +714,72 @@ export async function spotlightSettingsChanged() {
     } else if (settings.neverDim && st.mode === "spotlight") {
       await spotlightSend(tabId, { op: "settings", neverDim: true });
       st.mode = "ring";
+    } else {
+      // Revoking the current origin's allowlist ends a showing highlight
+      // with the settings reason, like the enable toggle does.
+      let tab = null;
+      try { tab = await chrome.tabs.get(tabId); } catch (e) {}
+      if (tab && isSensitiveOrigin(tab.url, settings.allowlist)) {
+        await spotlightSend(tabId, { op: "clear", reason: "settings" });
+        markSpotlightCleared(tabId, "settings");
+      }
     }
   }
 }
 
 export function spotlightTabClosed(tabId) {
   spotlightTabs.delete(tabId);
+  persistSpotlightState();
+}
+
+// Top-frame navigation ends the document the highlight was drawn into. The
+// worker state must end with it - and the stored query must go too, so a
+// later reshow can never re-resolve it against a different origin.
+export function spotlightNavigation(tabId) {
+  const st = spotlightTabs.get(tabId);
+  if (!st) return;
+  if (st.showing) markSpotlightCleared(tabId, "navigation");
+  st.lastDraw = null;
+  st.label = null;
+  st.rect = null;
+  persistSpotlightState();
+}
+
+export function spotlightModeOf(tabId) {
+  const st = spotlightTabs.get(tabId);
+  return st && st.showing ? st.mode : null;
+}
+
+// Lifetime precedence: an agent action whose target is the highlighted
+// element clears the highlight, ~800ms after the action executes, so "about
+// to click Save" is not erased by the click it announces. Read-only actions
+// never clear. Called from dispatch() with the resolved tab and the result.
+const SPOTLIGHT_ACTION_CLEAR_MS = 800;
+const TARGETED_MUTATIONS = new Set([
+  "click", "dblclick", "rightclick", "drag", "type", "fill",
+  "check", "check_radio", "select_radio", "select", "upload",
+]);
+function maybeScheduleSpotlightActionClear(tabId, cmd) {
+  const st = spotlightTabs.get(tabId);
+  if (!st || !st.showing || !st.lastDraw) return;
+  if (!TARGETED_MUTATIONS.has(cmd.action)) return;
+  const p = cmd.params || {};
+  const q = p.target || p.selector || p.ref || p.text || p.of || null;
+  let onTarget = Boolean(q && st.lastDraw.query && String(q) === String(st.lastDraw.query));
+  if (!onTarget && st.rect && hasCoords(p)) {
+    const x = Number(p.x), y = Number(p.y);
+    onTarget = x >= st.rect.x && x <= st.rect.x + st.rect.width
+      && y >= st.rect.y && y <= st.rect.y + st.rect.height;
+  }
+  if (!onTarget) return;
+  const generation = st.generation;
+  setTimeout(() => {
+    const now = spotlightTabs.get(tabId);
+    if (now && now.showing && now.generation === generation) {
+      spotlightSend(tabId, { op: "clear", reason: "action" });
+      markSpotlightCleared(tabId, "action");
+    }
+  }, SPOTLIGHT_ACTION_CLEAR_MS);
 }
 
 export async function execute(cmd) {
@@ -949,7 +1093,8 @@ export async function execute(cmd) {
         }
         if (elementQuery && hasPoint) return fail("bad_params", "spotlight takes either an element target or coordinates, not both");
         if (!elementQuery && !hasPoint && !hasRect) return fail("bad_params", "spotlight requires ref, target, selector, text, x/y, or rect");
-        if (!mode) mode = elementQuery ? "ring" : "point";
+        if (p.mode === "point" && hasRect) return fail("bad_params", "point mode takes coordinates, not a rect");
+        if (!mode) mode = elementQuery || hasRect ? "ring" : "point";
         if (mode === "point" && elementQuery) return fail("bad_params", "point mode takes coordinates, not an element target");
         if (mode !== "point" && !elementQuery && hasRect === false && hasPoint) {
           return fail("bad_params", `${mode} mode needs an element target or a rect; bare coordinates are point mode`);
@@ -959,8 +1104,8 @@ export async function execute(cmd) {
         }
 
         const st = spotlightState(tid);
-        if (label && st.label && Date.now() - st.labelAt < LABEL_REPLACE_WINDOW_MS) {
-          return fail("rate_limited", "A labelled highlight was drawn on this tab less than 2s ago; the current one is unchanged. Wait, or clear it first with spotlight_clear.");
+        if (label && st.labelAt && Date.now() - st.labelAt < LABEL_REPLACE_WINDOW_MS) {
+          return fail("rate_limited", "A labelled highlight was drawn on this tab less than 2s ago; labelled draws are limited to one per 2s per tab. Wait for the window to pass, then retry.");
         }
 
         let downgradedReason = null;
@@ -1015,18 +1160,34 @@ export async function execute(cmd) {
             drawArgs.mediaKey = hit.targetKey;
             if (typeof p.media_time === "number") drawArgs.mediaTs = Number(p.media_time);
           }
-          if (typeof p.scale_factor === "number") resultExtra.scale_factor = Number(p.scale_factor);
           resultExtra.descriptor = drawArgs.descriptor;
           resultExtra.rect = { x, y, width: 0, height: 0 };
           resultExtra.in_view = true;
         } else if (hasRect) {
           const rect = { x: Number(p.rect.x) || 0, y: Number(p.rect.y) || 0, width: Number(p.rect.width), height: Number(p.rect.height) };
           if (!(rect.width > 0 && rect.height > 0)) return fail("bad_params", "rect needs positive width and height");
-          const probes = [
-            [rect.x + rect.width / 2, rect.y + rect.height / 2],
-            [rect.x + 2, rect.y + 2], [rect.x + rect.width - 2, rect.y + 2],
-            [rect.x + 2, rect.y + rect.height - 2], [rect.x + rect.width - 2, rect.y + rect.height - 2],
-          ];
+          const vp = await execInTab(tid, () => ({ w: window.innerWidth, h: window.innerHeight }));
+          // The safety probes and the bad_params rule both work on the part
+          // of the rect the user can actually see.
+          const ix = Math.max(0, rect.x), iy = Math.max(0, rect.y);
+          const ix2 = vp ? Math.min(vp.w, rect.x + rect.width) : rect.x + rect.width;
+          const iy2 = vp ? Math.min(vp.h, rect.y + rect.height) : rect.y + rect.height;
+          if (vp && (ix2 <= ix || iy2 <= iy)) {
+            return fail("bad_params", `Rect ${rect.x},${rect.y} ${rect.width}x${rect.height} is outside the viewport (${vp.w}x${vp.h})`);
+          }
+          // Grid probes over the visible intersection: five fixed points let
+          // a field sitting between them be framed completely unchecked.
+          const probes = [];
+          const cols = Math.max(2, Math.min(4, Math.ceil((ix2 - ix) / 160) + 1));
+          const rows = Math.max(2, Math.min(4, Math.ceil((iy2 - iy) / 160) + 1));
+          for (let cx = 0; cx < cols; cx++) {
+            for (let cy = 0; cy < rows; cy++) {
+              probes.push([
+                Math.min(ix2 - 1, ix + ((ix2 - ix) * (cx + 0.5)) / cols),
+                Math.min(iy2 - 1, iy + ((iy2 - iy) * (cy + 0.5)) / rows),
+              ]);
+            }
+          }
           for (const [px, py] of probes) {
             const hit = await execInTab(tid, page.pageSpotlightHitTest, [px, py]);
             if (hit && hit.sensitive && !generic) {
@@ -1035,12 +1196,16 @@ export async function execute(cmd) {
           }
           drawArgs.rect = rect;
           drawArgs.descriptor = { tag: "rect", role: "", name: "" };
-          resultExtra = { rect, in_view: true };
-          if (mode === "point") { drawArgs.mode = "ring"; mode = "ring"; }
+          resultExtra = { rect, in_view: ix === rect.x && iy === rect.y && ix2 === rect.x + rect.width && iy2 === rect.y + rect.height };
         }
+        if (typeof p.scale_factor === "number") resultExtra.scale_factor = Number(p.scale_factor);
 
         const drawn = await sendSpotlightDraw(tid, drawArgs, settings);
         if (!drawn.success) return drawn;
+        // The content script's post-draw view of the world wins: a target can
+        // sit partly off-screen even when the resolver saw it in view.
+        resultExtra.in_view = !drawn.offscreen;
+        spotlightState(tid).rect = resultExtra.rect || null;
         return {
           success: true,
           mode_effective: drawArgs.mode,
@@ -1611,6 +1776,7 @@ export async function dispatch(cmd) {
     return fail("dialog_open", `A ${open.type} dialog is open: "${open.message}". Call dialog with policy accept or dismiss.`, { dialog: open, tab: tabInfo(tab) });
   }
   const result = NOQUEUE.has(cmd.action) ? await executeTracked(cmd) : await runOnTab(tab.id, () => executeTracked(cmd));
+  if (result && result.success) maybeScheduleSpotlightActionClear(tab.id, cmd);
   if (result && typeof result === "object" && !result.tab) {
     let t = tab;
     try { t = await chrome.tabs.get(tab.id); } catch (e) {}

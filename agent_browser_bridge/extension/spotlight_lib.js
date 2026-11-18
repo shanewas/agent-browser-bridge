@@ -20,6 +20,8 @@ export const SENSITIVE_ORIGIN_HOSTS = [
   "wellsfargo.com", "hsbc.com", "barclays.co.uk", "bracbank.com",
   "1password.com", "bitwarden.com", "lastpass.com", "dashlane.com",
   "mail.google.com", "outlook.live.com", "mail.yahoo.com",
+  "accounts.google.com", "login.microsoftonline.com", "appleid.apple.com",
+  "login.live.com",
 ];
 
 // Trust / urgency / credential phrases an agent may not put in a label. Matched
@@ -37,12 +39,35 @@ const BLOCKED_PHRASES = [
   "パスワードを再入力", "本人確認が必要です", "アカウントが停止",
 ];
 
-const ZERO_WIDTH = /[\u200b-\u200f\u202a-\u202e\u2060\ufeff]/g;
+// Every Unicode format character (zero-width spaces and joiners, bidi marks
+// and overrides, the soft hyphen, the word joiner) is invisible in the chip
+// but splits the token stream, so all of them are stripped before matching -
+// and from the label that is returned for display.
+const INVISIBLES = /[\p{Cf}\u180e\u202a-\u202e\u2066-\u2069]/gu;
+
+// Cyrillic and Greek letters that render identically to Latin ones. A blocked
+// phrase spelled with a homoglyph ("verifiеd" with a Cyrillic е) must fold to
+// the Latin spelling before tokenizing, or the phrase never matches while the
+// chip reads as the plain phrase.
+const CONFUSABLES = {
+  "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+  "і": "i", "ј": "j", "ѕ": "s", "һ": "h", "к": "k", "м": "m", "н": "h",
+  "т": "t", "в": "b", "ԁ": "d",
+  "А": "a", "Е": "e", "О": "o", "Р": "p", "С": "c", "У": "y", "Х": "x",
+  "І": "i", "Ј": "j", "Ѕ": "s", "Һ": "h", "К": "k", "М": "m", "Н": "h",
+  "Т": "t", "В": "b",
+  "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p",
+  "τ": "t", "υ": "y", "χ": "x", "ω": "w", "Α": "a", "Β": "b", "Ε": "e",
+  "Η": "h", "Ι": "i", "Κ": "k", "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p",
+  "Τ": "t", "Χ": "x", "Υ": "y", "Ζ": "z",
+};
+const CONFUSABLE_RE = new RegExp("[" + Object.keys(CONFUSABLES).join("") + "]", "g");
 
 export function normalizeLabelText(s) {
   return String(s == null ? "" : s)
     .normalize("NFKC")
-    .replace(ZERO_WIDTH, "")
+    .replace(INVISIBLES, "")
+    .replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] || ch)
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
@@ -52,41 +77,65 @@ function tokenSet(normalized) {
   return new Set(normalized.split(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff]+/i).filter(Boolean));
 }
 
+const LABEL_REJECT_URL = "Labels may not contain URLs or domains. Describe the element instead.";
+const LABEL_REJECT_TRUST = "Labels may not make trust, urgency or credential claims. Describe what the element is, not why the user should trust it.";
+const SPELLED_TLDS = new Set(["com", "co", "net", "org", "jp", "io", "gov", "edu"]);
+
+// Punctuation and spacing carry no meaning inside a Japanese phrase; matching
+// on the squashed text keeps an inserted 、 or space from defeating the rule.
+function squashCjk(s) {
+  return s.replace(/[\s、。・,.!！?？:：;；「」『』（）()【】\[\]"'“”‘’]/g, "");
+}
+
 // Returns { ok: true, label } or { ok: false, code: "label_rejected", error }.
+// The returned label is the agent's own text with control and invisible
+// characters removed, so what the worker validated is what the chip renders.
 export function validateLabel(raw) {
   if (raw === undefined || raw === null) return { ok: true, label: null };
-  const label = String(raw).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  const label = String(raw)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(INVISIBLES, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!label) return { ok: true, label: null };
   if (label.length > LABEL_MAX_CHARS) {
     return { ok: false, code: "label_rejected", error: `Label is ${label.length} characters; the cap is ${LABEL_MAX_CHARS}. Shorten it.` };
   }
-  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.[a-z]{2,}\b/i.test(label)) {
-    return { ok: false, code: "label_rejected", error: "Labels may not contain URLs or domains. Describe the element instead." };
-  }
   const normalized = normalizeLabelText(label);
+  const stream = normalized.split(/[^a-z0-9]+/i).filter(Boolean);
+  // URL and domain checks run on the normalized text: a fullwidth domain
+  // NFKC-folds to its ASCII spelling, an IPv4 literal needs no TLD, and a
+  // spelled-out "example dot com" is caught as a token pair.
+  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.[a-z]{2,}\b|\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(normalized)) {
+    return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+  }
+  for (let i = 0; i + 1 < stream.length; i++) {
+    if (stream[i] === "dot" && SPELLED_TLDS.has(stream[i + 1])) {
+      return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+    }
+  }
   const tokens = tokenSet(normalized);
+  const squashed = squashCjk(normalized);
   for (const phrase of BLOCKED_PHRASES) {
     const pNorm = normalizeLabelText(phrase);
     if (/[\u3040-\u9fff]/.test(pNorm)) {
-      // Japanese phrases have no token boundaries; substring on the normalized text.
-      if (normalized.includes(pNorm)) {
-        return { ok: false, code: "label_rejected", error: "Labels may not make trust, urgency or credential claims. Describe what the element is, not why the user should trust it." };
+      if (squashed.includes(squashCjk(pNorm))) {
+        return { ok: false, code: "label_rejected", error: LABEL_REJECT_TRUST };
       }
       continue;
     }
     const pTokens = pNorm.split(" ").filter(Boolean);
     if (pTokens.length > 1) {
       // Multi-word phrase: require the words adjacent in the token stream.
-      const stream = normalized.split(/[^a-z0-9]+/i).filter(Boolean);
       let hit = false;
       for (let i = 0; i + pTokens.length <= stream.length; i++) {
         if (pTokens.every((t, j) => stream[i + j] === t)) { hit = true; break; }
       }
       if (hit) {
-        return { ok: false, code: "label_rejected", error: "Labels may not make trust, urgency or credential claims. Describe what the element is, not why the user should trust it." };
+        return { ok: false, code: "label_rejected", error: LABEL_REJECT_TRUST };
       }
     } else if (pTokens.length === 1 && tokens.has(pTokens[0])) {
-      return { ok: false, code: "label_rejected", error: "Labels may not make trust, urgency or credential claims. Describe what the element is, not why the user should trust it." };
+      return { ok: false, code: "label_rejected", error: LABEL_REJECT_TRUST };
     }
   }
   return { ok: true, label };
@@ -107,10 +156,21 @@ export function computeTtlMs({ label, persist, ttlMs, multiplier }) {
 }
 
 export function isSensitiveOrigin(url, allowlist) {
+  const raw = String(url || "");
   let host = "";
-  try { host = new URL(String(url || "")).hostname.toLowerCase(); } catch (e) { return false; }
+  try {
+    const u = new URL(raw);
+    host = u.hostname.toLowerCase();
+    if (!host && u.protocol === "blob:") {
+      // A blob: page inherits its creator's origin; the URL carries it inline.
+      host = new URL(raw.slice(raw.indexOf(":") + 1)).hostname.toLowerCase();
+    }
+  } catch (e) { return false; }
+  host = host.replace(/\.+$/, ""); // a trailing-dot FQDN is the same origin
   if (!host) return false;
-  const allowed = (allowlist || []).map((h) => String(h).toLowerCase().trim()).filter(Boolean);
+  const allowed = (allowlist || [])
+    .map((h) => String(h).toLowerCase().trim().replace(/\.+$/, ""))
+    .filter(Boolean);
   const matches = (list) => list.some((h) => host === h || host.endsWith("." + h));
   if (matches(allowed)) return false;
   return matches(SENSITIVE_ORIGIN_HOSTS);

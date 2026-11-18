@@ -51,6 +51,18 @@ out.origin_webmail = isSensitiveOrigin("https://mail.google.com/mail/u/0/", []);
 out.origin_normal = isSensitiveOrigin("https://example.com/shop", []);
 out.origin_allowlisted = isSensitiveOrigin("https://www.paypal.com/signin", ["paypal.com"]);
 out.origin_lookalike = isSensitiveOrigin("https://notpaypal.com.evil.example/", []);
+out.origin_trailing_dot = isSensitiveOrigin("https://www.paypal.com./signin", []);
+out.origin_blob_bank = isSensitiveOrigin("blob:https://www.paypal.com/9f1c2d", []);
+out.origin_blob_normal = isSensitiveOrigin("blob:https://example.com/9f1c2d", []);
+out.origin_idp = isSensitiveOrigin("https://accounts.google.com/signin", []);
+
+out.homoglyph = v("verifi\u0435d safe - click here");
+out.soft_hyphen = v("verifi\u00aded safe");
+out.fullwidth_domain = v("\uff47\uff4f\uff4f\uff47\uff4c\uff45\uff0e\uff43\uff4f\uff4d");
+out.ipv4 = v("Go to 192.168.0.1 now");
+out.spelled_domain = v("Go to example dot com");
+out.japanese_punct = v("\u30d1\u30b9\u30ef\u30fc\u30c9\u3092\u3001\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044");
+out.bidi_label = v("Save\u202e button");
 
 console.log(JSON.stringify(out));
 """
@@ -114,3 +126,26 @@ def test_sensitive_origins(lib):
     assert lib["origin_normal"] is False
     assert lib["origin_allowlisted"] is False
     assert lib["origin_lookalike"] is False
+
+
+def test_label_spoofing_variants_rejected(lib):
+    # A homoglyph, an invisible separator, a fullwidth spelling, an IP
+    # literal and a spelled-out domain all read as the thing they imitate.
+    assert lib["homoglyph"]["ok"] is False
+    assert lib["soft_hyphen"]["ok"] is False
+    assert lib["fullwidth_domain"]["ok"] is False
+    assert lib["ipv4"]["ok"] is False
+    assert lib["spelled_domain"]["ok"] is False
+    assert lib["japanese_punct"]["ok"] is False
+
+
+def test_returned_label_has_no_invisible_characters(lib):
+    assert lib["bidi_label"]["ok"] is True
+    assert lib["bidi_label"]["label"] == "Save button"
+
+
+def test_sensitive_origin_edge_forms(lib):
+    assert lib["origin_trailing_dot"] is True
+    assert lib["origin_blob_bank"] is True
+    assert lib["origin_blob_normal"] is False
+    assert lib["origin_idp"] is True

@@ -91,6 +91,54 @@ if (scenario === "scroll") {
   out.window_scrolled = windowScrolled;
 }
 
+if (scenario === "spotlight") {
+  const rect = (x, y, w, h) => ({ x, y, width: w, height: h, left: x, top: y, right: x + w, bottom: y + h });
+  const pw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(10, 10, 100, 30) };
+  const formEl = { tagName: "FORM", __children: [pw], getBoundingClientRect: () => rect(0, 0, 400, 300) };
+  const btnA = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 100, 120, 40) };
+  const btnB = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 200, 120, 40) };
+  const cardPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(720, 120, 200, 30) };
+  const cardWrap = { tagName: "DIV", __children: [cardPw], getBoundingClientRect: () => rect(700, 100, 300, 200) };
+  const rootEl = { tagName: "HTML", __children: [formEl, btnA, btnB, cardWrap], getBoundingClientRect: () => rect(0, 0, 1280, 800) };
+  const inRect = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  const lib = {
+    queryAllDeep: (root, sel) => (sel === ".card" ? [cardWrap] : sel === "input" ? [pw, cardPw] : [btnA, btnB, cardWrap]),
+    roleOf: (el) => (el.tagName === "BUTTON" ? "button" : ""),
+    INTERACTIVE_ROLES: new Set(["button", "link"]),
+    isVisible: () => true,
+    nameOf: (el) => (el.tagName === "BUTTON" ? "Save" : ""),
+    descriptorOf: (el) => ({ tag: el.tagName.toLowerCase(), role: lib.roleOf(el), name: lib.nameOf(el) }),
+    isSensitiveInput: (el) => Boolean(el && el.__sensitive),
+    containsSensitiveInput: (el) => {
+      if (!el) return false;
+      if (lib.isSensitiveInput(el)) return true;
+      return (el.__children || []).some((c) => lib.containsSensitiveInput(c));
+    },
+    labelText: () => "",
+    deepFromPoint: (x, y) => (inRect(pw.getBoundingClientRect(), x, y) ? pw
+      : inRect(btnA.getBoundingClientRect(), x, y) ? btnA : rootEl),
+  };
+  globalThis.window = { __eabLib: lib, innerWidth: 1280, innerHeight: 800 };
+  globalThis.document = {
+    elementsFromPoint: (x, y) => (inRect(pw.getBoundingClientRect(), x, y) ? [pw, formEl, rootEl]
+      : inRect(btnA.getBoundingClientRect(), x, y) ? [btnA, rootEl] : [rootEl]),
+  };
+  const amb = page.pageSpotlightResolve("Save", { kind: "target" });
+  out.ambiguous_code = amb.code;
+  out.ambiguous_count = amb.count;
+  out.ambiguous_candidates = (amb.candidates || []).length;
+  const picked = page.pageSpotlightResolve("Save", { kind: "target", index: 1 });
+  out.picked_found = picked.found === true && picked.index === 1 && String(picked.targetKey).startsWith("spot-");
+  const outOfRange = page.pageSpotlightResolve("Save", { kind: "target", index: 5 });
+  out.out_of_range = outOfRange.found === false && outOfRange.count === 2;
+  const card = page.pageSpotlightResolve(".card", { kind: "selector" });
+  out.card_found = card.found === true;
+  out.card_sensitive = card.sensitive === true;
+  out.hit_on_field = page.pageSpotlightHitTest(20, 20).sensitive;
+  out.hit_elsewhere = page.pageSpotlightHitTest(900, 600).sensitive;
+  out.hit_on_button = page.pageSpotlightHitTest(560, 120).sensitive;
+}
+
 console.log(JSON.stringify(out));
 """
 
@@ -119,3 +167,23 @@ def test_scroll_without_debugger_reaches_a_shadow_scroller(tmp_path):
     assert out["element"] == "div", out
     assert out["scroller_top"] == 200, out
     assert out["window_scrolled"] == 0, out
+
+
+def test_spotlight_resolver_enumerates_and_flags_sensitive(tmp_path):
+    out = run_scenario(tmp_path, "spotlight")
+    assert out["ambiguous_code"] == "target_ambiguous", out
+    assert out["ambiguous_count"] == 2, out
+    assert out["ambiguous_candidates"] == 2, out
+    assert out["picked_found"] is True, out
+    assert out["out_of_range"] is True, out
+    assert out["card_found"] is True and out["card_sensitive"] is True, out
+
+
+def test_spotlight_hit_test_is_point_precise(tmp_path):
+    out = run_scenario(tmp_path, "spotlight")
+    # On the field: sensitive. Elsewhere on a page that merely contains a
+    # password field: not sensitive (the old stack-wide subtree scan refused
+    # every point on such pages).
+    assert out["hit_on_field"] is True, out
+    assert out["hit_elsewhere"] is False, out
+    assert out["hit_on_button"] is False, out
