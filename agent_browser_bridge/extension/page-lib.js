@@ -234,9 +234,39 @@
     return el;
   }
 
+  // Spotlight safety: a field whose value must never be framed by an agent
+  // treatment - password, one-time-code and payment inputs.
+  const SENSITIVE_AUTOCOMPLETE = new Set([
+    "current-password", "new-password", "one-time-code",
+    "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-type", "cc-name",
+  ]);
+  const SENSITIVE_NAME_RX = /(card.?number|cc.?num|cvv|cvc|otp|one.?time|passcode)/i;
+
+  function isSensitiveInput(el) {
+    if (!el || el.tagName !== "INPUT") return false;
+    const type = (el.getAttribute("type") || "text").toLowerCase();
+    if (type === "password") return true;
+    const ac = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/).pop();
+    if (ac && SENSITIVE_AUTOCOMPLETE.has(ac)) return true;
+    const hint = `${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`;
+    return SENSITIVE_NAME_RX.test(hint);
+  }
+
+  function containsSensitiveInput(el) {
+    if (!el || !el.querySelectorAll) return false;
+    if (isSensitiveInput(el)) return true;
+    return [...el.querySelectorAll("input")].some(isSensitiveInput);
+  }
+
+  function descriptorOf(el) {
+    if (!el || !el.tagName) return { tag: "", role: "", name: "" };
+    const role = roleOf(el);
+    return { tag: el.tagName.toLowerCase(), role, name: nameOf(el, role) || labelText(el) || "" };
+  }
+
   window.__eabLib = {
     INTERACTIVE_ROLES, CONTAINER_TAGS, roleOf, nameOf, ownText, collapse, labelText, isVisible,
     childElements, queryAllDeep, rectOf, center, highlight, frameInfo, iframeIndex,
-    deepFromPoint, deepActive, controlAt
+    deepFromPoint, deepActive, controlAt, isSensitiveInput, containsSensitiveInput, descriptorOf
   };
 })();

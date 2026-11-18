@@ -1,6 +1,6 @@
 // Agent Browser Bridge - service worker transport.
 // One WebSocket to the local daemon; hello on open, pong on ping, commands go to dispatch().
-import { dispatch, setActivityHook, setPauseGate } from "./actions.js";
+import { dispatch, setActivityHook, setPauseGate, spotlightEvent, spotlightTakeover, spotlightSessionEnd, spotlightSettingsChanged, spotlightTabClosed } from "./actions.js";
 
 const WS_URL = "ws://127.0.0.1:18999/ws";
 const MAX_BACKOFF_MS = 5000;
@@ -181,6 +181,8 @@ async function connectWebSocket(force = false) {
 
     ws.onclose = (event) => {
       bridgeWs = null;
+      // The daemon session ended: no highlight may outlive it.
+      try { spotlightSessionEnd(); } catch (e) {}
       if (event && (event.code === 4001 || event.code === 4002)) {
         // Rejected (4001 pairing, 4002 another browser holds the bridge): reconnecting only
         // repeats the rejection, including from the watchdog alarm. Stay down until a token
@@ -268,7 +270,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 // ---------------------------------------------------------------------------
 
 const BANNER_METADATA = new Set(["ping", "status", "tabs", "list_tabs", "tab", "get_active_tab"]);
-const BANNER_READONLY = new Set(["snapshot", "text", "elements", "interactive", "console", "wait", "wait_for", "history_search", "group_list"]);
+const BANNER_READONLY = new Set(["snapshot", "text", "elements", "interactive", "console", "wait", "wait_for", "history_search", "group_list", "spotlight", "spotlight_clear", "spotlight_status"]);
 const VERB_FOR = {
   click: "Clicking", dblclick: "Clicking", rightclick: "Clicking", drag: "Dragging",
   fill: "Typing", type: "Typing", key: "Typing", nav: "Navigating", back: "Navigating",
@@ -426,7 +428,7 @@ function sendPauseSnapshot() {
   } catch (e) {}
 }
 
-async function setPaused(tabId, paused, sendToDaemon = true) {
+async function setPaused(tabId, paused, sendToDaemon = true, source = "takeover") {
   await pausedReady;
   if (paused) pausedTabs.add(tabId); else pausedTabs.delete(tabId);
   persistPaused();
@@ -435,7 +437,12 @@ async function setPaused(tabId, paused, sendToDaemon = true) {
     try { chrome.storage.local.set({ bannerTookOver: true }); } catch (e) {}
     const w = workingTabs.get(tabId);
     bannerSend(tabId, { state: "takenover", agent: w && w.agent });
+    // A takeover ends any Spotlight pointing on the tab; a labelled one leaves
+    // its text in the pill as a re-showable "Last point".
+    const label = await spotlightTakeover(tabId, source === "pill" ? "pill" : "takeover");
+    if (label) bannerSend(tabId, { state: "lastpoint", label });
   } else {
+    bannerSend(tabId, { state: "lastpoint_clear" });
     bannerSend(tabId, { state: "hidden" });
   }
   iconFor(tabId);
@@ -446,6 +453,13 @@ function applyDaemonPauseState(tabId, paused) {
   if (paused) pausedTabs.add(tabId); else pausedTabs.delete(tabId);
   persistPaused();
   bannerSend(tabId, paused ? { state: "paused", agent: (workingTabs.get(tabId) || {}).agent } : { state: "hidden" });
+  if (paused) {
+    spotlightTakeover(tabId, "takeover").then((label) => {
+      if (label) bannerSend(tabId, { state: "lastpoint", label });
+    }).catch(() => {});
+  } else {
+    bannerSend(tabId, { state: "lastpoint_clear" });
+  }
   iconFor(tabId);
 }
 
@@ -453,7 +467,38 @@ function handleBannerMessage(msg, sender, sendResponse) {
   const tabId = sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : (typeof msg.tabId === "number" ? msg.tabId : null);
   switch (msg.type) {
     case "TAKEOVER":
-      if (tabId !== null) setPaused(tabId, true);
+      if (tabId !== null) setPaused(tabId, true, true, "pill");
+      sendResponse({ ok: true });
+      return true;
+    case "SPOTLIGHT_CLEARED": {
+      // The content script ended a highlight itself (expiry, Esc, target gone
+      // is separate). Esc/pill/takeover endings keep the label in the pill.
+      if (tabId !== null) {
+        spotlightEvent(tabId, { type: "cleared", reason: msg.reason || "cleared" }).then((info) => {
+          if (info && info.label && (msg.reason === "esc" || msg.reason === "pill" || msg.reason === "takeover")) {
+            bannerSend(tabId, { state: "lastpoint", label: info.label });
+          }
+        }).catch(() => {});
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+    case "SPOTLIGHT_TARGET_GONE":
+      if (tabId !== null) spotlightEvent(tabId, { type: "target_gone" }).catch(() => {});
+      sendResponse({ ok: true });
+      return true;
+    case "SPOTLIGHT_USER_SCROLL": {
+      // Same in-flight guard as USER_INPUT: a scroll signal while no command
+      // runs is the user's hand, not the agent's own programmatic scroll.
+      const w = tabId !== null ? workingTabs.get(tabId) : null;
+      if (tabId !== null && (!w || w.inflight === 0)) {
+        spotlightEvent(tabId, { type: "user_scroll" }).catch(() => {});
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+    case "SPOTLIGHT_RESHOW":
+      if (tabId !== null) spotlightEvent(tabId, { type: "reshow" }).catch(() => {});
       sendResponse({ ok: true });
       return true;
     case "RESUME":
@@ -531,6 +576,7 @@ chrome.commands.onCommand.addListener((command) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   workingTabs.delete(tabId);
+  spotlightTabClosed(tabId);
   if (hiddenBannerTabs.delete(tabId)) persistPaused();
   // A paused entry for a closed tab is evicted daemon-side on tab_not_found;
   // the next snapshot resync keeps both sides converged.
@@ -538,5 +584,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 setActivityHook(bannerActivity);
 setPauseGate(bannerPauseGate);
+
+// Spotlight settings are live transitions, not just draw-time inputs: turning
+// the feature off clears showing highlights, never-dim converts them.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (!Object.keys(changes).some((k) => k.startsWith("spotlight"))) return;
+  spotlightSettingsChanged().catch(() => {});
+});
 
 connectWebSocket();

@@ -63,6 +63,9 @@
     ".resume:hover{background:#92400e}",
     ".tip{height:30px;display:flex;align-items:center;padding:0 11px;border-radius:999px;background:rgba(17,17,17,.92);color:#fff;font-size:12px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,.35);opacity:0;transition:opacity .12s ease-out;pointer-events:none;white-space:nowrap}",
     ".tip.on{opacity:1}",
+    ".lastpoint{display:none;height:30px;align-items:center;padding:0 11px;border-radius:999px;background:rgba(17,17,17,.92);color:#fff;font-size:12px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:auto;cursor:pointer;white-space:nowrap;max-width:70vw;overflow:hidden;text-overflow:ellipsis}",
+    ".lastpoint.on{display:flex}",
+    ".wrap.lponly .pill{display:none}",
     ".wrap.dot .pill{padding:0 8px}.wrap.dot .label,.wrap.dot .verb,.wrap.dot .x,.wrap.dot .resume,.wrap.dot .tip{display:none}",
     "@media (prefers-reduced-motion: reduce){.wrap{transition:none}.dots i{animation:none;opacity:1}}"
   ].join("\n");
@@ -94,9 +97,32 @@
   var tip = document.createElement("div");
   tip.className = "tip";
   tip.textContent = "Click to take control";
+  var lastpoint = document.createElement("div");
+  lastpoint.className = "lastpoint";
+  var lastpointTimer = null;
   wrap.appendChild(pill);
   wrap.appendChild(tip);
+  wrap.appendChild(lastpoint);
   shadow.appendChild(wrap);
+
+  function clearLastpoint() {
+    lastpoint.classList.remove("on");
+    wrap.classList.remove("lponly");
+    if (lastpointTimer) { clearTimeout(lastpointTimer); lastpointTimer = null; }
+  }
+  function showLastpoint(labelText) {
+    lastpoint.textContent = "Last point: " + labelText;
+    lastpoint.classList.add("on");
+    if (state === "hidden") { wrap.classList.add("on"); wrap.classList.add("lponly"); }
+    if (lastpointTimer) clearTimeout(lastpointTimer);
+    lastpointTimer = setTimeout(clearLastpoint, 60000);
+  }
+  lastpoint.addEventListener("click", function (e) {
+    if (!e.isTrusted) return;
+    e.stopPropagation();
+    clearLastpoint();
+    send({ type: "SPOTLIGHT_RESHOW" });
+  });
 
   // ---- Viewport frame ------------------------------------------------------------
   // Own host: the pill host is transformed (translateX(-50%)), which would make a
@@ -172,6 +198,7 @@
 
   function show(nextState, msg) {
     if (msg && msg.agent) agentName = msg.agent;
+    if (nextState === "working") clearLastpoint();
     verb = (msg && msg.verb) || null;
     var wasHidden = state === "hidden";
     state = nextState;
@@ -197,6 +224,7 @@
     }
     state = "hidden";
     minUntil = 0;
+    clearLastpoint();
     wrap.classList.remove("on");
     tip.classList.remove("on");
     syncFrame();
@@ -269,6 +297,8 @@
   // ---- Worker messages -------------------------------------------------------------
   chrome.runtime.onMessage.addListener(function (msg) {
     if (!msg || msg.type !== "BANNER") return;
+    if (msg.state === "lastpoint") { showLastpoint(msg.label || ""); return; }
+    if (msg.state === "lastpoint_clear") { clearLastpoint(); return; }
     if (msg.state === "working") show("working", msg);
     else if (msg.state === "paused") show("paused", msg);
     else if (msg.state === "takenover") {

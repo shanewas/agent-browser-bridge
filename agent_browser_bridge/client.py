@@ -686,6 +686,56 @@ class Edge:
     def history_delete(self, url: str) -> dict:
         return self.send("history_delete", {"url": url})
 
+    def spotlight(self, ref=None, target=None, selector=None, text=None, x=None, y=None,
+                  rect=None, mode=None, label=None, index=None, persist=False,
+                  ttl_ms=None, generic=False, media_time=None, scale_factor=None,
+                  tab_id=None) -> dict:
+        p: dict = {}
+        if tab_id is not None:
+            p["tabId"] = tab_id
+        if ref is not None:
+            p["ref"] = ref
+        if target is not None:
+            p["target"] = target
+        if selector is not None:
+            p["selector"] = selector
+        if text is not None:
+            p["text"] = text
+        if x is not None and y is not None:
+            p["x"] = x
+            p["y"] = y
+        if rect is not None:
+            p["rect"] = rect
+        if mode is not None:
+            p["mode"] = mode
+        if label is not None:
+            p["label"] = label
+        if index is not None:
+            p["index"] = index
+        if persist:
+            p["persist"] = True
+        if ttl_ms is not None:
+            p["ttl_ms"] = ttl_ms
+        if generic:
+            p["generic"] = True
+        if media_time is not None:
+            p["media_time"] = media_time
+        if scale_factor is not None:
+            p["scale_factor"] = scale_factor
+        return self.send("spotlight", p)
+
+    def spotlight_clear(self, tab_id=None) -> dict:
+        p: dict = {}
+        if tab_id is not None:
+            p["tabId"] = tab_id
+        return self.send("spotlight_clear", p)
+
+    def spotlight_status(self, tab_id=None) -> dict:
+        p: dict = {}
+        if tab_id is not None:
+            p["tabId"] = tab_id
+        return self.send("spotlight_status", p)
+
     def group_list(self, window_id=None) -> dict:
         p = {}
         if window_id is not None:

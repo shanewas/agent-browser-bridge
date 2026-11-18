@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Spotlight: the agent can point at one thing in the page.
+
+- New actions `spotlight`, `spotlight_clear` and `spotlight_status` (CLI `spotlight show/clear/status`, MCP `edge_spotlight` / `edge_spotlight_clear` / `edge_spotlight_status`). Modes: ring around an element, spotlight (page dims, element stays lit), point at coordinates. Matching is enumerated and strict: multiple matches fail with `target_ambiguous` unless `index` picks one, and resolution never scrolls the page. Results report the resolved descriptor, drawn rect, `mode_effective` with `downgraded_reason`, effective TTL and `expires_at`; `spotlight_status` reports why a highlight ended.
+- Labels are plain text, capped at 120 characters, and rendered in a chip that always carries the agent's name. URLs and trust/urgency claims are rejected (`label_rejected`). Password, one-time-code and payment fields are refused (`sensitive_target`), with a neighbouring-target fallback and an extension-written generic chip via `generic: true`. Banking, payment, password-manager and webmail origins are off unless the user allowlists the host (`sensitive_origin`). Popup settings: Spotlight on/off, never-dim, label duration, origin allowlist.
+- Every highlight is appended to a local, user-viewable log in the extension (last 200 entries, byte-budgeted; labelled highlights keep one small composited capture). Highlights clear on TTL, Esc, pill click, takeover, navigation, session end or settings change; draws on a paused tab fail with `tab_paused`.
+- Screenshot results now include `image_width`, `image_height`, `viewport_width`, `viewport_height` and `scale_factor`. Capture hiding for the banner and the Spotlight overlay is now a counted hide/restore pair wrapped in try/finally, so a failed capture can no longer strand an overlay hidden.
+- The daemon advertises the `spotlight` feature; `spotlight_clear` and `spotlight_status` still answer while a tab is paused.
+
 Two extension tails from the 2.6.0 review (#64).
 
 - The fallback ladder's exact rung no longer falls back to a bare tag:

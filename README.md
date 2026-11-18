@@ -212,6 +212,28 @@ client's own name. The pill is how you take the tab back:
 The pill never gets in the agent's way: snapshots skip it, screenshots hide it, and an action
 headed for the point under it fades it first.
 
+## Spotlight: the agent can point
+
+The pill says the agent is working in the window; Spotlight lets it point at one thing
+inside the page. The agent picks an element (or raw coordinates) and a short label, and
+the extension draws a gradient ring around it — or dims the page with the element lit,
+or drops a dot on a chart or image. The label chip always shows which agent is speaking.
+
+The pointing is deliberately constrained, because an agent that can write on any page
+could also imitate one:
+
+- Labels are plain text with a length cap. URLs and trust or urgency claims
+  ("verified", "session expired", "re-enter your password") are rejected.
+- Password, one-time-code and payment fields are never framed. The agent can point at
+  the field's label or error text, or — with a fixed chip the extension writes itself —
+  at the field. On banking, payment, password-manager and webmail sites Spotlight is
+  off unless you allowlist the host in the popup.
+- A highlight never blocks your input and never scrolls the page. Esc or the pill
+  dismisses it, taking the tab back clears it, and it expires on its own timer.
+- Every highlight is written to a local log in the extension (time, page, target,
+  label, how it cleared; labelled ones keep a small capture). Nothing leaves the
+  machine. Popup settings: Spotlight on/off, never dim, label duration, allowlist.
+
 ---
 
 ## Desktop (Windows)

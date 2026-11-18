@@ -51,11 +51,14 @@ PAUSE_ALLOW_ACTIONS = frozenset({
     "ping", "status", "tabs", "daemon", "session_start",
     "session_status", "session_stop", "session_list", "session_prune",
     "mcp-config", "extension",
+    # Spotlight clear/status only report or remove the agent's own overlay;
+    # they never read page content. Draws stay blocked while paused.
+    "spotlight_clear", "spotlight_status",
 })
 USER_TAKEOVER_ERROR = ("The user took control of this tab. "
                        "Do not retry. Tell the user and wait for them to resume.")
 PAUSE_TTL_SEC = 1800.0
-FEATURES = ["banner", "takeover"]
+FEATURES = ["banner", "takeover", "spotlight"]
 
 
 def _takeover_result() -> dict:
