@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.4.0
+
 Spotlight: the agent can point at one thing in the page.
 
 - New actions `spotlight`, `spotlight_clear` and `spotlight_status` (CLI `spotlight show/clear/status`, MCP `edge_spotlight` / `edge_spotlight_clear` / `edge_spotlight_status`). Modes: ring around an element, spotlight (page dims, element stays lit), point at coordinates. Matching is enumerated and strict: multiple matches fail with `target_ambiguous` unless `index` picks one, and resolution never scrolls the page. Results report the resolved descriptor, drawn rect, `mode_effective` with `downgraded_reason`, effective TTL and `expires_at`; `spotlight_status` reports why a highlight ended.
@@ -10,6 +12,7 @@ Spotlight: the agent can point at one thing in the page.
 - Screenshot results now include `image_width`, `image_height`, `viewport_width`, `viewport_height` and `scale_factor`. Capture hiding for the banner and the Spotlight overlay is now a counted hide/restore pair wrapped in try/finally, so a failed capture can no longer strand an overlay hidden.
 - The daemon advertises the `spotlight` feature; `spotlight_clear` and `spotlight_status` still answer while a tab is paused.
 - Spotlight hardening from a five-lens review swarm (59 findings fixed): worker state survives MV3 restarts (per-tab state, generation and session epoch persisted together); navigation clears worker state and drops stored draws; content-script draws report whether they actually applied; the geometry hit test is point-precise instead of subtree-wide; the sensitive-field scan pierces open shadow roots and treats payment-processor iframes as sensitive; label validation folds homoglyphs and strips invisible characters before matching; rect draws are grid-probed and viewport-checked; an agent action on the highlighted element clears it ~800 ms later; interaction inside the highlighted rect no longer triggers a takeover; the presence frame dims while spotlight mode is active.
+- Post-review hardening from an adversarial red-team pass over the shipped Spotlight code: rect draws check the full rect against every sensitive field in the document (fields inside same-origin frames count at their main-frame positions) and fail closed when the check cannot run; the audit log has a minimum draw interval and evicts unlabelled entries before labelled ones, so a flood of draws cannot erase a labelled entry; reshows re-validate stored point and rect draws and refuse when the geometry now sits over a sensitive field; a showing highlight is re-validated when the page mutates under it (in-place content swaps, input type flips), with generic highlights exempt; the sensitive-field scan reads label elements and aria-labelledby text, splits camelCase names, and inspects same-origin frame documents, and the agent guide states the platform limits (closed shadow roots, cross-origin frame contents) instead of implying a guarantee; label validation folds more homoglyph classes, requires a real TLD for spaced or punctuated domains, a path signal for spaced shortener names, and blocks more credential and urgency phrases in English and Japanese.
 
 Two extension tails from the 2.6.0 review (#64).
 
