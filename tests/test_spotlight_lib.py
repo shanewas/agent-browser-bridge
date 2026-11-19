@@ -73,6 +73,16 @@ out.dotless_i = v("ver\u0131fied safe");
 out.small_caps_honest = v("\u1d0dove the panel left");
 out.dotless_honest = v("Kay\u0131t form section");
 
+// F7: readable domains through punctuation and spelling gaps.
+out.spaced_dot = v("go to example . com");
+out.ideographic_dot = v("visit example\u3002com");
+out.spelled_dev = v("visit evil dot dev");
+out.spelled_app = v("visit evil dot app");
+out.spelled_me = v("visit evil dot me");
+out.spaced_shortener = v("open bit ly slash x9");
+out.dot_prose = v("The dot on the chart");
+out.dot_matrix = v("Dot matrix printer label");
+
 console.log(JSON.stringify(out));
 """
 
@@ -163,6 +173,19 @@ def test_f6_honest_labels_with_those_characters_pass(lib):
     # The same characters in words that are not blocked phrases still pass.
     assert lib["small_caps_honest"]["ok"] is True
     assert lib["dotless_honest"]["ok"] is True
+
+
+def test_f7_readable_domains_rejected(lib):
+    for key in ("spaced_dot", "ideographic_dot", "spelled_dev",
+                "spelled_app", "spelled_me", "spaced_shortener"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_f7_dot_in_prose_passes(lib):
+    # "dot" as an ordinary English word is not a spelled-out domain.
+    assert lib["dot_prose"]["ok"] is True
+    assert lib["dot_matrix"]["ok"] is True
 
 
 def test_sensitive_origin_edge_forms(lib):

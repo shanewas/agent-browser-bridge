@@ -77,6 +77,8 @@ const CONFUSABLE_RE = new RegExp("[" + Object.keys(CONFUSABLES).join("") + "]", 
 export function normalizeLabelText(s) {
   return String(s == null ? "" : s)
     .normalize("NFKC")
+    // The ideographic full stop is a dot in a domain; NFKC leaves it alone.
+    .replace(/\u3002/g, ".")
     .replace(INVISIBLES, "")
     .replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] || ch)
     .toLowerCase()
@@ -90,7 +92,25 @@ function tokenSet(normalized) {
 
 const LABEL_REJECT_URL = "Labels may not contain URLs or domains. Describe the element instead.";
 const LABEL_REJECT_TRUST = "Labels may not make trust, urgency or credential claims. Describe what the element is, not why the user should trust it.";
-const SPELLED_TLDS = new Set(["com", "co", "net", "org", "jp", "io", "gov", "edu"]);
+// A fuller common-TLD list, not an any-token rule: "dot" followed by an
+// ordinary word ("the dot on the chart") must still pass, so only real
+// TLD spellings count. Common-word ccTLDs (in, at, be) stay out on purpose.
+const SPELLED_TLDS = new Set([
+  "com", "co", "net", "org", "jp", "io", "gov", "edu", "dev", "app", "me",
+  "ai", "xyz", "info", "biz", "tv", "cc", "us", "uk", "de", "fr", "it",
+  "es", "nl", "ch", "se", "no", "fi", "dk", "ie", "nz", "au", "ca", "kr",
+  "cn", "tw", "hk", "sg", "my", "id", "th", "vn", "ph", "br", "mx", "ar",
+  "za", "il", "ae", "pk", "bd", "ru", "ua", "pl", "cz", "hu", "ro", "gr",
+  "tr", "pt", "eu", "site", "online", "tech", "store", "blog", "news",
+  "cloud", "pro", "name", "asia", "gg", "ly", "gl", "gd", "gy", "fm",
+]);
+
+// Known shortener hosts spelled with the dot dropped ("bit ly slash x9"):
+// the host's dot-split tokens appearing adjacently is the readable domain.
+const SPACED_SHORTENERS = [
+  ["bit", "ly"], ["tinyurl", "com"], ["t", "co"], ["rb", "gy"],
+  ["ow", "ly"], ["buff", "ly"], ["goo", "gl"], ["is", "gd"], ["cutt", "ly"],
+];
 
 // Punctuation and spacing carry no meaning inside a Japanese phrase; matching
 // on the squashed text keeps an inserted 、 or space from defeating the rule.
@@ -116,13 +136,23 @@ export function validateLabel(raw) {
   const stream = normalized.split(/[^a-z0-9]+/i).filter(Boolean);
   // URL and domain checks run on the normalized text: a fullwidth domain
   // NFKC-folds to its ASCII spelling, an IPv4 literal needs no TLD, and a
-  // spelled-out "example dot com" is caught as a token pair.
-  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.[a-z]{2,}\b|\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(normalized)) {
+  // spelled-out "example dot com" is caught as a token pair. Spaces around
+  // a dot carry no meaning in a read-aloud domain ("example . com"), so
+  // they are collapsed before the domain pattern runs.
+  const domainText = normalized.replace(/\s*\.\s*/g, ".");
+  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.[a-z]{2,}\b|\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(domainText)) {
     return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
   }
   for (let i = 0; i + 1 < stream.length; i++) {
     if (stream[i] === "dot" && SPELLED_TLDS.has(stream[i + 1])) {
       return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+    }
+  }
+  for (const seq of SPACED_SHORTENERS) {
+    for (let i = 0; i + seq.length <= stream.length; i++) {
+      if (seq.every((t, j) => stream[i + j] === t)) {
+        return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+      }
     }
   }
   const tokens = tokenSet(normalized);
