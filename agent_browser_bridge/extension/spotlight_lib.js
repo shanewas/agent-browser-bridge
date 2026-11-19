@@ -60,6 +60,17 @@ const CONFUSABLES = {
   "τ": "t", "υ": "y", "χ": "x", "ω": "w", "Α": "a", "Β": "b", "Ε": "e",
   "Η": "h", "Ι": "i", "Κ": "k", "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p",
   "Τ": "t", "Χ": "x", "Υ": "y", "Ζ": "z",
+  // Latin small capitals (UTS#39 skeleton folds them to the plain letter;
+  // NFKC does not), Greek lunate sigma, Latin alpha, dotless i.
+  "\u1d00": "a", "\u0299": "b", "\u1d04": "c", "\u1d05": "d", "\u1d07": "e",
+  "\ua730": "f", "\u0262": "g", "\u029c": "h", "\u026a": "i", "\u1d0a": "j",
+  "\u1d0b": "k", "\u029f": "l", "\u1d0d": "m", "\u0274": "n", "\u1d0f": "o",
+  "\u1d10": "o", "\u1d18": "p", "\ua7af": "q", "\u0280": "r", "\ua731": "s",
+  "\u1d1b": "t", "\u1d1c": "u", "\u1d20": "v", "\u1d21": "w", "\u028f": "y",
+  "\u1d22": "z",
+  // NFKC folds the lunate sigma to final sigma (ς) before this map runs,
+  // so both forms are listed.
+  "\u03f2": "c", "\u03f9": "c", "\u03c2": "c", "\u0251": "a", "\u2c6d": "a", "\u0131": "i",
 };
 const CONFUSABLE_RE = new RegExp("[" + Object.keys(CONFUSABLES).join("") + "]", "g");
 

@@ -64,6 +64,15 @@ out.spelled_domain = v("Go to example dot com");
 out.japanese_punct = v("\u30d1\u30b9\u30ef\u30fc\u30c9\u3092\u3001\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044");
 out.bidi_label = v("Save\u202e button");
 
+// F6: homoglyph classes outside the hand-folded map - Latin small
+// capitals, Greek lunate sigma, Latin alpha, dotless i.
+out.small_caps = v("\u1d20\u1d07\u0280\u026a\ua730\u026a\u1d07\u1d05 \ua731\u1d00\ua730\u1d07");
+out.lunate_sigma = v("offi\u03f2ial notice");
+out.latin_alpha = v("verified s\u0251fe");
+out.dotless_i = v("ver\u0131fied safe");
+out.small_caps_honest = v("\u1d0dove the panel left");
+out.dotless_honest = v("Kay\u0131t form section");
+
 console.log(JSON.stringify(out));
 """
 
@@ -142,6 +151,18 @@ def test_label_spoofing_variants_rejected(lib):
 def test_returned_label_has_no_invisible_characters(lib):
     assert lib["bidi_label"]["ok"] is True
     assert lib["bidi_label"]["label"] == "Save button"
+
+
+def test_f6_homoglyph_classes_rejected(lib):
+    for key in ("small_caps", "lunate_sigma", "latin_alpha", "dotless_i"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_f6_honest_labels_with_those_characters_pass(lib):
+    # The same characters in words that are not blocked phrases still pass.
+    assert lib["small_caps_honest"]["ok"] is True
+    assert lib["dotless_honest"]["ok"] is True
 
 
 def test_sensitive_origin_edge_forms(lib):
