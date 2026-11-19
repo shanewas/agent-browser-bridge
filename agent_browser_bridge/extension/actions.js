@@ -619,6 +619,20 @@ async function sendSpotlightDraw(tabId, drawArgs, settings) {
   };
 }
 
+// A geometry reshow whose stored point/rect now sits over a sensitive
+// field: do not draw, take any showing highlight down, and drop the
+// stored draw so it cannot be reshown again (the navigation path drops
+// stored draws for the same reason). The result is the draw path's own
+// sensitive_target failure, so a caller can tell a refused reshow from
+// a landed one.
+async function refuseSpotlightReshowSensitive(tabId, st) {
+  if (st.showing) await spotlightSend(tabId, { op: "clear", reason: "sensitive_target" });
+  st.lastDraw = null;
+  st.rect = null;
+  markSpotlightCleared(tabId, "sensitive_target");
+  return fail("sensitive_target", "The stored highlight now sits over a sensitive field (password, one-time-code or payment), so it was not reshown.");
+}
+
 export async function spotlightReshow(tabId) {
   const st = spotlightTabs.get(tabId);
   if (!st || !st.lastDraw) return;
@@ -637,8 +651,16 @@ export async function spotlightReshow(tabId) {
     draw.targetKey = r.targetKey;
     draw.rect = null;
     draw.descriptor = r.descriptor;
+  } else if (draw.point && !draw.generic) {
+    // Geometry draws have no query to re-resolve; re-run the same checks
+    // a fresh draw runs (F4). Generic draws are exempt, as on a fresh draw.
+    const hit = await execInTab(tabId, page.pageSpotlightHitTest, [draw.point.x, draw.point.y]);
+    if (hit && hit.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
+  } else if (draw.rect && !draw.generic) {
+    const check = await execInTab(tabId, page.pageSpotlightRectCheck, [draw.rect]);
+    if (check && check.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
   }
-  await sendSpotlightDraw(tabId, draw, settings);
+  return sendSpotlightDraw(tabId, draw, settings);
 }
 
 // Content-script and worker events, routed by background.js.

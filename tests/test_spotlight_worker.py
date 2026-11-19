@@ -66,7 +66,8 @@ globalThis.chrome = {
 
 // ---- page world --------------------------------------------------------------
 const rect = (x, y, w, h) => ({ x, y, width: w, height: h, left: x, top: y, right: x + w, bottom: y + h });
-const pw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(10, 10, 100, 30) };
+let pwRect = rect(10, 10, 100, 30);
+const pw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => pwRect };
 // F1 PoC field below the fold: inside a tall rect's unprobed part only.
 const belowPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 900, 400, 40) };
 const btnSave = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 100, 120, 40) };
@@ -242,6 +243,27 @@ out.flood_log_size = log().length;
 out.flood_evidence_survives = log().some((e) => e.label === "EVIDENCE entry");
 out.flood_fillers_remaining = log().filter((e) => String(e.id).startsWith("filler-")).length;
 
+// 16. F4: geometry reshows re-run the sensitive check. A point draw lands
+// on the button; the page then swaps a password field under the stored
+// point (the PoC scenario); a reshow must refuse and clear, not replay.
+out.reshow_point_draw = await draw(20, { x: 560, y: 120, label: "The button" });
+pwRect = rect(500, 100, 200, 60);
+out.reshow_fresh_control = await draw(21, { x: 560, y: 120, label: "Fresh check" });
+out.reshow_point_result = await actions.spotlightReshow(20);
+out.reshow_point_status = await status(20);
+await actions.spotlightReshow(20);
+out.reshow_point_status_again = await status(20);
+// Same for a stored rect: drawn over a safe area, then a field moves in.
+out.reshow_rect_draw = await draw(22, { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring", label: "Safe area" });
+pwRect = rect(880, 580, 100, 60);
+out.reshow_rect_result = await actions.spotlightReshow(22);
+out.reshow_rect_status = await status(22);
+pwRect = rect(10, 10, 100, 30);
+// A generic draw is allowed over a sensitive field, fresh or reshown.
+out.reshow_generic_draw = await draw(23, { x: 20, y: 20, generic: true });
+out.reshow_generic_result = await actions.spotlightReshow(23);
+out.reshow_generic_status = await status(23);
+
 console.log(JSON.stringify(out));
 """
 
@@ -357,6 +379,28 @@ def test_log_eviction_drops_unlabelled_before_labelled(worker):
     # five unlabelled appends must evict fillers, never it.
     assert worker["flood_evidence_survives"] is True
     assert worker["flood_fillers_remaining"] == 194
+
+
+def test_geometry_reshow_rechecks_sensitive(worker):
+    assert worker["reshow_point_draw"]["success"] is True
+    # Control: a fresh draw at the stored point is now refused.
+    assert worker["reshow_fresh_control"]["code"] == "sensitive_target"
+    # The reshow must refuse the same way, and clear the stored draw.
+    r = worker["reshow_point_result"]
+    assert r["success"] is False and r["code"] == "sensitive_target"
+    assert worker["reshow_point_status"]["showing"] is False
+    assert worker["reshow_point_status"]["cleared_reason"] == "sensitive_target"
+    assert worker["reshow_point_status_again"]["showing"] is False
+    assert worker["reshow_rect_draw"]["success"] is True
+    r2 = worker["reshow_rect_result"]
+    assert r2["success"] is False and r2["code"] == "sensitive_target"
+    assert worker["reshow_rect_status"]["showing"] is False
+
+
+def test_generic_reshow_still_allowed_over_field(worker):
+    assert worker["reshow_generic_draw"]["success"] is True
+    assert worker["reshow_generic_result"]["success"] is True
+    assert worker["reshow_generic_status"]["showing"] is True
 
 
 def test_action_on_highlight_clears_it(worker):
