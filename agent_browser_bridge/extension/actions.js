@@ -1223,6 +1223,9 @@ export async function execute(cmd) {
           // pass replaces the old grid of hit-test probes, which missed
           // any field containing no probe point (F1).
           const check = await execInTab(tid, page.pageSpotlightRectCheck, [rect]);
+          if (!check || check.success === false || check.code) {
+            return fail((check && check.code) || "inject_failed", (check && check.error) || "The Spotlight rect check did not run, so the rect was not drawn");
+          }
           if (check && check.sensitive && !generic) {
             return fail("sensitive_target", "That rect overlaps a sensitive field (password, one-time-code or payment). Shrink the rect to the label or error text, or pass generic:true for a fixed extension-written chip.", { descriptor: check.descriptor });
           }

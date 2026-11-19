@@ -34,17 +34,27 @@ const area = (map) => ({
 });
 let tabUrl = "https://example.com/form";
 let drawResponder = () => ({ applied: true, covered: false, offscreen: false });
+let rectCheckFails = false;
+const drawTabs = [];
 const listener = { addListener() {}, removeListener() {} };
 globalThis.chrome = {
   storage: { local: area(storageLocal), session: area(storageSession), onChanged: listener },
   tabs: {
     get: async (id) => ({ id, url: tabUrl, active: true, windowId: 1, title: "T" }),
     query: async () => [{ id: 1, url: tabUrl, active: true, windowId: 1, title: "T" }],
-    sendMessage: async (id, msg) => (msg && msg.type === "SPOTLIGHT" && msg.op === "draw" ? drawResponder(msg) : {}),
+    sendMessage: async (id, msg) => {
+      if (msg && msg.type === "SPOTLIGHT" && msg.op === "draw") { drawTabs.push(id); return drawResponder(msg); }
+      return {};
+    },
     onRemoved: listener, onUpdated: listener,
     create: async () => ({ id: 99 }), update: async () => ({}),
   },
-  scripting: { executeScript: async ({ func, args }) => [{ result: await func(...(args || [])) }] },
+  scripting: { executeScript: async ({ func, args }) => {
+    // RV-3: simulate the rect-check injection returning no result, so
+    // execInTab answers its inject_failed failure shape.
+    if (rectCheckFails && func && /pageSpotlightRectCheck/.test(func.name || "")) return [{}];
+    return [{ result: await func(...(args || [])) }];
+  } },
   runtime: {
     getManifest: () => ({ version: "4.4.0" }), id: "testext",
     lastError: undefined, onMessage: listener, onConnect: listener,
@@ -264,6 +274,14 @@ out.reshow_generic_draw = await draw(23, { x: 20, y: 20, generic: true });
 out.reshow_generic_result = await actions.spotlightReshow(23);
 out.reshow_generic_status = await status(23);
 
+// 17. RV-3: a rect draw whose sensitive check call itself fails must
+// fail closed: no draw is sent and the result is the check's failure.
+rectCheckFails = true;
+out.rect_check_fail = await draw(24, { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring", label: "Unchecked area" });
+rectCheckFails = false;
+out.rect_check_fail_status = await status(24);
+out.rect_check_fail_draw_count = drawTabs.filter((t) => t === 24).length;
+
 console.log(JSON.stringify(out));
 """
 
@@ -401,6 +419,13 @@ def test_generic_reshow_still_allowed_over_field(worker):
     assert worker["reshow_generic_draw"]["success"] is True
     assert worker["reshow_generic_result"]["success"] is True
     assert worker["reshow_generic_status"]["showing"] is True
+
+
+def test_rect_draw_fails_closed_when_check_fails(worker):
+    assert worker["rect_check_fail"]["success"] is False, worker["rect_check_fail"]
+    assert worker["rect_check_fail"]["code"] == "inject_failed", worker["rect_check_fail"]
+    assert worker["rect_check_fail_status"]["showing"] is False
+    assert worker["rect_check_fail_draw_count"] == 0
 
 
 def test_action_on_highlight_clears_it(worker):
