@@ -152,6 +152,36 @@ if (scenario === "spotlight") {
   }
 }
 
+if (scenario === "spotlight_frame") {
+  const rect = (x, y, w, h) => ({ x, y, width: w, height: h, left: x, top: y, right: x + w, bottom: y + h });
+  // A password field inside a same-origin frame: its own rect is
+  // frame-relative (10,10,100,30), while the frame element sits at
+  // (300,200) in the main page, so on the main page the field occupies
+  // (310,210)-(410,240).
+  const frameDoc = {};
+  const mainDoc = {};
+  const frameView = { parent: { document: mainDoc } };
+  frameDoc.defaultView = frameView;
+  const framePw = { tagName: "INPUT", __sensitive: true, ownerDocument: frameDoc,
+    getBoundingClientRect: () => rect(10, 10, 100, 30) };
+  const frameEl = { tagName: "IFRAME", ownerDocument: mainDoc, contentDocument: frameDoc,
+    getBoundingClientRect: () => rect(300, 200, 400, 300) };
+  const lib = {
+    queryAllDeep: (root, sel) => (sel === "iframe" && root === mainDoc ? [frameEl] : []),
+    descriptorOf: (el) => ({ tag: el.tagName.toLowerCase(), role: "", name: "" }),
+    enumerateSensitiveFields: () => [framePw],
+  };
+  globalThis.window = { __eabLib: lib, innerWidth: 1280, innerHeight: 800 };
+  globalThis.document = mainDoc;
+  out.frame_check_fn = typeof page.pageSpotlightRectCheck;
+  if (out.frame_check_fn === "function") {
+    // A draw rect covering the field's true on-page position flags.
+    out.frame_true_position = page.pageSpotlightRectCheck({ x: 300, y: 200, width: 100, height: 30 }).sensitive;
+    // A draw rect at the frame-relative position alone does not flag.
+    out.frame_relative_position = page.pageSpotlightRectCheck({ x: 10, y: 10, width: 100, height: 30 }).sensitive;
+  }
+}
+
 console.log(JSON.stringify(out));
 """
 
@@ -200,6 +230,15 @@ def test_spotlight_rect_check_is_exact_not_probed(tmp_path):
     assert out["rect_between_probes"] is True, out
     assert out["rect_below_fold"] is True, out
     assert out["rect_clear"] is False, out
+
+
+def test_spotlight_rect_check_offsets_frame_fields(tmp_path):
+    out = run_scenario(tmp_path, "spotlight_frame")
+    assert out["frame_check_fn"] == "function", out
+    # The field's true main-page position is its frame-relative rect
+    # shifted by the frame element's position (300,200).
+    assert out["frame_true_position"] is True, out
+    assert out["frame_relative_position"] is False, out
 
 
 def test_spotlight_hit_test_is_point_precise(tmp_path):
