@@ -1175,24 +1175,14 @@ export async function execute(cmd) {
           if (vp && (ix2 <= ix || iy2 <= iy)) {
             return fail("bad_params", `Rect ${rect.x},${rect.y} ${rect.width}x${rect.height} is outside the viewport (${vp.w}x${vp.h})`);
           }
-          // Grid probes over the visible intersection: five fixed points let
-          // a field sitting between them be framed completely unchecked.
-          const probes = [];
-          const cols = Math.max(2, Math.min(4, Math.ceil((ix2 - ix) / 160) + 1));
-          const rows = Math.max(2, Math.min(4, Math.ceil((iy2 - iy) / 160) + 1));
-          for (let cx = 0; cx < cols; cx++) {
-            for (let cy = 0; cy < rows; cy++) {
-              probes.push([
-                Math.min(ix2 - 1, ix + ((ix2 - ix) * (cx + 0.5)) / cols),
-                Math.min(iy2 - 1, iy + ((iy2 - iy) * (cy + 0.5)) / rows),
-              ]);
-            }
-          }
-          for (const [px, py] of probes) {
-            const hit = await execInTab(tid, page.pageSpotlightHitTest, [px, py]);
-            if (hit && hit.sensitive && !generic) {
-              return fail("sensitive_target", "That rect overlaps a sensitive field (password, one-time-code or payment). Shrink the rect to the label or error text, or pass generic:true for a fixed extension-written chip.", { descriptor: hit.descriptor });
-            }
+          // Exact check over the FULL requested rect (not the visible
+          // intersection above): the stored rect is what renders on
+          // scroll, so a below-fold field counts too. One enumeration
+          // pass replaces the old grid of hit-test probes, which missed
+          // any field containing no probe point (F1).
+          const check = await execInTab(tid, page.pageSpotlightRectCheck, [rect]);
+          if (check && check.sensitive && !generic) {
+            return fail("sensitive_target", "That rect overlaps a sensitive field (password, one-time-code or payment). Shrink the rect to the label or error text, or pass generic:true for a fixed extension-written chip.", { descriptor: check.descriptor });
           }
           drawArgs.rect = rect;
           drawArgs.descriptor = { tag: "rect", role: "", name: "" };

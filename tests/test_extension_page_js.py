@@ -99,6 +99,11 @@ if (scenario === "spotlight") {
   const btnB = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 200, 120, 40) };
   const cardPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(720, 120, 200, 30) };
   const cardWrap = { tagName: "DIV", __children: [cardPw], getBoundingClientRect: () => rect(700, 100, 300, 200) };
+  // F1 PoC fields: one sitting between any grid-probe points of a full
+  // viewport rect, one below the fold in the unprobed part of a tall rect.
+  // Neither is reachable by the point hit test in this stub.
+  const midPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 180, 400, 40) };
+  const belowPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 900, 400, 40) };
   const rootEl = { tagName: "HTML", __children: [formEl, btnA, btnB, cardWrap], getBoundingClientRect: () => rect(0, 0, 1280, 800) };
   const inRect = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   const lib = {
@@ -114,6 +119,7 @@ if (scenario === "spotlight") {
       if (lib.isSensitiveInput(el)) return true;
       return (el.__children || []).some((c) => lib.containsSensitiveInput(c));
     },
+    enumerateSensitiveFields: () => [pw, cardPw, midPw, belowPw],
     labelText: () => "",
     deepFromPoint: (x, y) => (inRect(pw.getBoundingClientRect(), x, y) ? pw
       : inRect(btnA.getBoundingClientRect(), x, y) ? btnA : rootEl),
@@ -137,6 +143,13 @@ if (scenario === "spotlight") {
   out.hit_on_field = page.pageSpotlightHitTest(20, 20).sensitive;
   out.hit_elsewhere = page.pageSpotlightHitTest(900, 600).sensitive;
   out.hit_on_button = page.pageSpotlightHitTest(560, 120).sensitive;
+  // F1: the exact rect check sees fields the grid probes miss.
+  out.rect_check_fn = typeof page.pageSpotlightRectCheck;
+  if (out.rect_check_fn === "function") {
+    out.rect_between_probes = page.pageSpotlightRectCheck({ x: 0, y: 0, width: 1280, height: 800 }).sensitive;
+    out.rect_below_fold = page.pageSpotlightRectCheck({ x: 0, y: 0, width: 1280, height: 1600 }).sensitive;
+    out.rect_clear = page.pageSpotlightRectCheck({ x: 900, y: 600, width: 100, height: 50 }).sensitive;
+  }
 }
 
 console.log(JSON.stringify(out));
@@ -177,6 +190,16 @@ def test_spotlight_resolver_enumerates_and_flags_sensitive(tmp_path):
     assert out["picked_found"] is True, out
     assert out["out_of_range"] is True, out
     assert out["card_found"] is True and out["card_sensitive"] is True, out
+
+
+def test_spotlight_rect_check_is_exact_not_probed(tmp_path):
+    out = run_scenario(tmp_path, "spotlight")
+    assert out["rect_check_fn"] == "function", out
+    # A field between grid probes, and one in the below-fold part of a
+    # tall rect, both intersect the full requested rect.
+    assert out["rect_between_probes"] is True, out
+    assert out["rect_below_fold"] is True, out
+    assert out["rect_clear"] is False, out
 
 
 def test_spotlight_hit_test_is_point_precise(tmp_path):

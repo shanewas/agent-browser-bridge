@@ -804,6 +804,46 @@ export function pageSpotlightHitTest(x, y) {
   return { sensitive, descriptor: L.descriptorOf(top), media, targetKey };
 }
 
+// Spotlight rect safety: exact, not sampled. Enumerate the document's
+// sensitive fields once and test each field's own rect against the FULL
+// requested draw rect. Both rects are viewport-space at draw time, so a
+// below-fold field's rect simply sits outside the viewport in the same
+// space - it must still count, because the stored rect is what renders
+// when the user scrolls. Grid-probing the visible intersection missed
+// any field that contained no probe point (F1).
+export function pageSpotlightRectCheck(rect) {
+  const L = window.__eabLib;
+  if (!L) return { code: "lib_missing" };
+  if (!rect) return { sensitive: false, descriptor: null };
+  const left = Number(rect.x), top = Number(rect.y);
+  const right = left + Number(rect.width), bottom = top + Number(rect.height);
+  if (!(right > left && bottom > top)) return { sensitive: false, descriptor: null };
+  const fields = [];
+  const seen = new Set();
+  const collect = (root) => {
+    if (!root || typeof L.enumerateSensitiveFields !== "function") return;
+    for (const f of L.enumerateSensitiveFields(root) || []) {
+      if (f && !seen.has(f)) { seen.add(f); fields.push(f); }
+    }
+  };
+  collect(document);
+  // A stub or framed root whose document cannot enumerate itself still
+  // gets its element tree checked; in a real page this is the same set.
+  if (document.documentElement && document.documentElement !== document) collect(document.documentElement);
+  for (const f of fields) {
+    if (!f.getBoundingClientRect) continue;
+    const r = f.getBoundingClientRect();
+    const fl = r.left !== undefined ? r.left : r.x;
+    const ft = r.top !== undefined ? r.top : r.y;
+    const fr = r.right !== undefined ? r.right : fl + r.width;
+    const fb = r.bottom !== undefined ? r.bottom : ft + r.height;
+    if (fl < right && fr > left && ft < bottom && fb > top) {
+      return { sensitive: true, descriptor: L.descriptorOf(f) };
+    }
+  }
+  return { sensitive: false, descriptor: null };
+}
+
 export function pageAwaitStill(quiet, max) {
   return new Promise((resolve) => {
     let t;

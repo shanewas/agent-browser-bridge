@@ -67,6 +67,8 @@ globalThis.chrome = {
 // ---- page world --------------------------------------------------------------
 const rect = (x, y, w, h) => ({ x, y, width: w, height: h, left: x, top: y, right: x + w, bottom: y + h });
 const pw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(10, 10, 100, 30) };
+// F1 PoC field below the fold: inside a tall rect's unprobed part only.
+const belowPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 900, 400, 40) };
 const btnSave = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 100, 120, 40) };
 const btnSave2 = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 200, 120, 40) };
 const cardWrap = { tagName: "DIV", __children: [pw], getBoundingClientRect: () => rect(700, 100, 300, 200) };
@@ -85,6 +87,7 @@ const lib = {
   isSensitiveInput: (el) => Boolean(el && el.__sensitive),
   containsSensitiveInput: (el) => Boolean(el) && (lib.isSensitiveInput(el)
     || (el.__children || []).some((c) => lib.containsSensitiveInput(c))),
+  enumerateSensitiveFields: () => [pw, belowPw],
   labelText: () => "",
   frameInfo: async () => ({ x: 0, y: 0 }),
   rectOf: (el) => el.getBoundingClientRect(),
@@ -164,6 +167,11 @@ out.rect_point_mode = await draw(7, { rect: { x: 10, y: 10, width: 100, height: 
 out.rect_over_field = await draw(7, { rect: { x: 0, y: 0, width: 300, height: 120 }, mode: "ring", label: "Form" });
 out.point_ok = await draw(7, { x: 560, y: 120, label: "The button", scale_factor: 2 });
 out.point_on_field = await draw(15, { x: 20, y: 20, label: "The field" });
+// F1: pw sits at (10,10) sized 100x30 - no grid probe of a full-viewport
+// rect lands inside it, yet the exact rect check must refuse the draw.
+// The tall rect's field sits below the fold, in the part probes clamp away.
+out.rect_between_probes = await draw(16, { rect: { x: 0, y: 0, width: 1280, height: 800 }, mode: "ring", label: "Whole form" });
+out.rect_below_fold = await draw(17, { rect: { x: 0, y: 0, width: 1280, height: 1600 }, mode: "ring", label: "Tall section" });
 
 // 9. A dropped draw (content script refused it) is not recorded as showing.
 drawResponder = () => ({ applied: false, reason: "target_missing" });
@@ -279,6 +287,8 @@ def test_geometry_validation(worker):
     p = worker["point_ok"]
     assert p["success"] is True and p["scale_factor"] == 2 and p["in_view"] is True
     assert worker["point_on_field"]["code"] == "sensitive_target"
+    assert worker["rect_between_probes"]["code"] == "sensitive_target"
+    assert worker["rect_below_fold"]["code"] == "sensitive_target"
 
 
 def test_dropped_draw_not_showing(worker):
