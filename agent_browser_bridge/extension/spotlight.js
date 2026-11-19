@@ -348,6 +348,23 @@
     if (!cur || !cur.el) return;
     targetMO = new MutationObserver(function (records) {
       if (writing || !cur) return;
+      // The sensitive re-check scans the whole target subtree, so it
+      // runs at most once per mutation batch (RV-11), whichever kind
+      // of record first calls for it. Generic highlights are exempt:
+      // they are the lawful way to point at a sensitive field, with
+      // the fixed extension-written chip (RV-5).
+      var sensitiveChecked = false;
+      function sensitiveRecheck() {
+        if (sensitiveChecked) return false;
+        sensitiveChecked = true;
+        if (!cur || !cur.el || cur.generic) return false;
+        var Lsub = window.__eabLib;
+        if (Lsub && Lsub.containsSensitiveInput && Lsub.containsSensitiveInput(cur.el)) { onTargetGone(); return true; }
+        return false;
+      }
+      function insideTarget(node) {
+        return Boolean(node && cur.el && (node === cur.el || (cur.el.contains && cur.el.contains(node))));
+      }
       for (var i = 0; i < records.length; i++) {
         var rec = records[i];
         if (rec.type === "childList") {
@@ -365,18 +382,31 @@
           // and still connected (F5). Re-run the sensitive check on the
           // bound element only; a hit goes through the target-gone path,
           // so the worker re-resolves and clears as target_gone.
-          if (rec.target && cur.el.contains && cur.el.contains(rec.target)) {
-            var Lsub = window.__eabLib;
-            if (Lsub && Lsub.containsSensitiveInput && Lsub.containsSensitiveInput(cur.el)) { onTargetGone(); return; }
+          if (insideTarget(rec.target)) {
+            if (sensitiveRecheck()) return;
           }
           scheduleRender();
         }
         if (rec.type === "attributes") {
+          // An input switched to type=password in place (a show-password
+          // toggle on the bound element, or on an input inside it) is
+          // an attribute-only swap the childList check never sees: run
+          // the same sensitive re-check (RV-6).
+          if (rec.attributeName === "type" && insideTarget(rec.target)) {
+            if (sensitiveRecheck()) return;
+            scheduleRender();
+            continue;
+          }
           // Material change: the element's accessible identity moved.
-          var L = window.__eabLib;
-          if (L && cur.el && cur.descriptor) {
-            var now = L.descriptorOf(cur.el);
-            if (now.name && cur.descriptor.name && now.name !== cur.descriptor.name) { onTargetGone(); return; }
+          // Only the target's own class/style records drive this; a
+          // descendant's attribute change says nothing about the
+          // target's identity.
+          if (rec.target === cur.el) {
+            var L = window.__eabLib;
+            if (L && cur.el && cur.descriptor) {
+              var now = L.descriptorOf(cur.el);
+              if (now.name && cur.descriptor.name && now.name !== cur.descriptor.name) { onTargetGone(); return; }
+            }
           }
           scheduleRender();
         }
@@ -386,8 +416,9 @@
       // One observe call for the target carries both option sets: a
       // second observe() on the same target would replace the first
       // call's options. childList+subtree is bounded to the target's
-      // own subtree, for the in-place swap check above.
-      targetMO.observe(cur.el, { attributes: true, attributeFilter: ["class", "style"], childList: true, subtree: true });
+      // own subtree, for the in-place swap check above. "type" is in
+      // the filter for the attribute-only swap check (RV-6).
+      targetMO.observe(cur.el, { attributes: true, attributeFilter: ["class", "style", "type"], childList: true, subtree: true });
       if (cur.el.parentElement) targetMO.observe(cur.el.parentElement, { childList: true });
     } catch (e) {}
     if (typeof ResizeObserver !== "undefined") {
