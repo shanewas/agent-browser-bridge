@@ -218,6 +218,30 @@ out.click14 = await actions.dispatch({ action: "click", params: { tabId: 13, tar
 await sleep(1000);
 out.action_clear_status = await status(13);
 
+// 15. F2: a minimum draw interval applies to ALL draws, labelled or not,
+// and log eviction drops unlabelled entries before labelled ones.
+const safeRect = { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring" };
+out.flood_evidence = await draw(18, { ...safeRect, label: "EVIDENCE entry" });
+out.flood_immediate_unlabelled = await draw(18, { ...safeRect });
+out.flood_other_tab = await draw(19, { ...safeRect });
+await sleep(300);
+out.flood_after_interval = await draw(18, { ...safeRect });
+await sleep(50); // let that draw's log append settle before seeding
+// Eviction exercised through the real append path: seed the log so the
+// labelled evidence entry is the OLDEST of 200 entries, then push five
+// more unlabelled draws (spaced past the draw interval) through it.
+const evEntry = log().find((e) => e.label === "EVIDENCE entry");
+storageLocal.set("spotlightLog", [evEntry,
+  ...Array.from({ length: 199 }, (_, i) => ({ id: `filler-${i}`, label: null, clearedReason: null, capture: null }))]);
+for (let i = 0; i < 5; i++) {
+  await sleep(300);
+  await draw(18, { ...safeRect });
+}
+await sleep(50);
+out.flood_log_size = log().length;
+out.flood_evidence_survives = log().some((e) => e.label === "EVIDENCE entry");
+out.flood_fillers_remaining = log().filter((e) => String(e.id).startsWith("filler-")).length;
+
 console.log(JSON.stringify(out));
 """
 
@@ -315,6 +339,24 @@ def test_session_end_closes_log_entry(worker):
 def test_allowlist_revocation_clears(worker):
     assert worker["draw13"]["success"] is True
     assert worker["allowlist_status"]["cleared_reason"] == "settings"
+
+
+def test_min_draw_interval_covers_unlabelled_draws(worker):
+    assert worker["flood_evidence"]["success"] is True
+    # No label on the second draw: the old code rate-limited labelled
+    # draws only, so this went through and appended a log entry.
+    assert worker["flood_immediate_unlabelled"]["code"] == "rate_limited"
+    # The interval is per tab, and a draw past it succeeds again.
+    assert worker["flood_other_tab"]["success"] is True
+    assert worker["flood_after_interval"]["success"] is True
+
+
+def test_log_eviction_drops_unlabelled_before_labelled(worker):
+    assert worker["flood_log_size"] == 200
+    # The labelled evidence entry was the oldest entry in a full log;
+    # five unlabelled appends must evict fillers, never it.
+    assert worker["flood_evidence_survives"] is True
+    assert worker["flood_fillers_remaining"] == 194
 
 
 def test_action_on_highlight_clears_it(worker):

@@ -323,7 +323,7 @@ export function isPausedFor(tabId, action) {
 // DESIGN v3 notes in the repo history for the full contract.
 // ---------------------------------------------------------------------------
 
-const spotlightTabs = new Map(); // tabId -> {showing, generation, mode, label, clearedReason, clearedAt, lastDraw, labelAt, logId, rect, offscreen}
+const spotlightTabs = new Map(); // tabId -> {showing, generation, mode, label, clearedReason, clearedAt, lastDraw, labelAt, drawAt, logId, rect, offscreen}
 let spotlightGeneration = 0;
 let spotlightSession = 1;
 // Worker state must survive MV3 worker restarts: the epoch and generation
@@ -333,7 +333,7 @@ let spotlightSession = 1;
 // outlives the worker but not the browser session, which is the right life.
 const SPOTLIGHT_STATE_KEY = "spotlightStateV1";
 function defaultSpotlightState() {
-  return { showing: false, generation: 0, mode: null, label: null, clearedReason: null, clearedAt: null, lastDraw: null, labelAt: 0, logId: null, rect: null, offscreen: false };
+  return { showing: false, generation: 0, mode: null, label: null, clearedReason: null, clearedAt: null, lastDraw: null, labelAt: 0, drawAt: 0, logId: null, rect: null, offscreen: false };
 }
 function persistSpotlightState() {
   try {
@@ -371,6 +371,12 @@ const SPOTLIGHT_LOG_MAX_ENTRIES = 200;
 const SPOTLIGHT_LOG_BUDGET_BYTES = 4 * 1024 * 1024;
 const SPOTLIGHT_CAPTURE_MAX_BYTES = 40 * 1024;
 const LABEL_REPLACE_WINDOW_MS = 2000;
+// Every draw, labelled or not, appends an audit-log entry, so every draw
+// is rate-limited: without a floor for unlabelled draws, a flood of them
+// evicted a labelled evidence entry from the 200-entry log in under a
+// second (F2). 250 ms per tab is fast enough for a pointing agent and
+// far too slow to flush the log unnoticed.
+const MIN_DRAW_INTERVAL_MS = 250;
 
 async function spotlightSettings() {
   try {
@@ -423,6 +429,16 @@ function spotlightLogOp(fn) {
   return run;
 }
 
+// Eviction drops the oldest UNLABELLED entry first: a labelled entry is
+// the user's evidence of a specific draw, and a flood of unlabelled draws
+// must not be able to erase it (F2). Labelled entries go only when no
+// unlabelled entry remains.
+function evictSpotlightLogEntry(list) {
+  const idx = list.findIndex((e) => !e.label);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.shift();
+}
+
 async function spotlightLogAppend(entry) {
   return spotlightLogOp(async () => {
     let list = [];
@@ -430,10 +446,10 @@ async function spotlightLogAppend(entry) {
       const d = await chrome.storage.local.get(SPOTLIGHT_LOG_KEY);
       list = Array.isArray(d[SPOTLIGHT_LOG_KEY]) ? d[SPOTLIGHT_LOG_KEY] : [];
       list.push(entry);
-      while (list.length > SPOTLIGHT_LOG_MAX_ENTRIES) list.shift();
+      while (list.length > SPOTLIGHT_LOG_MAX_ENTRIES) evictSpotlightLogEntry(list);
       let size = JSON.stringify(list).length;
       while (size > SPOTLIGHT_LOG_BUDGET_BYTES && list.length > 1) {
-        list.shift();
+        evictSpotlightLogEntry(list);
         size = JSON.stringify(list).length;
       }
       await chrome.storage.local.set({ [SPOTLIGHT_LOG_KEY]: list });
@@ -574,7 +590,8 @@ async function sendSpotlightDraw(tabId, drawArgs, settings) {
   st.generation = generation;
   st.mode = drawArgs.mode;
   st.label = drawArgs.generic ? null : drawArgs.label;
-  if (st.label) st.labelAt = Date.now(); // the rate window tracks labelled draws only
+  if (st.label) st.labelAt = Date.now(); // the 2s window tracks labelled draws only
+  st.drawAt = Date.now(); // the minimum-interval floor tracks every successful draw
   st.offscreen = Boolean(resp.offscreen);
   st.clearedReason = null;
   st.clearedAt = null;
@@ -1106,6 +1123,9 @@ export async function execute(cmd) {
         const st = spotlightState(tid);
         if (label && st.labelAt && Date.now() - st.labelAt < LABEL_REPLACE_WINDOW_MS) {
           return fail("rate_limited", "A labelled highlight was drawn on this tab less than 2s ago; labelled draws are limited to one per 2s per tab. Wait for the window to pass, then retry.");
+        }
+        if (st.drawAt && Date.now() - st.drawAt < MIN_DRAW_INTERVAL_MS) {
+          return fail("rate_limited", `A highlight was drawn on this tab less than ${MIN_DRAW_INTERVAL_MS}ms ago; draws are limited to one per ${MIN_DRAW_INTERVAL_MS}ms per tab. Wait for the interval to pass, then retry.`);
         }
 
         let downgradedReason = null;
