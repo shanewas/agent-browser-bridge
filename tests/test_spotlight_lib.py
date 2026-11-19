@@ -83,6 +83,19 @@ out.spaced_shortener = v("open bit ly slash x9");
 out.dot_prose = v("The dot on the chart");
 out.dot_matrix = v("Dot matrix printer label");
 
+// F8: blocked-phrase paraphrases, English and Japanese.
+out.phrase_type_pw = v("type your password here");
+out.phrase_pw_required = v("password required to continue");
+out.phrase_session_timeout = v("your session timed out");
+out.phrase_signin_again = v("sign in again to continue");
+out.phrase_payment_failed = v("payment failed, update your card");
+out.phrase_pin_ja = v("\u6697\u8a3c\u756a\u53f7\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044");
+out.phrase_pin_ja_form = v("\u6697\u8a3c\u756a\u53f7\u306e\u5165\u529b\u304c\u5fc5\u8981\u3067\u3059");
+out.phrase_session_ja = v("\u30bb\u30c3\u30b7\u30e7\u30f3\u306e\u6709\u52b9\u671f\u9650\u304c\u5207\u308c\u307e\u3057\u305f");
+out.phrase_identity_ja = v("\u672c\u4eba\u78ba\u8a8d\u3092\u304a\u9858\u3044\u3057\u307e\u3059");
+out.phrase_en_nearmiss = v("Password field on the left");
+out.phrase_ja_nearmiss = v("\u756a\u53f7\u3092\u5165\u529b\u3059\u308b\u753b\u9762\u306e\u30dc\u30bf\u30f3");
+
 console.log(JSON.stringify(out));
 """
 
@@ -186,6 +199,21 @@ def test_f7_dot_in_prose_passes(lib):
     # "dot" as an ordinary English word is not a spelled-out domain.
     assert lib["dot_prose"]["ok"] is True
     assert lib["dot_matrix"]["ok"] is True
+
+
+def test_f8_new_blocked_phrases_rejected(lib):
+    for key in ("phrase_type_pw", "phrase_pw_required", "phrase_session_timeout",
+                "phrase_signin_again", "phrase_payment_failed", "phrase_pin_ja",
+                "phrase_pin_ja_form", "phrase_session_ja", "phrase_identity_ja"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_f8_near_miss_controls_pass(lib):
+    # Descriptive text near a credential topic, without the claim or the
+    # demand, still passes in both languages.
+    assert lib["phrase_en_nearmiss"]["ok"] is True
+    assert lib["phrase_ja_nearmiss"]["ok"] is True
 
 
 def test_sensitive_origin_edge_forms(lib):

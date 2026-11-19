@@ -35,8 +35,13 @@ const BLOCKED_PHRASES = [
   "verify your account", "ignore the warning", "ignore this warning",
   "this is safe", "safe to click", "you must click", "click now to avoid",
   "account suspended", "account will be locked", "urgent action required",
+  "type your password here", "password required to continue",
+  "session timed out", "sign in again to continue",
+  "payment failed update your card",
   "公式のお知らせ", "セッションが切れました", "パスワードを入力",
   "パスワードを再入力", "本人確認が必要です", "アカウントが停止",
+  "暗証番号を入力", "暗証番号の入力", "暗証番号を教えて",
+  "セッションの有効期限が切れました", "本人確認をお願いします",
 ];
 
 // Every Unicode format character (zero-width spaces and joiners, bidi marks
