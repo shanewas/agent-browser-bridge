@@ -83,6 +83,13 @@ out.spaced_shortener = v("open bit ly slash x9");
 out.dot_prose = v("The dot on the chart");
 out.dot_matrix = v("Dot matrix printer label");
 
+// RV-7: spaced-dot collapse must only form a domain when the token
+// after the dot is a plausible TLD.
+out.spaced_dot_sorted = v("Results . Sorted by date");
+out.spaced_dot_then = v("Press the button . Then continue");
+out.spaced_dot_dev = v("go to example . dev");
+out.ideographic_spaced = v("visit example \u3002 com");
+
 // F8: blocked-phrase paraphrases, English and Japanese.
 out.phrase_type_pw = v("type your password here");
 out.phrase_pw_required = v("password required to continue");
@@ -199,6 +206,22 @@ def test_f7_dot_in_prose_passes(lib):
     # "dot" as an ordinary English word is not a spelled-out domain.
     assert lib["dot_prose"]["ok"] is True
     assert lib["dot_matrix"]["ok"] is True
+
+
+def test_rv7_spaced_dot_prose_passes(lib):
+    # A sentence period followed by an ordinary word is not a domain:
+    # the token after the dot is not a plausible TLD.
+    assert lib["spaced_dot_sorted"]["ok"] is True
+    assert lib["spaced_dot_then"]["ok"] is True
+
+
+def test_rv7_spaced_dot_domains_still_rejected(lib):
+    # Spaced and ideographic dots still reject when the token after
+    # the dot is a real TLD.
+    for key in ("spaced_dot", "spaced_dot_dev", "ideographic_dot",
+                "ideographic_spaced"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
 
 
 def test_f8_new_blocked_phrases_rejected(lib):
