@@ -282,6 +282,22 @@ rectCheckFails = false;
 out.rect_check_fail_status = await status(24);
 out.rect_check_fail_draw_count = drawTabs.filter((t) => t === 24).length;
 
+// 18. RV-4: an element reshow re-resolves the target. A stored GENERIC
+// element draw must still reshow when the target is (or has become)
+// sensitive - a fresh generic draw there succeeds with the fixed chip -
+// while a stored non-generic draw keeps the current drop behaviour.
+out.reshow_element_generic_draw = await draw(25, { selector: ".card", generic: true });
+const genericDrawsBefore = drawTabs.filter((t) => t === 25).length;
+out.reshow_element_generic_result = (await actions.spotlightReshow(25)) ?? null;
+out.reshow_element_generic_draw_count = drawTabs.filter((t) => t === 25).length - genericDrawsBefore;
+out.reshow_element_generic_status = await status(25);
+out.reshow_element_nongeneric_draw = await draw(26, { target: "Save", label: "Button first" });
+btnSave.__children = [pw];
+const nongenericDrawsBefore = drawTabs.filter((t) => t === 26).length;
+out.reshow_element_nongeneric_result = (await actions.spotlightReshow(26)) ?? null;
+out.reshow_element_nongeneric_draw_count = drawTabs.filter((t) => t === 26).length - nongenericDrawsBefore;
+btnSave.__children = [];
+
 console.log(JSON.stringify(out));
 """
 
@@ -426,6 +442,19 @@ def test_rect_draw_fails_closed_when_check_fails(worker):
     assert worker["rect_check_fail"]["code"] == "inject_failed", worker["rect_check_fail"]
     assert worker["rect_check_fail_status"]["showing"] is False
     assert worker["rect_check_fail_draw_count"] == 0
+
+
+def test_generic_element_reshow_not_dropped_when_sensitive(worker):
+    assert worker["reshow_element_generic_draw"]["success"] is True
+    r = worker["reshow_element_generic_result"]
+    assert r["success"] is True, r
+    assert worker["reshow_element_generic_draw_count"] == 1
+    assert worker["reshow_element_generic_status"]["showing"] is True
+    # The non-generic counterpart keeps the drop behaviour: no result
+    # and no new draw sent.
+    assert worker["reshow_element_nongeneric_draw"]["success"] is True
+    assert worker["reshow_element_nongeneric_result"] is None
+    assert worker["reshow_element_nongeneric_draw_count"] == 0
 
 
 def test_action_on_highlight_clears_it(worker):

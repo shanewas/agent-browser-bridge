@@ -647,7 +647,10 @@ export async function spotlightReshow(tabId) {
   const draw = { ...st.lastDraw };
   if (draw.query) {
     const r = await execInTab(tabId, page.pageSpotlightResolve, [draw.query, { kind: draw.kind || "target", index: draw.index }]);
-    if (!r || !r.found || r.sensitive) return;
+    if (!r || !r.found) return;
+    // Generic draws are exempt from the sensitive refusal, as on a fresh
+    // draw: they carry the fixed extension-written chip, not the label.
+    if (r.sensitive && !draw.generic) return;
     draw.targetKey = r.targetKey;
     draw.rect = null;
     draw.descriptor = r.descriptor;
