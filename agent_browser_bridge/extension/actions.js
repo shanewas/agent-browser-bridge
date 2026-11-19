@@ -658,10 +658,19 @@ export async function spotlightReshow(tabId) {
     // Geometry draws have no query to re-resolve; re-run the same checks
     // a fresh draw runs (F4). Generic draws are exempt, as on a fresh draw.
     const hit = await execInTab(tabId, page.pageSpotlightHitTest, [draw.point.x, draw.point.y]);
-    if (hit && hit.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
+    if (!hit || hit.success === false || hit.code) {
+      // Fail closed like a fresh rect draw (RV-3): a failed re-check
+      // proves nothing about the geometry, so keep the stored draw
+      // (unlike the sensitive refusal, which drops it) and do not draw.
+      return fail((hit && hit.code) || "inject_failed", (hit && hit.error) || "The Spotlight hit test did not run, so the highlight was not reshown");
+    }
+    if (hit.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
   } else if (draw.rect && !draw.generic) {
     const check = await execInTab(tabId, page.pageSpotlightRectCheck, [draw.rect]);
-    if (check && check.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
+    if (!check || check.success === false || check.code) {
+      return fail((check && check.code) || "inject_failed", (check && check.error) || "The Spotlight rect check did not run, so the highlight was not reshown");
+    }
+    if (check.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
   }
   return sendSpotlightDraw(tabId, draw, settings);
 }

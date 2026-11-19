@@ -35,6 +35,7 @@ const area = (map) => ({
 let tabUrl = "https://example.com/form";
 let drawResponder = () => ({ applied: true, covered: false, offscreen: false });
 let rectCheckFails = false;
+let hitTestFails = false;
 const drawTabs = [];
 const listener = { addListener() {}, removeListener() {} };
 globalThis.chrome = {
@@ -53,6 +54,7 @@ globalThis.chrome = {
     // RV-3: simulate the rect-check injection returning no result, so
     // execInTab answers its inject_failed failure shape.
     if (rectCheckFails && func && /pageSpotlightRectCheck/.test(func.name || "")) return [{}];
+    if (hitTestFails && func && /pageSpotlightHitTest/.test(func.name || "")) return [{}];
     return [{ result: await func(...(args || [])) }];
   } },
   runtime: {
@@ -298,6 +300,29 @@ out.reshow_element_nongeneric_result = (await actions.spotlightReshow(26)) ?? nu
 out.reshow_element_nongeneric_draw_count = drawTabs.filter((t) => t === 26).length - nongenericDrawsBefore;
 btnSave.__children = [];
 
+// 19. RV-13: a geometry reshow whose re-check call itself fails must
+// fail closed like a fresh rect draw (RV-3): return the failure, send
+// no draw, and KEEP the stored draw - a failed check proves nothing
+// about the geometry, so a later reshow with a healthy check succeeds.
+out.reshow_checkfail_point_draw = await draw(27, { x: 560, y: 120, label: "Point check fails" });
+const pointDrawsBefore = drawTabs.filter((t) => t === 27).length;
+hitTestFails = true;
+out.reshow_checkfail_point_result = (await actions.spotlightReshow(27)) ?? null;
+hitTestFails = false;
+out.reshow_checkfail_point_draw_count = drawTabs.filter((t) => t === 27).length - pointDrawsBefore;
+out.reshow_checkfail_point_retry = (await actions.spotlightReshow(27)) ?? null;
+out.reshow_checkfail_point_retry_draw_count = drawTabs.filter((t) => t === 27).length - pointDrawsBefore;
+out.reshow_checkfail_point_status = await status(27);
+out.reshow_checkfail_rect_draw = await draw(28, { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring", label: "Rect check fails" });
+const rectDrawsBefore = drawTabs.filter((t) => t === 28).length;
+rectCheckFails = true;
+out.reshow_checkfail_rect_result = (await actions.spotlightReshow(28)) ?? null;
+rectCheckFails = false;
+out.reshow_checkfail_rect_draw_count = drawTabs.filter((t) => t === 28).length - rectDrawsBefore;
+out.reshow_checkfail_rect_retry = (await actions.spotlightReshow(28)) ?? null;
+out.reshow_checkfail_rect_retry_draw_count = drawTabs.filter((t) => t === 28).length - rectDrawsBefore;
+out.reshow_checkfail_rect_status = await status(28);
+
 console.log(JSON.stringify(out));
 """
 
@@ -455,6 +480,26 @@ def test_generic_element_reshow_not_dropped_when_sensitive(worker):
     assert worker["reshow_element_nongeneric_draw"]["success"] is True
     assert worker["reshow_element_nongeneric_result"] is None
     assert worker["reshow_element_nongeneric_draw_count"] == 0
+
+
+def test_geometry_reshow_fails_closed_when_recheck_fails(worker):
+    # Point branch: the hit-test injection fails during reshow.
+    assert worker["reshow_checkfail_point_draw"]["success"] is True
+    r = worker["reshow_checkfail_point_result"]
+    assert r["success"] is False and r["code"] == "inject_failed", r
+    assert worker["reshow_checkfail_point_draw_count"] == 0
+    # The stored draw is kept: a retry with a healthy check succeeds.
+    assert worker["reshow_checkfail_point_retry"]["success"] is True
+    assert worker["reshow_checkfail_point_retry_draw_count"] == 1
+    assert worker["reshow_checkfail_point_status"]["showing"] is True
+    # Rect branch: the rect-check injection fails during reshow.
+    assert worker["reshow_checkfail_rect_draw"]["success"] is True
+    r2 = worker["reshow_checkfail_rect_result"]
+    assert r2["success"] is False and r2["code"] == "inject_failed", r2
+    assert worker["reshow_checkfail_rect_draw_count"] == 0
+    assert worker["reshow_checkfail_rect_retry"]["success"] is True
+    assert worker["reshow_checkfail_rect_retry_draw_count"] == 1
+    assert worker["reshow_checkfail_rect_status"]["showing"] is True
 
 
 def test_action_on_highlight_clears_it(worker):
