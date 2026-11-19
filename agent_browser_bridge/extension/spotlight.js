@@ -358,6 +358,17 @@
           for (var j = 0; j < removed.length; j++) {
             if (removed[j] === cur.el) { onTargetGone(); return; }
           }
+          // A mutation inside the target's own subtree (the parent is not
+          // contained in the target, so sibling records skip this): an
+          // in-place SPA swap can turn a benign container into a sensitive
+          // field under a showing ring, with the element itself unchanged
+          // and still connected (F5). Re-run the sensitive check on the
+          // bound element only; a hit goes through the target-gone path,
+          // so the worker re-resolves and clears as target_gone.
+          if (rec.target && cur.el.contains && cur.el.contains(rec.target)) {
+            var Lsub = window.__eabLib;
+            if (Lsub && Lsub.containsSensitiveInput && Lsub.containsSensitiveInput(cur.el)) { onTargetGone(); return; }
+          }
           scheduleRender();
         }
         if (rec.type === "attributes") {
@@ -372,7 +383,11 @@
       }
     });
     try {
-      targetMO.observe(cur.el, { attributes: true, attributeFilter: ["class", "style"] });
+      // One observe call for the target carries both option sets: a
+      // second observe() on the same target would replace the first
+      // call's options. childList+subtree is bounded to the target's
+      // own subtree, for the in-place swap check above.
+      targetMO.observe(cur.el, { attributes: true, attributeFilter: ["class", "style"], childList: true, subtree: true });
       if (cur.el.parentElement) targetMO.observe(cur.el.parentElement, { childList: true });
     } catch (e) {}
     if (typeof ResizeObserver !== "undefined") {

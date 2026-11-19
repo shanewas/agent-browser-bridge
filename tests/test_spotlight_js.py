@@ -75,8 +75,8 @@ globalThis.addEventListener = (type, fn) => { (windowListeners[type] = windowLis
 globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 const moInstances = [];
 globalThis.MutationObserver = class {
-  constructor(cb) { this.cb = cb; moInstances.push(this); }
-  observe() {}
+  constructor(cb) { this.cb = cb; this.observations = []; moInstances.push(this); }
+  observe(target, opts) { this.observations.push({ target, opts }); }
   disconnect() {}
 };
 globalThis.chrome = {
@@ -258,6 +258,28 @@ await new Promise((r) => setTimeout(r, 1300));
 out.watchdog_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
 targetEl.isConnected = true;
 
+// F5: an in-place SPA swap inside the target's own subtree. Same element,
+// still connected, but its contents turn into a sensitive field: the ring
+// must come down through the target-gone path.
+sent.length = 0;
+targetEl.__swappedSensitive = false;
+targetEl.contains = (o) => o === targetEl;
+globalThis.__eabLib = { containsSensitiveInput: (el) => Boolean(el && el.__swappedSensitive) };
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Container", agent: "Sigil", highlightUntil: Date.now() + 30000,
+  generation: 15, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const swapMO = moInstances[moInstances.length - 1];
+out.swap_observes_target_subtree = swapMO.observations.some((o) => o.target === targetEl
+  && o.opts && o.opts.childList === true && o.opts.subtree === true);
+swapMO.cb([{ type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("div")] }]);
+out.swap_benign_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.swap_benign_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = true;
+swapMO.cb([{ type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("input")] }]);
+out.swap_sensitive_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.swap_sensitive_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = false;
+
 console.log(JSON.stringify(out));
 """
 
@@ -355,3 +377,14 @@ def test_capture_hide_watchdog_restores(spot):
 
 def test_ancestor_removal_caught_by_watchdog(spot):
     assert spot["watchdog_gone_reports"] == 1
+
+
+def test_in_place_swap_to_sensitive_reports_target_gone(spot):
+    # The target's own subtree is observed (childList, subtree bounded
+    # to the target), a benign in-place change is not target-gone, and
+    # a swap that turns the target sensitive is.
+    assert spot["swap_observes_target_subtree"] is True
+    assert spot["swap_benign_gone_reports"] == 0
+    assert spot["swap_benign_stage_on"] is True
+    assert spot["swap_sensitive_gone_reports"] == 1
+    assert spot["swap_sensitive_stage_on"] is False
