@@ -304,8 +304,16 @@ const inputInside = makeEl("input");
 targetEl.contains = (o) => o === targetEl || o === inputInside;
 globalThis.__eabLib = {
   containsSensitiveInput: (el) => { scanCount += 1; return Boolean(el && el.__swappedSensitive); },
-  descriptorOf: () => ({ tag: "div", role: "", name: "Box" }),
+  // Discriminating (RV-15): descriptorOf never returns the stored
+  // descriptor's name ("Box") - not for the target and not for the
+  // descendant. So IF a descendant class record drove the
+  // material-change path, its name comparison would mismatch and
+  // report target-gone; only the rec.target === cur.el gate keeps
+  // the descendant record out of that path and the highlight up.
+  descriptorOf: (el) => ({ tag: "div", role: "", name: el === inputInside ? "Password field" : "Renamed Box" }),
 };
+out.rv6_descendant_descriptor_name = globalThis.__eabLib.descriptorOf(inputInside).name;
+out.rv6_target_descriptor_name = globalThis.__eabLib.descriptorOf(targetEl).name;
 targetEl.__swappedSensitive = true;
 msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
   label: "Container", agent: "Sigil", highlightUntil: Date.now() + 4000,
@@ -449,6 +457,12 @@ def test_type_flip_to_password_reports_target_gone(spot):
     # the sensitive re-check nor the material-change path, and a
     # descendant input's type flip does re-run the sensitive check.
     assert spot["type_observes_type_attribute"] is True
+    # RV-15: the stub is discriminating - descriptorOf returns a name
+    # other than the stored "Box" for both the descendant and the
+    # target, so an ungated material-change path would fire on the
+    # descendant class record. The gate alone keeps it from firing.
+    assert spot["rv6_descendant_descriptor_name"] != "Box"
+    assert spot["rv6_target_descriptor_name"] != "Box"
     assert spot["descendant_class_gone_reports"] == 0
     assert spot["descendant_class_stage_on"] is True
     assert spot["type_flip_gone_reports"] == 1
