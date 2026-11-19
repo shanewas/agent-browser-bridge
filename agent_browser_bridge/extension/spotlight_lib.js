@@ -111,7 +111,9 @@ const SPELLED_TLDS = new Set([
 ]);
 
 // Known shortener hosts spelled with the dot dropped ("bit ly slash x9"):
-// the host's dot-split tokens appearing adjacently is the readable domain.
+// the host's dot-split tokens appearing adjacently plus a following path
+// signal (the token "slash" or a "/") is the readable domain. Adjacency
+// alone also occurs in honest prose ("isn't co-", "a bit ly near").
 const SPACED_SHORTENERS = [
   ["bit", "ly"], ["tinyurl", "com"], ["t", "co"], ["rb", "gy"],
   ["ow", "ly"], ["buff", "ly"], ["goo", "gl"], ["is", "gd"], ["cutt", "ly"],
@@ -163,10 +165,26 @@ export function validateLabel(raw) {
       return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
     }
   }
+  // Token positions in the normalized text, aligned with `stream`, so a
+  // literal "/" between two tokens can be seen - the token stream alone
+  // drops it as a separator.
+  const tokenPos = [...normalized.matchAll(/[a-z0-9]+/g)]
+    .map((m) => ({ start: m.index, end: m.index + m[0].length }));
   for (const seq of SPACED_SHORTENERS) {
     for (let i = 0; i + seq.length <= stream.length; i++) {
-      if (seq.every((t, j) => stream[i + j] === t)) {
+      if (!seq.every((t, j) => stream[i + j] === t)) continue;
+      const after = i + seq.length;
+      // A spaced shortener pair is a domain only with a path signal
+      // after it: the word "slash", or a "/" before the next token.
+      if (stream[after] === "slash") {
         return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+      }
+      const pairEnd = tokenPos[i + seq.length - 1];
+      if (pairEnd) {
+        const nextStart = after < tokenPos.length ? tokenPos[after].start : normalized.length;
+        if (normalized.slice(pairEnd.end, nextStart).includes("/")) {
+          return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+        }
       }
     }
   }

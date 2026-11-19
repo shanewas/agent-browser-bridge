@@ -90,6 +90,13 @@ out.spaced_dot_then = v("Press the button . Then continue");
 out.spaced_dot_dev = v("go to example . dev");
 out.ideographic_spaced = v("visit example \u3002 com");
 
+// RV-8: a spaced shortener pair only counts as a domain when a path
+// signal follows it.
+out.shortener_prose_co = v("This isn't co-branded merch");
+out.shortener_prose_bitly = v("The chart is a bit ly near the top");
+out.shortener_literal_slash = v("open bit ly / x9");
+out.shortener_bare = v("open bit ly x9");
+
 // F8: blocked-phrase paraphrases, English and Japanese.
 out.phrase_type_pw = v("type your password here");
 out.phrase_pw_required = v("password required to continue");
@@ -222,6 +229,25 @@ def test_rv7_spaced_dot_domains_still_rejected(lib):
                 "ideographic_spaced"):
         assert lib[key]["ok"] is False, key
         assert lib[key]["code"] == "label_rejected", key
+
+
+def test_rv8_spaced_shortener_prose_passes(lib):
+    # Adjacent tokens that happen to spell a shortener host, with no
+    # path signal after them, are ordinary prose.
+    assert lib["shortener_prose_co"]["ok"] is True
+    assert lib["shortener_prose_bitly"]["ok"] is True
+
+
+def test_rv8_spaced_shortener_with_path_still_rejected(lib):
+    for key in ("spaced_shortener", "shortener_literal_slash"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_rv8_bare_spaced_shortener_without_path_passes(lib):
+    # Accepted residual: a bare spaced shortener with no "slash" or "/"
+    # after it is indistinguishable from prose, so it now passes.
+    assert lib["shortener_bare"]["ok"] is True
 
 
 def test_f8_new_blocked_phrases_rejected(lib):
