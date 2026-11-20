@@ -75,8 +75,8 @@ globalThis.addEventListener = (type, fn) => { (windowListeners[type] = windowLis
 globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 const moInstances = [];
 globalThis.MutationObserver = class {
-  constructor(cb) { this.cb = cb; moInstances.push(this); }
-  observe() {}
+  constructor(cb) { this.cb = cb; this.observations = []; moInstances.push(this); }
+  observe(target, opts) { this.observations.push({ target, opts }); }
   disconnect() {}
 };
 globalThis.chrome = {
@@ -258,6 +258,114 @@ await new Promise((r) => setTimeout(r, 1300));
 out.watchdog_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
 targetEl.isConnected = true;
 
+// F5: an in-place SPA swap inside the target's own subtree. Same element,
+// still connected, but its contents turn into a sensitive field: the ring
+// must come down through the target-gone path.
+sent.length = 0;
+targetEl.__swappedSensitive = false;
+targetEl.contains = (o) => o === targetEl;
+globalThis.__eabLib = { containsSensitiveInput: (el) => Boolean(el && el.__swappedSensitive) };
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Container", agent: "Sigil", highlightUntil: Date.now() + 30000,
+  generation: 15, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const swapMO = moInstances[moInstances.length - 1];
+out.swap_observes_target_subtree = swapMO.observations.some((o) => o.target === targetEl
+  && o.opts && o.opts.childList === true && o.opts.subtree === true);
+swapMO.cb([{ type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("div")] }]);
+out.swap_benign_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.swap_benign_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = true;
+swapMO.cb([{ type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("input")] }]);
+out.swap_sensitive_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.swap_sensitive_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = false;
+
+// RV-5: a generic highlight on a sensitive container is lawful (the
+// fixed chip, not a label); an in-place childList mutation must not
+// kill it through the F5 re-check.
+sent.length = 0;
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  generic: true, agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 16, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const genericMO = moInstances[moInstances.length - 1];
+targetEl.__swappedSensitive = true;
+genericMO.cb([{ type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("input")] }]);
+out.generic_swap_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.generic_swap_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = false;
+
+// RV-6: a descendant input flipped to type=password in place triggers
+// the sensitive re-check; a class change on a descendant does not.
+// The lib stub counts as sensitive once the flip lands, so any scan
+// driven by the class record would clear the highlight.
+sent.length = 0;
+let scanCount = 0;
+const inputInside = makeEl("input");
+targetEl.contains = (o) => o === targetEl || o === inputInside;
+globalThis.__eabLib = {
+  containsSensitiveInput: (el) => { scanCount += 1; return Boolean(el && el.__swappedSensitive); },
+  // Discriminating (RV-15): descriptorOf never returns the stored
+  // descriptor's name ("Box") - not for the target and not for the
+  // descendant. So IF a descendant class record drove the
+  // material-change path, its name comparison would mismatch and
+  // report target-gone; only the rec.target === cur.el gate keeps
+  // the descendant record out of that path and the highlight up.
+  descriptorOf: (el) => ({ tag: "div", role: "", name: el === inputInside ? "Password field" : "Renamed Box" }),
+};
+out.rv6_descendant_descriptor_name = globalThis.__eabLib.descriptorOf(inputInside).name;
+out.rv6_target_descriptor_name = globalThis.__eabLib.descriptorOf(targetEl).name;
+targetEl.__swappedSensitive = true;
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Container", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 17, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const typeMO = moInstances[moInstances.length - 1];
+out.type_observes_type_attribute = typeMO.observations.some((o) => o.target === targetEl
+  && o.opts && Array.isArray(o.opts.attributeFilter) && o.opts.attributeFilter.includes("type"));
+typeMO.cb([{ type: "attributes", target: inputInside, attributeName: "class" }]);
+out.descendant_class_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.descendant_class_stage_on = stage._classes.has("on");
+typeMO.cb([{ type: "attributes", target: inputInside, attributeName: "type" }]);
+out.type_flip_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.type_flip_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = false;
+
+// RV-11: the sensitive re-check runs at most once per mutation batch,
+// however many in-target childList records the batch carries.
+sent.length = 0;
+scanCount = 0;
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Container", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 18, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const batchMO = moInstances[moInstances.length - 1];
+scanCount = 0;
+batchMO.cb([
+  { type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("div")] },
+  { type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("div")] },
+  { type: "childList", target: targetEl, removedNodes: [], addedNodes: [makeEl("div")] },
+]);
+out.batch_scan_count = scanCount;
+out.batch_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+targetEl.contains = (o) => o === targetEl;
+
+// Confirmation review: a hint-attribute rename in place (a descendant
+// input's name becomes a sensitive hint under a showing ring) must run
+// the same sensitive re-check as a type flip; the hint attributes are
+// in the observer's filter alongside type.
+sent.length = 0;
+targetEl.contains = (o) => o === targetEl || o === inputInside;
+targetEl.__swappedSensitive = true;
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Container", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 19, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const hintMO = moInstances[moInstances.length - 1];
+out.hint_observes_name_attribute = hintMO.observations.some((o) => o.target === targetEl
+  && o.opts && Array.isArray(o.opts.attributeFilter) && o.opts.attributeFilter.includes("name"));
+hintMO.cb([{ type: "attributes", target: inputInside, attributeName: "name" }]);
+out.hint_rename_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.hint_rename_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = false;
+targetEl.contains = (o) => o === targetEl;
+
 console.log(JSON.stringify(out));
 """
 
@@ -355,3 +463,52 @@ def test_capture_hide_watchdog_restores(spot):
 
 def test_ancestor_removal_caught_by_watchdog(spot):
     assert spot["watchdog_gone_reports"] == 1
+
+
+def test_generic_highlight_survives_in_place_mutation(spot):
+    # RV-5: generic draws are exempt from the F5 sensitive re-check.
+    assert spot["generic_swap_gone_reports"] == 0
+    assert spot["generic_swap_stage_on"] is True
+
+
+def test_hint_rename_in_place_reports_target_gone(spot):
+    # Confirmation review: the observer watches the hint-bearing
+    # attributes, and a descendant's name rename re-runs the sensitive
+    # check just like a type flip.
+    assert spot["hint_observes_name_attribute"] is True
+    assert spot["hint_rename_gone_reports"] == 1
+    assert spot["hint_rename_stage_on"] is False
+
+
+def test_type_flip_to_password_reports_target_gone(spot):
+    # RV-6: type is observed, a descendant class change drives neither
+    # the sensitive re-check nor the material-change path, and a
+    # descendant input's type flip does re-run the sensitive check.
+    assert spot["type_observes_type_attribute"] is True
+    # RV-15: the stub is discriminating - descriptorOf returns a name
+    # other than the stored "Box" for both the descendant and the
+    # target, so an ungated material-change path would fire on the
+    # descendant class record. The gate alone keeps it from firing.
+    assert spot["rv6_descendant_descriptor_name"] != "Box"
+    assert spot["rv6_target_descriptor_name"] != "Box"
+    assert spot["descendant_class_gone_reports"] == 0
+    assert spot["descendant_class_stage_on"] is True
+    assert spot["type_flip_gone_reports"] == 1
+    assert spot["type_flip_stage_on"] is False
+
+
+def test_sensitive_recheck_runs_once_per_batch(spot):
+    # RV-11: three in-target childList records, one sensitive scan.
+    assert spot["batch_scan_count"] == 1
+    assert spot["batch_gone_reports"] == 0
+
+
+def test_in_place_swap_to_sensitive_reports_target_gone(spot):
+    # The target's own subtree is observed (childList, subtree bounded
+    # to the target), a benign in-place change is not target-gone, and
+    # a swap that turns the target sensitive is.
+    assert spot["swap_observes_target_subtree"] is True
+    assert spot["swap_benign_gone_reports"] == 0
+    assert spot["swap_benign_stage_on"] is True
+    assert spot["swap_sensitive_gone_reports"] == 1
+    assert spot["swap_sensitive_stage_on"] is False

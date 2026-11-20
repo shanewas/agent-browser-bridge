@@ -34,17 +34,29 @@ const area = (map) => ({
 });
 let tabUrl = "https://example.com/form";
 let drawResponder = () => ({ applied: true, covered: false, offscreen: false });
+let rectCheckFails = false;
+let hitTestFails = false;
+const drawTabs = [];
 const listener = { addListener() {}, removeListener() {} };
 globalThis.chrome = {
   storage: { local: area(storageLocal), session: area(storageSession), onChanged: listener },
   tabs: {
     get: async (id) => ({ id, url: tabUrl, active: true, windowId: 1, title: "T" }),
     query: async () => [{ id: 1, url: tabUrl, active: true, windowId: 1, title: "T" }],
-    sendMessage: async (id, msg) => (msg && msg.type === "SPOTLIGHT" && msg.op === "draw" ? drawResponder(msg) : {}),
+    sendMessage: async (id, msg) => {
+      if (msg && msg.type === "SPOTLIGHT" && msg.op === "draw") { drawTabs.push(id); return drawResponder(msg); }
+      return {};
+    },
     onRemoved: listener, onUpdated: listener,
     create: async () => ({ id: 99 }), update: async () => ({}),
   },
-  scripting: { executeScript: async ({ func, args }) => [{ result: await func(...(args || [])) }] },
+  scripting: { executeScript: async ({ func, args }) => {
+    // RV-3: simulate the rect-check injection returning no result, so
+    // execInTab answers its inject_failed failure shape.
+    if (rectCheckFails && func && /pageSpotlightRectCheck/.test(func.name || "")) return [{}];
+    if (hitTestFails && func && /pageSpotlightHitTest/.test(func.name || "")) return [{}];
+    return [{ result: await func(...(args || [])) }];
+  } },
   runtime: {
     getManifest: () => ({ version: "4.4.0" }), id: "testext",
     lastError: undefined, onMessage: listener, onConnect: listener,
@@ -66,7 +78,10 @@ globalThis.chrome = {
 
 // ---- page world --------------------------------------------------------------
 const rect = (x, y, w, h) => ({ x, y, width: w, height: h, left: x, top: y, right: x + w, bottom: y + h });
-const pw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(10, 10, 100, 30) };
+let pwRect = rect(10, 10, 100, 30);
+const pw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => pwRect };
+// F1 PoC field below the fold: inside a tall rect's unprobed part only.
+const belowPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 900, 400, 40) };
 const btnSave = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 100, 120, 40) };
 const btnSave2 = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 200, 120, 40) };
 const cardWrap = { tagName: "DIV", __children: [pw], getBoundingClientRect: () => rect(700, 100, 300, 200) };
@@ -85,6 +100,7 @@ const lib = {
   isSensitiveInput: (el) => Boolean(el && el.__sensitive),
   containsSensitiveInput: (el) => Boolean(el) && (lib.isSensitiveInput(el)
     || (el.__children || []).some((c) => lib.containsSensitiveInput(c))),
+  enumerateSensitiveFields: () => [pw, belowPw],
   labelText: () => "",
   frameInfo: async () => ({ x: 0, y: 0 }),
   rectOf: (el) => el.getBoundingClientRect(),
@@ -164,6 +180,11 @@ out.rect_point_mode = await draw(7, { rect: { x: 10, y: 10, width: 100, height: 
 out.rect_over_field = await draw(7, { rect: { x: 0, y: 0, width: 300, height: 120 }, mode: "ring", label: "Form" });
 out.point_ok = await draw(7, { x: 560, y: 120, label: "The button", scale_factor: 2 });
 out.point_on_field = await draw(15, { x: 20, y: 20, label: "The field" });
+// F1: pw sits at (10,10) sized 100x30 - no grid probe of a full-viewport
+// rect lands inside it, yet the exact rect check must refuse the draw.
+// The tall rect's field sits below the fold, in the part probes clamp away.
+out.rect_between_probes = await draw(16, { rect: { x: 0, y: 0, width: 1280, height: 800 }, mode: "ring", label: "Whole form" });
+out.rect_below_fold = await draw(17, { rect: { x: 0, y: 0, width: 1280, height: 1600 }, mode: "ring", label: "Tall section" });
 
 // 9. A dropped draw (content script refused it) is not recorded as showing.
 drawResponder = () => ({ applied: false, reason: "target_missing" });
@@ -209,6 +230,98 @@ out.draw14 = await draw(13, { target: "Save", label: "Click this" });
 out.click14 = await actions.dispatch({ action: "click", params: { tabId: 13, target: "Save" }, agent: "Sigil" });
 await sleep(1000);
 out.action_clear_status = await status(13);
+
+// 15. F2: a minimum draw interval applies to ALL draws, labelled or not,
+// and log eviction drops unlabelled entries before labelled ones.
+const safeRect = { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring" };
+out.flood_evidence = await draw(18, { ...safeRect, label: "EVIDENCE entry" });
+out.flood_immediate_unlabelled = await draw(18, { ...safeRect });
+out.flood_other_tab = await draw(19, { ...safeRect });
+await sleep(300);
+out.flood_after_interval = await draw(18, { ...safeRect });
+await sleep(50); // let that draw's log append settle before seeding
+// Eviction exercised through the real append path: seed the log so the
+// labelled evidence entry is the OLDEST of 200 entries, then push five
+// more unlabelled draws (spaced past the draw interval) through it.
+const evEntry = log().find((e) => e.label === "EVIDENCE entry");
+storageLocal.set("spotlightLog", [evEntry,
+  ...Array.from({ length: 199 }, (_, i) => ({ id: `filler-${i}`, label: null, clearedReason: null, capture: null }))]);
+for (let i = 0; i < 5; i++) {
+  await sleep(300);
+  await draw(18, { ...safeRect });
+}
+await sleep(50);
+out.flood_log_size = log().length;
+out.flood_evidence_survives = log().some((e) => e.label === "EVIDENCE entry");
+out.flood_fillers_remaining = log().filter((e) => String(e.id).startsWith("filler-")).length;
+
+// 16. F4: geometry reshows re-run the sensitive check. A point draw lands
+// on the button; the page then swaps a password field under the stored
+// point (the PoC scenario); a reshow must refuse and clear, not replay.
+out.reshow_point_draw = await draw(20, { x: 560, y: 120, label: "The button" });
+pwRect = rect(500, 100, 200, 60);
+out.reshow_fresh_control = await draw(21, { x: 560, y: 120, label: "Fresh check" });
+out.reshow_point_result = await actions.spotlightReshow(20);
+out.reshow_point_status = await status(20);
+await actions.spotlightReshow(20);
+out.reshow_point_status_again = await status(20);
+// Same for a stored rect: drawn over a safe area, then a field moves in.
+out.reshow_rect_draw = await draw(22, { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring", label: "Safe area" });
+pwRect = rect(880, 580, 100, 60);
+out.reshow_rect_result = await actions.spotlightReshow(22);
+out.reshow_rect_status = await status(22);
+pwRect = rect(10, 10, 100, 30);
+// A generic draw is allowed over a sensitive field, fresh or reshown.
+out.reshow_generic_draw = await draw(23, { x: 20, y: 20, generic: true });
+out.reshow_generic_result = await actions.spotlightReshow(23);
+out.reshow_generic_status = await status(23);
+
+// 17. RV-3: a rect draw whose sensitive check call itself fails must
+// fail closed: no draw is sent and the result is the check's failure.
+rectCheckFails = true;
+out.rect_check_fail = await draw(24, { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring", label: "Unchecked area" });
+rectCheckFails = false;
+out.rect_check_fail_status = await status(24);
+out.rect_check_fail_draw_count = drawTabs.filter((t) => t === 24).length;
+
+// 18. RV-4: an element reshow re-resolves the target. A stored GENERIC
+// element draw must still reshow when the target is (or has become)
+// sensitive - a fresh generic draw there succeeds with the fixed chip -
+// while a stored non-generic draw keeps the current drop behaviour.
+out.reshow_element_generic_draw = await draw(25, { selector: ".card", generic: true });
+const genericDrawsBefore = drawTabs.filter((t) => t === 25).length;
+out.reshow_element_generic_result = (await actions.spotlightReshow(25)) ?? null;
+out.reshow_element_generic_draw_count = drawTabs.filter((t) => t === 25).length - genericDrawsBefore;
+out.reshow_element_generic_status = await status(25);
+out.reshow_element_nongeneric_draw = await draw(26, { target: "Save", label: "Button first" });
+btnSave.__children = [pw];
+const nongenericDrawsBefore = drawTabs.filter((t) => t === 26).length;
+out.reshow_element_nongeneric_result = (await actions.spotlightReshow(26)) ?? null;
+out.reshow_element_nongeneric_draw_count = drawTabs.filter((t) => t === 26).length - nongenericDrawsBefore;
+btnSave.__children = [];
+
+// 19. RV-13: a geometry reshow whose re-check call itself fails must
+// fail closed like a fresh rect draw (RV-3): return the failure, send
+// no draw, and KEEP the stored draw - a failed check proves nothing
+// about the geometry, so a later reshow with a healthy check succeeds.
+out.reshow_checkfail_point_draw = await draw(27, { x: 560, y: 120, label: "Point check fails" });
+const pointDrawsBefore = drawTabs.filter((t) => t === 27).length;
+hitTestFails = true;
+out.reshow_checkfail_point_result = (await actions.spotlightReshow(27)) ?? null;
+hitTestFails = false;
+out.reshow_checkfail_point_draw_count = drawTabs.filter((t) => t === 27).length - pointDrawsBefore;
+out.reshow_checkfail_point_retry = (await actions.spotlightReshow(27)) ?? null;
+out.reshow_checkfail_point_retry_draw_count = drawTabs.filter((t) => t === 27).length - pointDrawsBefore;
+out.reshow_checkfail_point_status = await status(27);
+out.reshow_checkfail_rect_draw = await draw(28, { rect: { x: 900, y: 600, width: 50, height: 50 }, mode: "ring", label: "Rect check fails" });
+const rectDrawsBefore = drawTabs.filter((t) => t === 28).length;
+rectCheckFails = true;
+out.reshow_checkfail_rect_result = (await actions.spotlightReshow(28)) ?? null;
+rectCheckFails = false;
+out.reshow_checkfail_rect_draw_count = drawTabs.filter((t) => t === 28).length - rectDrawsBefore;
+out.reshow_checkfail_rect_retry = (await actions.spotlightReshow(28)) ?? null;
+out.reshow_checkfail_rect_retry_draw_count = drawTabs.filter((t) => t === 28).length - rectDrawsBefore;
+out.reshow_checkfail_rect_status = await status(28);
 
 console.log(JSON.stringify(out));
 """
@@ -279,6 +392,8 @@ def test_geometry_validation(worker):
     p = worker["point_ok"]
     assert p["success"] is True and p["scale_factor"] == 2 and p["in_view"] is True
     assert worker["point_on_field"]["code"] == "sensitive_target"
+    assert worker["rect_between_probes"]["code"] == "sensitive_target"
+    assert worker["rect_below_fold"]["code"] == "sensitive_target"
 
 
 def test_dropped_draw_not_showing(worker):
@@ -305,6 +420,86 @@ def test_session_end_closes_log_entry(worker):
 def test_allowlist_revocation_clears(worker):
     assert worker["draw13"]["success"] is True
     assert worker["allowlist_status"]["cleared_reason"] == "settings"
+
+
+def test_min_draw_interval_covers_unlabelled_draws(worker):
+    assert worker["flood_evidence"]["success"] is True
+    # No label on the second draw: the old code rate-limited labelled
+    # draws only, so this went through and appended a log entry.
+    assert worker["flood_immediate_unlabelled"]["code"] == "rate_limited"
+    # The interval is per tab, and a draw past it succeeds again.
+    assert worker["flood_other_tab"]["success"] is True
+    assert worker["flood_after_interval"]["success"] is True
+
+
+def test_log_eviction_drops_unlabelled_before_labelled(worker):
+    assert worker["flood_log_size"] == 200
+    # The labelled evidence entry was the oldest entry in a full log;
+    # five unlabelled appends must evict fillers, never it.
+    assert worker["flood_evidence_survives"] is True
+    assert worker["flood_fillers_remaining"] == 194
+
+
+def test_geometry_reshow_rechecks_sensitive(worker):
+    assert worker["reshow_point_draw"]["success"] is True
+    # Control: a fresh draw at the stored point is now refused.
+    assert worker["reshow_fresh_control"]["code"] == "sensitive_target"
+    # The reshow must refuse the same way, and clear the stored draw.
+    r = worker["reshow_point_result"]
+    assert r["success"] is False and r["code"] == "sensitive_target"
+    assert worker["reshow_point_status"]["showing"] is False
+    assert worker["reshow_point_status"]["cleared_reason"] == "sensitive_target"
+    assert worker["reshow_point_status_again"]["showing"] is False
+    assert worker["reshow_rect_draw"]["success"] is True
+    r2 = worker["reshow_rect_result"]
+    assert r2["success"] is False and r2["code"] == "sensitive_target"
+    assert worker["reshow_rect_status"]["showing"] is False
+
+
+def test_generic_reshow_still_allowed_over_field(worker):
+    assert worker["reshow_generic_draw"]["success"] is True
+    assert worker["reshow_generic_result"]["success"] is True
+    assert worker["reshow_generic_status"]["showing"] is True
+
+
+def test_rect_draw_fails_closed_when_check_fails(worker):
+    assert worker["rect_check_fail"]["success"] is False, worker["rect_check_fail"]
+    assert worker["rect_check_fail"]["code"] == "inject_failed", worker["rect_check_fail"]
+    assert worker["rect_check_fail_status"]["showing"] is False
+    assert worker["rect_check_fail_draw_count"] == 0
+
+
+def test_generic_element_reshow_not_dropped_when_sensitive(worker):
+    assert worker["reshow_element_generic_draw"]["success"] is True
+    r = worker["reshow_element_generic_result"]
+    assert r["success"] is True, r
+    assert worker["reshow_element_generic_draw_count"] == 1
+    assert worker["reshow_element_generic_status"]["showing"] is True
+    # The non-generic counterpart keeps the drop behaviour: no result
+    # and no new draw sent.
+    assert worker["reshow_element_nongeneric_draw"]["success"] is True
+    assert worker["reshow_element_nongeneric_result"] is None
+    assert worker["reshow_element_nongeneric_draw_count"] == 0
+
+
+def test_geometry_reshow_fails_closed_when_recheck_fails(worker):
+    # Point branch: the hit-test injection fails during reshow.
+    assert worker["reshow_checkfail_point_draw"]["success"] is True
+    r = worker["reshow_checkfail_point_result"]
+    assert r["success"] is False and r["code"] == "inject_failed", r
+    assert worker["reshow_checkfail_point_draw_count"] == 0
+    # The stored draw is kept: a retry with a healthy check succeeds.
+    assert worker["reshow_checkfail_point_retry"]["success"] is True
+    assert worker["reshow_checkfail_point_retry_draw_count"] == 1
+    assert worker["reshow_checkfail_point_status"]["showing"] is True
+    # Rect branch: the rect-check injection fails during reshow.
+    assert worker["reshow_checkfail_rect_draw"]["success"] is True
+    r2 = worker["reshow_checkfail_rect_result"]
+    assert r2["success"] is False and r2["code"] == "inject_failed", r2
+    assert worker["reshow_checkfail_rect_draw_count"] == 0
+    assert worker["reshow_checkfail_rect_retry"]["success"] is True
+    assert worker["reshow_checkfail_rect_retry_draw_count"] == 1
+    assert worker["reshow_checkfail_rect_status"]["showing"] is True
 
 
 def test_action_on_highlight_clears_it(worker):

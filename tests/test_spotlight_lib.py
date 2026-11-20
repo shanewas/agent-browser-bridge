@@ -64,6 +64,58 @@ out.spelled_domain = v("Go to example dot com");
 out.japanese_punct = v("\u30d1\u30b9\u30ef\u30fc\u30c9\u3092\u3001\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044");
 out.bidi_label = v("Save\u202e button");
 
+// F6: homoglyph classes outside the hand-folded map - Latin small
+// capitals, Greek lunate sigma, Latin alpha, dotless i.
+out.small_caps = v("\u1d20\u1d07\u0280\u026a\ua730\u026a\u1d07\u1d05 \ua731\u1d00\ua730\u1d07");
+out.lunate_sigma = v("offi\u03f2ial notice");
+out.latin_alpha = v("verified s\u0251fe");
+out.dotless_i = v("ver\u0131fied safe");
+out.small_caps_honest = v("\u1d0dove the panel left");
+out.dotless_honest = v("Kay\u0131t form section");
+
+// F7: readable domains through punctuation and spelling gaps.
+out.spaced_dot = v("go to example . com");
+out.ideographic_dot = v("visit example\u3002com");
+out.spelled_dev = v("visit evil dot dev");
+out.spelled_app = v("visit evil dot app");
+out.spelled_me = v("visit evil dot me");
+out.spaced_shortener = v("open bit ly slash x9");
+out.dot_prose = v("The dot on the chart");
+out.dot_matrix = v("Dot matrix printer label");
+
+// RV-7: spaced-dot collapse must only form a domain when the token
+// after the dot is a plausible TLD.
+out.spaced_dot_sorted = v("Results . Sorted by date");
+out.spaced_dot_then = v("Press the button . Then continue");
+out.spaced_dot_dev = v("go to example . dev");
+out.ideographic_spaced = v("visit example \u3002 com");
+
+// Confirmation review: a domain typed with real dots is rejected on
+// the dotted pattern alone, whatever its TLD; the TLD list guards
+// only the spaced form, where prose false-positives live.
+out.plain_dotted_unlisted_tld = v("Mirror at evil.zip here");
+out.spaced_unlisted_tld = v("go to example . zip");
+
+// RV-8: a spaced shortener pair only counts as a domain when a path
+// signal follows it.
+out.shortener_prose_co = v("This isn't co-branded merch");
+out.shortener_prose_bitly = v("The chart is a bit ly near the top");
+out.shortener_literal_slash = v("open bit ly / x9");
+out.shortener_bare = v("open bit ly x9");
+
+// F8: blocked-phrase paraphrases, English and Japanese.
+out.phrase_type_pw = v("type your password here");
+out.phrase_pw_required = v("password required to continue");
+out.phrase_session_timeout = v("your session timed out");
+out.phrase_signin_again = v("sign in again to continue");
+out.phrase_payment_failed = v("payment failed, update your card");
+out.phrase_pin_ja = v("\u6697\u8a3c\u756a\u53f7\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044");
+out.phrase_pin_ja_form = v("\u6697\u8a3c\u756a\u53f7\u306e\u5165\u529b\u304c\u5fc5\u8981\u3067\u3059");
+out.phrase_session_ja = v("\u30bb\u30c3\u30b7\u30e7\u30f3\u306e\u6709\u52b9\u671f\u9650\u304c\u5207\u308c\u307e\u3057\u305f");
+out.phrase_identity_ja = v("\u672c\u4eba\u78ba\u8a8d\u3092\u304a\u9858\u3044\u3057\u307e\u3059");
+out.phrase_en_nearmiss = v("Password field on the left");
+out.phrase_ja_nearmiss = v("\u756a\u53f7\u3092\u5165\u529b\u3059\u308b\u753b\u9762\u306e\u30dc\u30bf\u30f3");
+
 console.log(JSON.stringify(out));
 """
 
@@ -142,6 +194,89 @@ def test_label_spoofing_variants_rejected(lib):
 def test_returned_label_has_no_invisible_characters(lib):
     assert lib["bidi_label"]["ok"] is True
     assert lib["bidi_label"]["label"] == "Save button"
+
+
+def test_f6_homoglyph_classes_rejected(lib):
+    for key in ("small_caps", "lunate_sigma", "latin_alpha", "dotless_i"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_f6_honest_labels_with_those_characters_pass(lib):
+    # The same characters in words that are not blocked phrases still pass.
+    assert lib["small_caps_honest"]["ok"] is True
+    assert lib["dotless_honest"]["ok"] is True
+
+
+def test_f7_readable_domains_rejected(lib):
+    for key in ("spaced_dot", "ideographic_dot", "spelled_dev",
+                "spelled_app", "spelled_me", "spaced_shortener"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_f7_dot_in_prose_passes(lib):
+    # "dot" as an ordinary English word is not a spelled-out domain.
+    assert lib["dot_prose"]["ok"] is True
+    assert lib["dot_matrix"]["ok"] is True
+
+
+def test_rv7_spaced_dot_prose_passes(lib):
+    # A sentence period followed by an ordinary word is not a domain:
+    # the token after the dot is not a plausible TLD.
+    assert lib["spaced_dot_sorted"]["ok"] is True
+    assert lib["spaced_dot_then"]["ok"] is True
+
+
+def test_rv7_spaced_dot_domains_still_rejected(lib):
+    # Spaced and ideographic dots still reject when the token after
+    # the dot is a real TLD.
+    for key in ("spaced_dot", "spaced_dot_dev", "ideographic_dot",
+                "ideographic_spaced"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_plain_dotted_domain_rejected_on_any_tld(lib):
+    # Real dots: the pattern alone rejects, no TLD list involved.
+    assert lib["plain_dotted_unlisted_tld"]["ok"] is False
+    assert lib["plain_dotted_unlisted_tld"]["code"] == "label_rejected"
+    # The same TLD in spaced form stays prose-safe: the list guards it.
+    assert lib["spaced_unlisted_tld"]["ok"] is True
+
+
+def test_rv8_spaced_shortener_prose_passes(lib):
+    # Adjacent tokens that happen to spell a shortener host, with no
+    # path signal after them, are ordinary prose.
+    assert lib["shortener_prose_co"]["ok"] is True
+    assert lib["shortener_prose_bitly"]["ok"] is True
+
+
+def test_rv8_spaced_shortener_with_path_still_rejected(lib):
+    for key in ("spaced_shortener", "shortener_literal_slash"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_rv8_bare_spaced_shortener_without_path_passes(lib):
+    # Accepted residual: a bare spaced shortener with no "slash" or "/"
+    # after it is indistinguishable from prose, so it now passes.
+    assert lib["shortener_bare"]["ok"] is True
+
+
+def test_f8_new_blocked_phrases_rejected(lib):
+    for key in ("phrase_type_pw", "phrase_pw_required", "phrase_session_timeout",
+                "phrase_signin_again", "phrase_payment_failed", "phrase_pin_ja",
+                "phrase_pin_ja_form", "phrase_session_ja", "phrase_identity_ja"):
+        assert lib[key]["ok"] is False, key
+        assert lib[key]["code"] == "label_rejected", key
+
+
+def test_f8_near_miss_controls_pass(lib):
+    # Descriptive text near a credential topic, without the claim or the
+    # demand, still passes in both languages.
+    assert lib["phrase_en_nearmiss"]["ok"] is True
+    assert lib["phrase_ja_nearmiss"]["ok"] is True
 
 
 def test_sensitive_origin_edge_forms(lib):

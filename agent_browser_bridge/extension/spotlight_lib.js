@@ -35,8 +35,13 @@ const BLOCKED_PHRASES = [
   "verify your account", "ignore the warning", "ignore this warning",
   "this is safe", "safe to click", "you must click", "click now to avoid",
   "account suspended", "account will be locked", "urgent action required",
+  "type your password here", "password required to continue",
+  "session timed out", "sign in again to continue",
+  "payment failed update your card",
   "公式のお知らせ", "セッションが切れました", "パスワードを入力",
   "パスワードを再入力", "本人確認が必要です", "アカウントが停止",
+  "暗証番号を入力", "暗証番号の入力", "暗証番号を教えて",
+  "セッションの有効期限が切れました", "本人確認をお願いします",
 ];
 
 // Every Unicode format character (zero-width spaces and joiners, bidi marks
@@ -60,12 +65,25 @@ const CONFUSABLES = {
   "τ": "t", "υ": "y", "χ": "x", "ω": "w", "Α": "a", "Β": "b", "Ε": "e",
   "Η": "h", "Ι": "i", "Κ": "k", "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p",
   "Τ": "t", "Χ": "x", "Υ": "y", "Ζ": "z",
+  // Latin small capitals (UTS#39 skeleton folds them to the plain letter;
+  // NFKC does not), Greek lunate sigma, Latin alpha, dotless i.
+  "\u1d00": "a", "\u0299": "b", "\u1d04": "c", "\u1d05": "d", "\u1d07": "e",
+  "\ua730": "f", "\u0262": "g", "\u029c": "h", "\u026a": "i", "\u1d0a": "j",
+  "\u1d0b": "k", "\u029f": "l", "\u1d0d": "m", "\u0274": "n", "\u1d0f": "o",
+  "\u1d10": "o", "\u1d18": "p", "\ua7af": "q", "\u0280": "r", "\ua731": "s",
+  "\u1d1b": "t", "\u1d1c": "u", "\u1d20": "v", "\u1d21": "w", "\u028f": "y",
+  "\u1d22": "z",
+  // NFKC folds the lunate sigma to final sigma (ς) before this map runs,
+  // so both forms are listed.
+  "\u03f2": "c", "\u03f9": "c", "\u03c2": "c", "\u0251": "a", "\u2c6d": "a", "\u0131": "i",
 };
 const CONFUSABLE_RE = new RegExp("[" + Object.keys(CONFUSABLES).join("") + "]", "g");
 
 export function normalizeLabelText(s) {
   return String(s == null ? "" : s)
     .normalize("NFKC")
+    // The ideographic full stop is a dot in a domain; NFKC leaves it alone.
+    .replace(/\u3002/g, ".")
     .replace(INVISIBLES, "")
     .replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] || ch)
     .toLowerCase()
@@ -79,7 +97,27 @@ function tokenSet(normalized) {
 
 const LABEL_REJECT_URL = "Labels may not contain URLs or domains. Describe the element instead.";
 const LABEL_REJECT_TRUST = "Labels may not make trust, urgency or credential claims. Describe what the element is, not why the user should trust it.";
-const SPELLED_TLDS = new Set(["com", "co", "net", "org", "jp", "io", "gov", "edu"]);
+// A fuller common-TLD list, not an any-token rule: "dot" followed by an
+// ordinary word ("the dot on the chart") must still pass, so only real
+// TLD spellings count. Common-word ccTLDs (in, at, be) stay out on purpose.
+const SPELLED_TLDS = new Set([
+  "com", "co", "net", "org", "jp", "io", "gov", "edu", "dev", "app", "me",
+  "ai", "xyz", "info", "biz", "tv", "cc", "us", "uk", "de", "fr", "it",
+  "es", "nl", "ch", "se", "no", "fi", "dk", "ie", "nz", "au", "ca", "kr",
+  "cn", "tw", "hk", "sg", "my", "id", "th", "vn", "ph", "br", "mx", "ar",
+  "za", "il", "ae", "pk", "bd", "ru", "ua", "pl", "cz", "hu", "ro", "gr",
+  "tr", "pt", "eu", "site", "online", "tech", "store", "blog", "news",
+  "cloud", "pro", "name", "asia", "gg", "ly", "gl", "gd", "gy", "fm",
+]);
+
+// Known shortener hosts spelled with the dot dropped ("bit ly slash x9"):
+// the host's dot-split tokens appearing adjacently plus a following path
+// signal (the token "slash" or a "/") is the readable domain. Adjacency
+// alone also occurs in honest prose ("isn't co-", "a bit ly near").
+const SPACED_SHORTENERS = [
+  ["bit", "ly"], ["tinyurl", "com"], ["t", "co"], ["rb", "gy"],
+  ["ow", "ly"], ["buff", "ly"], ["goo", "gl"], ["is", "gd"], ["cutt", "ly"],
+];
 
 // Punctuation and spacing carry no meaning inside a Japanese phrase; matching
 // on the squashed text keeps an inserted 、 or space from defeating the rule.
@@ -105,13 +143,60 @@ export function validateLabel(raw) {
   const stream = normalized.split(/[^a-z0-9]+/i).filter(Boolean);
   // URL and domain checks run on the normalized text: a fullwidth domain
   // NFKC-folds to its ASCII spelling, an IPv4 literal needs no TLD, and a
-  // spelled-out "example dot com" is caught as a token pair.
-  if (/https?:\/\/|www\.[^\s]+|\b[a-z0-9-]+\.[a-z]{2,}\b|\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(normalized)) {
+  // spelled-out "example dot com" is caught as a token pair. Spaces around
+  // a dot carry no meaning in a read-aloud domain ("example . com"), so
+  // they are collapsed before the domain pattern runs - but in the
+  // collapsed text a candidate only counts when the token after the
+  // final dot is a plausible TLD (SPELLED_TLDS). A sentence period
+  // followed by an ordinary word ("Results . Sorted by date") is prose,
+  // not a domain.
+  const domainText = normalized.replace(/\s*\.\s*/g, ".");
+  if (/https?:\/\/|www\.[^\s]+/.test(domainText)
+      || /\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(domainText)) {
     return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+  }
+  // A domain typed with real dots is a domain whatever its final label:
+  // the dotted pattern alone rejects it, as it did before the spaced-dot
+  // gate existed. The TLD list below guards only the collapsed text,
+  // where a sentence period and a spaced domain look alike.
+  for (const m of normalized.matchAll(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/g)) {
+    const tld = m[0].slice(m[0].lastIndexOf(".") + 1);
+    if (/^[a-z]{2,}$/.test(tld)) {
+      return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+    }
+  }
+  for (const m of domainText.matchAll(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/g)) {
+    const tld = m[0].slice(m[0].lastIndexOf(".") + 1);
+    if (/^[a-z]{2,}$/.test(tld) && SPELLED_TLDS.has(tld)) {
+      return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+    }
   }
   for (let i = 0; i + 1 < stream.length; i++) {
     if (stream[i] === "dot" && SPELLED_TLDS.has(stream[i + 1])) {
       return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+    }
+  }
+  // Token positions in the normalized text, aligned with `stream`, so a
+  // literal "/" between two tokens can be seen - the token stream alone
+  // drops it as a separator.
+  const tokenPos = [...normalized.matchAll(/[a-z0-9]+/g)]
+    .map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  for (const seq of SPACED_SHORTENERS) {
+    for (let i = 0; i + seq.length <= stream.length; i++) {
+      if (!seq.every((t, j) => stream[i + j] === t)) continue;
+      const after = i + seq.length;
+      // A spaced shortener pair is a domain only with a path signal
+      // after it: the word "slash", or a "/" before the next token.
+      if (stream[after] === "slash") {
+        return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+      }
+      const pairEnd = tokenPos[i + seq.length - 1];
+      if (pairEnd) {
+        const nextStart = after < tokenPos.length ? tokenPos[after].start : normalized.length;
+        if (normalized.slice(pairEnd.end, nextStart).includes("/")) {
+          return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+        }
+      }
     }
   }
   const tokens = tokenSet(normalized);

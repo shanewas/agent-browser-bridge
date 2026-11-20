@@ -99,6 +99,11 @@ if (scenario === "spotlight") {
   const btnB = { tagName: "BUTTON", __children: [], getBoundingClientRect: () => rect(500, 200, 120, 40) };
   const cardPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(720, 120, 200, 30) };
   const cardWrap = { tagName: "DIV", __children: [cardPw], getBoundingClientRect: () => rect(700, 100, 300, 200) };
+  // F1 PoC fields: one sitting between any grid-probe points of a full
+  // viewport rect, one below the fold in the unprobed part of a tall rect.
+  // Neither is reachable by the point hit test in this stub.
+  const midPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 180, 400, 40) };
+  const belowPw = { tagName: "INPUT", __sensitive: true, __children: [], getBoundingClientRect: () => rect(200, 900, 400, 40) };
   const rootEl = { tagName: "HTML", __children: [formEl, btnA, btnB, cardWrap], getBoundingClientRect: () => rect(0, 0, 1280, 800) };
   const inRect = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   const lib = {
@@ -114,6 +119,7 @@ if (scenario === "spotlight") {
       if (lib.isSensitiveInput(el)) return true;
       return (el.__children || []).some((c) => lib.containsSensitiveInput(c));
     },
+    enumerateSensitiveFields: () => [pw, cardPw, midPw, belowPw],
     labelText: () => "",
     deepFromPoint: (x, y) => (inRect(pw.getBoundingClientRect(), x, y) ? pw
       : inRect(btnA.getBoundingClientRect(), x, y) ? btnA : rootEl),
@@ -137,6 +143,78 @@ if (scenario === "spotlight") {
   out.hit_on_field = page.pageSpotlightHitTest(20, 20).sensitive;
   out.hit_elsewhere = page.pageSpotlightHitTest(900, 600).sensitive;
   out.hit_on_button = page.pageSpotlightHitTest(560, 120).sensitive;
+  // F1: the exact rect check sees fields the grid probes miss.
+  out.rect_check_fn = typeof page.pageSpotlightRectCheck;
+  if (out.rect_check_fn === "function") {
+    out.rect_between_probes = page.pageSpotlightRectCheck({ x: 0, y: 0, width: 1280, height: 800 }).sensitive;
+    out.rect_below_fold = page.pageSpotlightRectCheck({ x: 0, y: 0, width: 1280, height: 1600 }).sensitive;
+    out.rect_clear = page.pageSpotlightRectCheck({ x: 900, y: 600, width: 100, height: 50 }).sensitive;
+  }
+}
+
+if (scenario === "spotlight_frame") {
+  const rect = (x, y, w, h) => ({ x, y, width: w, height: h, left: x, top: y, right: x + w, bottom: y + h });
+  // A password field inside a same-origin frame: its own rect is
+  // frame-relative (10,10,100,30), while the frame element sits at
+  // (300,200) in the main page, so on the main page the field occupies
+  // (310,210)-(410,240).
+  const frameDoc = {};
+  const mainDoc = {};
+  const frameView = { parent: { document: mainDoc } };
+  frameDoc.defaultView = frameView;
+  const framePw = { tagName: "INPUT", __sensitive: true, ownerDocument: frameDoc,
+    getBoundingClientRect: () => rect(10, 10, 100, 30) };
+  const frameEl = { tagName: "IFRAME", ownerDocument: mainDoc, contentDocument: frameDoc,
+    getBoundingClientRect: () => rect(300, 200, 400, 300) };
+  // RV-14a: a field inside TWO nested same-origin frames. Its own rect
+  // is (10,10) in the inner document; the inner frame element sits at
+  // (50,40) in the middle document and the outer frame element at
+  // (300,200) in the main page, so its true on-page position is
+  // (360,250)-(460,280) - both offsets applied.
+  const innerDoc = {};
+  const middleDoc = {};
+  innerDoc.defaultView = { parent: { document: middleDoc } };
+  middleDoc.defaultView = { parent: { document: mainDoc } };
+  const nestedPw = { tagName: "INPUT", __sensitive: true, ownerDocument: innerDoc,
+    getBoundingClientRect: () => rect(10, 10, 100, 30) };
+  const innerFrameEl = { tagName: "IFRAME", ownerDocument: middleDoc, contentDocument: innerDoc,
+    getBoundingClientRect: () => rect(50, 40, 400, 300) };
+  const outerFrameEl = { tagName: "IFRAME", ownerDocument: mainDoc, contentDocument: middleDoc,
+    getBoundingClientRect: () => rect(300, 200, 400, 300) };
+  // RV-14b: a field whose frame chain cannot be resolved - its
+  // document claims the main page as parent, but no iframe element in
+  // the main document has that document as its contentDocument.
+  const orphanDoc = {};
+  orphanDoc.defaultView = { parent: { document: mainDoc } };
+  const orphanPw = { tagName: "INPUT", __sensitive: true, ownerDocument: orphanDoc,
+    getBoundingClientRect: () => rect(10, 10, 100, 30) };
+  let enumeratedFields = [framePw];
+  const lib = {
+    queryAllDeep: (root, sel) => (sel === "iframe" && root === mainDoc ? [frameEl, outerFrameEl]
+      : sel === "iframe" && root === middleDoc ? [innerFrameEl] : []),
+    descriptorOf: (el) => ({ tag: el.tagName.toLowerCase(), role: "", name: "" }),
+    enumerateSensitiveFields: () => enumeratedFields,
+  };
+  globalThis.window = { __eabLib: lib, innerWidth: 1280, innerHeight: 800 };
+  globalThis.document = mainDoc;
+  out.frame_check_fn = typeof page.pageSpotlightRectCheck;
+  if (out.frame_check_fn === "function") {
+    // A draw rect covering the field's true on-page position flags.
+    out.frame_true_position = page.pageSpotlightRectCheck({ x: 300, y: 200, width: 100, height: 30 }).sensitive;
+    // A draw rect at the frame-relative position alone does not flag.
+    out.frame_relative_position = page.pageSpotlightRectCheck({ x: 10, y: 10, width: 100, height: 30 }).sensitive;
+    // Nested frames: only the doubly-offset true position flags; the
+    // frame-relative position and a single (inner-only) offset do not.
+    enumeratedFields = [nestedPw];
+    out.nested_true_position = page.pageSpotlightRectCheck({ x: 360, y: 250, width: 100, height: 30 }).sensitive;
+    out.nested_relative_position = page.pageSpotlightRectCheck({ x: 10, y: 10, width: 100, height: 30 }).sensitive;
+    out.nested_single_offset_position = page.pageSpotlightRectCheck({ x: 60, y: 50, width: 100, height: 30 }).sensitive;
+    // Unresolvable chain: the check fails closed - any draw rect,
+    // even one far from the field's own rect, reports sensitive.
+    enumeratedFields = [orphanPw];
+    out.unresolved_frame_sensitive = page.pageSpotlightRectCheck({ x: 900, y: 600, width: 100, height: 50 }).sensitive;
+    enumeratedFields = [framePw];
+  }
 }
 
 console.log(JSON.stringify(out));
@@ -177,6 +255,43 @@ def test_spotlight_resolver_enumerates_and_flags_sensitive(tmp_path):
     assert out["picked_found"] is True, out
     assert out["out_of_range"] is True, out
     assert out["card_found"] is True and out["card_sensitive"] is True, out
+
+
+def test_spotlight_rect_check_is_exact_not_probed(tmp_path):
+    out = run_scenario(tmp_path, "spotlight")
+    assert out["rect_check_fn"] == "function", out
+    # A field between grid probes, and one in the below-fold part of a
+    # tall rect, both intersect the full requested rect.
+    assert out["rect_between_probes"] is True, out
+    assert out["rect_below_fold"] is True, out
+    assert out["rect_clear"] is False, out
+
+
+def test_spotlight_rect_check_offsets_frame_fields(tmp_path):
+    out = run_scenario(tmp_path, "spotlight_frame")
+    assert out["frame_check_fn"] == "function", out
+    # The field's true main-page position is its frame-relative rect
+    # shifted by the frame element's position (300,200).
+    assert out["frame_true_position"] is True, out
+    assert out["frame_relative_position"] is False, out
+
+
+def test_spotlight_rect_check_offsets_nested_frame_fields(tmp_path):
+    out = run_scenario(tmp_path, "spotlight_frame")
+    assert out["frame_check_fn"] == "function", out
+    # True position = field rect + inner frame offset (50,40) + outer
+    # frame offset (300,200). Neither partial offset flags.
+    assert out["nested_true_position"] is True, out
+    assert out["nested_relative_position"] is False, out
+    assert out["nested_single_offset_position"] is False, out
+
+
+def test_spotlight_rect_check_unresolved_frame_chain_fails_closed(tmp_path):
+    out = run_scenario(tmp_path, "spotlight_frame")
+    assert out["frame_check_fn"] == "function", out
+    # The field's frame element is absent from the parent document, so
+    # its on-page position is unknown and the check reports sensitive.
+    assert out["unresolved_frame_sensitive"] is True, out
 
 
 def test_spotlight_hit_test_is_point_precise(tmp_path):

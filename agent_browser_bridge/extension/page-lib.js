@@ -241,7 +241,7 @@
     "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-type", "cc-name",
   ]);
   const SENSITIVE_NAME_RX = /(card.?number|cc.?num|cvv|cvc|otp|one.?time|passcode|password|passwd|passphrase)/i;
-  const SENSITIVE_TOKENS = new Set(["pwd", "pin"]);
+  const SENSITIVE_TOKENS = new Set(["pwd", "pin", "pincode"]);
   // Hosted payment fields live in cross-origin iframes whose contents no page
   // script can inspect; the frame element itself is the only signal, so a
   // frame served by a payment processor counts as a sensitive field.
@@ -251,14 +251,50 @@
   ];
 
   function sensitiveHintOf(el) {
-    return [el.getAttribute("name"), el.getAttribute("id"),
-            el.getAttribute("aria-label"), el.getAttribute("placeholder")]
-      .filter(Boolean).join(" ");
+    const parts = [el.getAttribute("name"), el.getAttribute("id"),
+                   el.getAttribute("aria-label"), el.getAttribute("placeholder")]
+      .filter(Boolean);
+    // A field's semantics often live only in its visible label: the
+    // associated <label> element or the element aria-labelledby points at.
+    try {
+      const lab = labelText(el);
+      if (lab) parts.push(lab);
+    } catch (e) {}
+    try {
+      const lb = el.getAttribute("aria-labelledby");
+      if (lb) {
+        const root = el.getRootNode ? el.getRootNode() : null;
+        for (const id of lb.split(/\s+/).filter(Boolean)) {
+          const ref = (root && root.getElementById && root.getElementById(id))
+            || (typeof document !== "undefined" && document.getElementById && document.getElementById(id));
+          if (ref) parts.push(ref.innerText || ref.textContent || "");
+        }
+      }
+    } catch (e) {}
+    return parts.join(" ");
+  }
+
+  // Split camelCase ("pwdField" -> "pwd Field") before token matching, or
+  // the token a name hides inside a compound word is never seen.
+  function hintTokens(hint) {
+    return String(hint)
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+      .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   }
 
   function hintIsSensitive(hint) {
     if (SENSITIVE_NAME_RX.test(hint)) return true;
-    return hint.toLowerCase().split(/[^a-z0-9]+/).some((t) => SENSITIVE_TOKENS.has(t));
+    const tokens = hintTokens(hint);
+    if (tokens.some((t) => SENSITIVE_TOKENS.has(t))) return true;
+    // A field named just "code" is ordinary (postal code, promo code); it
+    // counts as a verification code only with a second signal in the hint:
+    // a digit count ("6-digit code"), or verification/digit wording.
+    if (tokens.includes("code")
+        && (/\d+\s*-?\s*digit/i.test(hint)
+            || tokens.includes("digit") || tokens.includes("digits")
+            || tokens.includes("verification"))) return true;
+    return false;
   }
 
   function isPaymentFrame(el) {
@@ -286,16 +322,56 @@
     return hintIsSensitive(sensitiveHintOf(el));
   }
 
+  // A same-origin frame's document is readable; a cross-origin one throws
+  // on access and stays judged by the frame element alone (host list and
+  // name/title in isPaymentFrame).
+  function frameDocument(frame) {
+    try { return frame.contentDocument || null; } catch (e) { return null; }
+  }
+
   function containsSensitiveInput(el) {
     if (!el || !el.querySelectorAll) return false;
     if (isSensitiveInput(el)) return true;
+    if ((el.tagName || "").toUpperCase() === "IFRAME") {
+      const doc = frameDocument(el);
+      if (doc && containsSensitiveInput(doc)) return true;
+    }
     // queryAllDeep, not querySelectorAll: the resolver pierces open shadow
     // roots, so the safety scan must see the same elements it can resolve.
     if (queryAllDeep(el, "input").some(isSensitiveInput)) return true;
-    if (queryAllDeep(el, "iframe").some(isPaymentFrame)) return true;
+    const frames = queryAllDeep(el, "iframe");
+    if (frames.some(isPaymentFrame)) return true;
+    for (const frame of frames) {
+      const doc = frameDocument(frame);
+      if (doc && containsSensitiveInput(doc)) return true;
+    }
     // Editable fields are not INPUT elements; a container wrapping one must
     // agree with the direct-target check, which flags them by their hints.
     return queryAllDeep(el, "[contenteditable]").some(isSensitiveInput);
+  }
+
+  // The sensitive fields under a root (document or element), with the same
+  // semantics as containsSensitiveInput: inputs and editable fields flagged
+  // by isSensitiveInput, payment frames as elements, and fields inside
+  // same-origin frame documents the page can read.
+  function enumerateSensitiveFields(root) {
+    if (!root || !root.querySelectorAll) return [];
+    const out = [];
+    const seen = new Set();
+    const add = (el) => { if (el && !seen.has(el)) { seen.add(el); out.push(el); } };
+    if (isSensitiveInput(root)) add(root);
+    for (const el of queryAllDeep(root, "input")) if (isSensitiveInput(el)) add(el);
+    for (const el of queryAllDeep(root, "[contenteditable]")) if (isSensitiveInput(el)) add(el);
+    for (const frame of queryAllDeep(root, "iframe")) {
+      if (isPaymentFrame(frame)) { add(frame); continue; }
+      const doc = frameDocument(frame);
+      if (doc) for (const el of enumerateSensitiveFields(doc)) add(el);
+    }
+    if ((root.tagName || "").toUpperCase() === "IFRAME") {
+      const doc = frameDocument(root);
+      if (doc) for (const el of enumerateSensitiveFields(doc)) add(el);
+    }
+    return out;
   }
 
   function descriptorOf(el) {
@@ -307,6 +383,7 @@
   window.__eabLib = {
     INTERACTIVE_ROLES, CONTAINER_TAGS, roleOf, nameOf, ownText, collapse, labelText, isVisible,
     childElements, queryAllDeep, rectOf, center, highlight, frameInfo, iframeIndex,
-    deepFromPoint, deepActive, controlAt, isSensitiveInput, containsSensitiveInput, descriptorOf
+    deepFromPoint, deepActive, controlAt, isSensitiveInput, containsSensitiveInput,
+    enumerateSensitiveFields, descriptorOf
   };
 })();

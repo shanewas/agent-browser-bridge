@@ -189,6 +189,12 @@ click Save"`, `spotlight clear`, `spotlight status`.
   suppressed). On banking, payment, password-manager and webmail origins
   Spotlight is off entirely (`sensitive_origin`) unless the user allowlists
   the host in the popup.
+- Sensitive-check limits: the check cannot see inside closed shadow roots or
+  cross-origin frame documents — no page API exposes them — so a container
+  draw over such content is not guaranteed clear of sensitive fields.
+  Same-origin frame documents are inspected. When a container may hold a
+  closed shadow root or a cross-origin frame with a form inside, do not
+  treat a successful draw as proof that no sensitive field is framed.
 - Lifetime: a labelled highlight lasts max(4s, ~350ms per label word), capped
   at 30s; an unlabelled ring lasts 4s. `persist: true` keeps an instructional
   highlight up until the next `spotlight`, a clear, or a takeover (hard cap
@@ -204,7 +210,7 @@ click Save"`, `spotlight clear`, `spotlight status`.
   `edge_spotlight_status` reports `showing`, and after a highlight ends,
   `cleared_reason` (`expired`, `esc`, `pill`, `takeover`, `target_gone`,
   `scroll`, `navigation`, `session_end`, `settings`, `replaced`, `cleared`,
-  `action`).
+  `action`, `sensitive_target`).
   Check status instead of assuming a pointer is still on screen.
 - Draws on a user-paused tab fail with `tab_paused`; clear and status still
   work. The user can dismiss a highlight with Esc or the pill at any time.

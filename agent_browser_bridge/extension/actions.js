@@ -323,7 +323,7 @@ export function isPausedFor(tabId, action) {
 // DESIGN v3 notes in the repo history for the full contract.
 // ---------------------------------------------------------------------------
 
-const spotlightTabs = new Map(); // tabId -> {showing, generation, mode, label, clearedReason, clearedAt, lastDraw, labelAt, logId, rect, offscreen}
+const spotlightTabs = new Map(); // tabId -> {showing, generation, mode, label, clearedReason, clearedAt, lastDraw, labelAt, drawAt, logId, rect, offscreen}
 let spotlightGeneration = 0;
 let spotlightSession = 1;
 // Worker state must survive MV3 worker restarts: the epoch and generation
@@ -333,7 +333,7 @@ let spotlightSession = 1;
 // outlives the worker but not the browser session, which is the right life.
 const SPOTLIGHT_STATE_KEY = "spotlightStateV1";
 function defaultSpotlightState() {
-  return { showing: false, generation: 0, mode: null, label: null, clearedReason: null, clearedAt: null, lastDraw: null, labelAt: 0, logId: null, rect: null, offscreen: false };
+  return { showing: false, generation: 0, mode: null, label: null, clearedReason: null, clearedAt: null, lastDraw: null, labelAt: 0, drawAt: 0, logId: null, rect: null, offscreen: false };
 }
 function persistSpotlightState() {
   try {
@@ -371,6 +371,12 @@ const SPOTLIGHT_LOG_MAX_ENTRIES = 200;
 const SPOTLIGHT_LOG_BUDGET_BYTES = 4 * 1024 * 1024;
 const SPOTLIGHT_CAPTURE_MAX_BYTES = 40 * 1024;
 const LABEL_REPLACE_WINDOW_MS = 2000;
+// Every draw, labelled or not, appends an audit-log entry, so every draw
+// is rate-limited: without a floor for unlabelled draws, a flood of them
+// evicted a labelled evidence entry from the 200-entry log in under a
+// second (F2). 250 ms per tab is fast enough for a pointing agent and
+// far too slow to flush the log unnoticed.
+const MIN_DRAW_INTERVAL_MS = 250;
 
 async function spotlightSettings() {
   try {
@@ -423,6 +429,16 @@ function spotlightLogOp(fn) {
   return run;
 }
 
+// Eviction drops the oldest UNLABELLED entry first: a labelled entry is
+// the user's evidence of a specific draw, and a flood of unlabelled draws
+// must not be able to erase it (F2). Labelled entries go only when no
+// unlabelled entry remains.
+function evictSpotlightLogEntry(list) {
+  const idx = list.findIndex((e) => !e.label);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.shift();
+}
+
 async function spotlightLogAppend(entry) {
   return spotlightLogOp(async () => {
     let list = [];
@@ -430,10 +446,10 @@ async function spotlightLogAppend(entry) {
       const d = await chrome.storage.local.get(SPOTLIGHT_LOG_KEY);
       list = Array.isArray(d[SPOTLIGHT_LOG_KEY]) ? d[SPOTLIGHT_LOG_KEY] : [];
       list.push(entry);
-      while (list.length > SPOTLIGHT_LOG_MAX_ENTRIES) list.shift();
+      while (list.length > SPOTLIGHT_LOG_MAX_ENTRIES) evictSpotlightLogEntry(list);
       let size = JSON.stringify(list).length;
       while (size > SPOTLIGHT_LOG_BUDGET_BYTES && list.length > 1) {
-        list.shift();
+        evictSpotlightLogEntry(list);
         size = JSON.stringify(list).length;
       }
       await chrome.storage.local.set({ [SPOTLIGHT_LOG_KEY]: list });
@@ -574,7 +590,8 @@ async function sendSpotlightDraw(tabId, drawArgs, settings) {
   st.generation = generation;
   st.mode = drawArgs.mode;
   st.label = drawArgs.generic ? null : drawArgs.label;
-  if (st.label) st.labelAt = Date.now(); // the rate window tracks labelled draws only
+  if (st.label) st.labelAt = Date.now(); // the 2s window tracks labelled draws only
+  st.drawAt = Date.now(); // the minimum-interval floor tracks every successful draw
   st.offscreen = Boolean(resp.offscreen);
   st.clearedReason = null;
   st.clearedAt = null;
@@ -602,6 +619,20 @@ async function sendSpotlightDraw(tabId, drawArgs, settings) {
   };
 }
 
+// A geometry reshow whose stored point/rect now sits over a sensitive
+// field: do not draw, take any showing highlight down, and drop the
+// stored draw so it cannot be reshown again (the navigation path drops
+// stored draws for the same reason). The result is the draw path's own
+// sensitive_target failure, so a caller can tell a refused reshow from
+// a landed one.
+async function refuseSpotlightReshowSensitive(tabId, st) {
+  if (st.showing) await spotlightSend(tabId, { op: "clear", reason: "sensitive_target" });
+  st.lastDraw = null;
+  st.rect = null;
+  markSpotlightCleared(tabId, "sensitive_target");
+  return fail("sensitive_target", "The stored highlight now sits over a sensitive field (password, one-time-code or payment), so it was not reshown.");
+}
+
 export async function spotlightReshow(tabId) {
   const st = spotlightTabs.get(tabId);
   if (!st || !st.lastDraw) return;
@@ -616,12 +647,32 @@ export async function spotlightReshow(tabId) {
   const draw = { ...st.lastDraw };
   if (draw.query) {
     const r = await execInTab(tabId, page.pageSpotlightResolve, [draw.query, { kind: draw.kind || "target", index: draw.index }]);
-    if (!r || !r.found || r.sensitive) return;
+    if (!r || !r.found) return;
+    // Generic draws are exempt from the sensitive refusal, as on a fresh
+    // draw: they carry the fixed extension-written chip, not the label.
+    if (r.sensitive && !draw.generic) return;
     draw.targetKey = r.targetKey;
     draw.rect = null;
     draw.descriptor = r.descriptor;
+  } else if (draw.point && !draw.generic) {
+    // Geometry draws have no query to re-resolve; re-run the same checks
+    // a fresh draw runs (F4). Generic draws are exempt, as on a fresh draw.
+    const hit = await execInTab(tabId, page.pageSpotlightHitTest, [draw.point.x, draw.point.y]);
+    if (!hit || hit.success === false || hit.code) {
+      // Fail closed like a fresh rect draw (RV-3): a failed re-check
+      // proves nothing about the geometry, so keep the stored draw
+      // (unlike the sensitive refusal, which drops it) and do not draw.
+      return fail((hit && hit.code) || "inject_failed", (hit && hit.error) || "The Spotlight hit test did not run, so the highlight was not reshown");
+    }
+    if (hit.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
+  } else if (draw.rect && !draw.generic) {
+    const check = await execInTab(tabId, page.pageSpotlightRectCheck, [draw.rect]);
+    if (!check || check.success === false || check.code) {
+      return fail((check && check.code) || "inject_failed", (check && check.error) || "The Spotlight rect check did not run, so the highlight was not reshown");
+    }
+    if (check.sensitive) return refuseSpotlightReshowSensitive(tabId, st);
   }
-  await sendSpotlightDraw(tabId, draw, settings);
+  return sendSpotlightDraw(tabId, draw, settings);
 }
 
 // Content-script and worker events, routed by background.js.
@@ -1112,6 +1163,9 @@ export async function execute(cmd) {
         if (label && st.labelAt && Date.now() - st.labelAt < LABEL_REPLACE_WINDOW_MS) {
           return fail("rate_limited", "A labelled highlight was drawn on this tab less than 2s ago; labelled draws are limited to one per 2s per tab. Wait for the window to pass, then retry.");
         }
+        if (st.drawAt && Date.now() - st.drawAt < MIN_DRAW_INTERVAL_MS) {
+          return fail("rate_limited", `A highlight was drawn on this tab less than ${MIN_DRAW_INTERVAL_MS}ms ago; draws are limited to one per ${MIN_DRAW_INTERVAL_MS}ms per tab. Wait for the interval to pass, then retry.`);
+        }
 
         let downgradedReason = null;
         if (settings.neverDim && mode === "spotlight") { mode = "ring"; downgradedReason = "never_dim"; }
@@ -1180,24 +1234,17 @@ export async function execute(cmd) {
           if (vp && (ix2 <= ix || iy2 <= iy)) {
             return fail("bad_params", `Rect ${rect.x},${rect.y} ${rect.width}x${rect.height} is outside the viewport (${vp.w}x${vp.h})`);
           }
-          // Grid probes over the visible intersection: five fixed points let
-          // a field sitting between them be framed completely unchecked.
-          const probes = [];
-          const cols = Math.max(2, Math.min(4, Math.ceil((ix2 - ix) / 160) + 1));
-          const rows = Math.max(2, Math.min(4, Math.ceil((iy2 - iy) / 160) + 1));
-          for (let cx = 0; cx < cols; cx++) {
-            for (let cy = 0; cy < rows; cy++) {
-              probes.push([
-                Math.min(ix2 - 1, ix + ((ix2 - ix) * (cx + 0.5)) / cols),
-                Math.min(iy2 - 1, iy + ((iy2 - iy) * (cy + 0.5)) / rows),
-              ]);
-            }
+          // Exact check over the FULL requested rect (not the visible
+          // intersection above): the stored rect is what renders on
+          // scroll, so a below-fold field counts too. One enumeration
+          // pass replaces the old grid of hit-test probes, which missed
+          // any field containing no probe point (F1).
+          const check = await execInTab(tid, page.pageSpotlightRectCheck, [rect]);
+          if (!check || check.success === false || check.code) {
+            return fail((check && check.code) || "inject_failed", (check && check.error) || "The Spotlight rect check did not run, so the rect was not drawn");
           }
-          for (const [px, py] of probes) {
-            const hit = await execInTab(tid, page.pageSpotlightHitTest, [px, py]);
-            if (hit && hit.sensitive && !generic) {
-              return fail("sensitive_target", "That rect overlaps a sensitive field (password, one-time-code or payment). Shrink the rect to the label or error text, or pass generic:true for a fixed extension-written chip.", { descriptor: hit.descriptor });
-            }
+          if (check && check.sensitive && !generic) {
+            return fail("sensitive_target", "That rect overlaps a sensitive field (password, one-time-code or payment). Shrink the rect to the label or error text, or pass generic:true for a fixed extension-written chip.", { descriptor: check.descriptor });
           }
           drawArgs.rect = rect;
           drawArgs.descriptor = { tag: "rect", role: "", name: "" };

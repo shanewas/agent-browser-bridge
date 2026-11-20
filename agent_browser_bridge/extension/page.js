@@ -804,6 +804,93 @@ export function pageSpotlightHitTest(x, y) {
   return { sensitive, descriptor: L.descriptorOf(top), media, targetKey };
 }
 
+// Spotlight rect safety: exact, not sampled. Enumerate the document's
+// sensitive fields once and test each field's own rect against the FULL
+// requested draw rect. Both rects are viewport-space at draw time, so a
+// below-fold field's rect simply sits outside the viewport in the same
+// space - it must still count, because the stored rect is what renders
+// when the user scrolls. Grid-probing the visible intersection missed
+// any field that contained no probe point (F1).
+export function pageSpotlightRectCheck(rect) {
+  const L = window.__eabLib;
+  if (!L) return { code: "lib_missing" };
+  if (!rect) return { sensitive: false, descriptor: null };
+  const left = Number(rect.x), top = Number(rect.y);
+  const right = left + Number(rect.width), bottom = top + Number(rect.height);
+  if (!(right > left && bottom > top)) return { sensitive: false, descriptor: null };
+  const fields = [];
+  const seen = new Set();
+  const collect = (root) => {
+    if (!root || typeof L.enumerateSensitiveFields !== "function") return;
+    for (const f of L.enumerateSensitiveFields(root) || []) {
+      if (f && !seen.has(f)) { seen.add(f); fields.push(f); }
+    }
+  };
+  collect(document);
+  // A stub or framed root whose document cannot enumerate itself still
+  // gets its element tree checked; in a real page this is the same set,
+  // so only fall back to it when the document collect found nothing.
+  if (!fields.length && document.documentElement && document.documentElement !== document) collect(document.documentElement);
+  const normRect = (el) => {
+    if (!el || !el.getBoundingClientRect) return null;
+    const r = el.getBoundingClientRect();
+    const fl = r.left !== undefined ? r.left : r.x;
+    const ft = r.top !== undefined ? r.top : r.y;
+    if (fl === undefined || ft === undefined) return null;
+    const fr = r.right !== undefined ? r.right : fl + r.width;
+    const fb = r.bottom !== undefined ? r.bottom : ft + r.height;
+    return { left: fl, top: ft, right: fr, bottom: fb };
+  };
+  // A field inside a same-origin frame reports its rect relative to the
+  // frame's viewport, not the main page. Walk the frame chain: from the
+  // field's document, find the iframe element in the parent document
+  // whose contentDocument is that document, add its rect offset, and
+  // recurse for nested frames. A chain that cannot be resolved returns
+  // null, and the caller fails closed.
+  const mainFrameRect = (field) => {
+    let r = normRect(field);
+    if (!r) return null;
+    let doc = null;
+    try { doc = field.ownerDocument || null; } catch (e) { return null; }
+    let guard = 0;
+    while (doc && doc !== document && guard++ < 20) {
+      let parentDoc = null;
+      try {
+        const view = doc.defaultView;
+        const parentView = view && view.parent;
+        if (parentView && parentView !== view) parentDoc = parentView.document || null;
+      } catch (e) { return null; }
+      if (!parentDoc) return null;
+      let frameEl = null;
+      let frames = [];
+      try {
+        if (typeof L.queryAllDeep === "function") frames = L.queryAllDeep(parentDoc, "iframe") || [];
+        else if (parentDoc.querySelectorAll) frames = parentDoc.querySelectorAll("iframe") || [];
+      } catch (e) { return null; }
+      for (const cand of frames) {
+        let candDoc = null;
+        try { candDoc = cand.contentDocument || null; } catch (e) { continue; }
+        if (candDoc === doc) { frameEl = cand; break; }
+      }
+      if (!frameEl) return null;
+      const fr = normRect(frameEl);
+      if (!fr) return null;
+      r = { left: r.left + fr.left, top: r.top + fr.top, right: r.right + fr.left, bottom: r.bottom + fr.top };
+      doc = parentDoc;
+    }
+    if (doc && doc !== document) return null;
+    return r;
+  };
+  for (const f of fields) {
+    const r = mainFrameRect(f);
+    if (!r) return { sensitive: true, descriptor: L.descriptorOf(f) };
+    if (r.left < right && r.right > left && r.top < bottom && r.bottom > top) {
+      return { sensitive: true, descriptor: L.descriptorOf(f) };
+    }
+  }
+  return { sensitive: false, descriptor: null };
+}
+
 export function pageAwaitStill(quiet, max) {
   return new Promise((resolve) => {
     let t;
