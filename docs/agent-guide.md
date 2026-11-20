@@ -150,6 +150,12 @@ moves tabs into an existing group, or a new one when `groupId` is omitted;
 `edge_group_ungroup {tabIds}` removes tabs from their groups. CLI mirrors:
 `agent-bridge history search "query"`, `history delete <url>`, `group list [--window-id N]`,
 `group move <tab ids> [--group-id N] [--title T] [--color C]`, `group ungroup <tab ids>`.
+A group lives in one window: moving tabs from different windows into one group fails with
+`group_failed`. Grouping respects takeover: `group_move` / `group_ungroup` naming a tab the
+user has taken over fail with `user_takeover`, like any other touch of that tab; `group_list`
+is read-only and always answers. `edge_tab_new` with a `group` name joins the group with that
+title in the tab's window, creating it when absent; when the group step itself fails the tab
+still opens and the result carries a top-level `warning` saying so.
 
 ## Spotlight: pointing at things (v4.4.0+)
 

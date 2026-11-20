@@ -23,6 +23,22 @@ Two extension tails from the 2.6.0 review (#64).
   reaches the scrollable element there instead of scrolling the
   window.
 
+Tab groups: takeover isolation and honest failures.
+
+- `group_move` and `group_ungroup` now respect the takeover pause per
+  target tab: naming a tab the user has taken over returns
+  `user_takeover` instead of rearranging the strip under them. The
+  pause gate only ever saw a call's single pinned tab, and group ops
+  name theirs in the plural, so they slipped past it.
+- `tab_new` with a group name now reports a failed grouping as a
+  top-level `warning` on the result. Before, the tab opened, the call
+  read as success, and the failure sat inside the `group` field where
+  callers do not look.
+- The extension-side group paths (`group_list`, `group_move`,
+  `group_ungroup`, `tab_new` join-by-name) are covered by behavioural
+  tests that drive the real worker code; only the daemon and CLI
+  layers had tests before.
+
 ## 4.3.0
 
 The working pill stays up while the agent works, and the extension channel is paired by default.

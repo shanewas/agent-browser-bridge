@@ -347,6 +347,25 @@ out.batch_scan_count = scanCount;
 out.batch_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
 targetEl.contains = (o) => o === targetEl;
 
+// Confirmation review: a hint-attribute rename in place (a descendant
+// input's name becomes a sensitive hint under a showing ring) must run
+// the same sensitive re-check as a type flip; the hint attributes are
+// in the observer's filter alongside type.
+sent.length = 0;
+targetEl.contains = (o) => o === targetEl || o === inputInside;
+targetEl.__swappedSensitive = true;
+msgListener({ type: "SPOTLIGHT", op: "draw", mode: "ring", targetKey: "k1",
+  label: "Container", agent: "Sigil", highlightUntil: Date.now() + 4000,
+  generation: 19, session: 2, descriptor: { tag: "div", role: "", name: "Box" } }, {}, () => {});
+const hintMO = moInstances[moInstances.length - 1];
+out.hint_observes_name_attribute = hintMO.observations.some((o) => o.target === targetEl
+  && o.opts && Array.isArray(o.opts.attributeFilter) && o.opts.attributeFilter.includes("name"));
+hintMO.cb([{ type: "attributes", target: inputInside, attributeName: "name" }]);
+out.hint_rename_gone_reports = sent.filter((m) => m.type === "SPOTLIGHT_TARGET_GONE").length;
+out.hint_rename_stage_on = stage._classes.has("on");
+targetEl.__swappedSensitive = false;
+targetEl.contains = (o) => o === targetEl;
+
 console.log(JSON.stringify(out));
 """
 
@@ -450,6 +469,15 @@ def test_generic_highlight_survives_in_place_mutation(spot):
     # RV-5: generic draws are exempt from the F5 sensitive re-check.
     assert spot["generic_swap_gone_reports"] == 0
     assert spot["generic_swap_stage_on"] is True
+
+
+def test_hint_rename_in_place_reports_target_gone(spot):
+    # Confirmation review: the observer watches the hint-bearing
+    # attributes, and a descendant's name rename re-runs the sensitive
+    # check just like a type flip.
+    assert spot["hint_observes_name_attribute"] is True
+    assert spot["hint_rename_gone_reports"] == 1
+    assert spot["hint_rename_stage_on"] is False
 
 
 def test_type_flip_to_password_reports_target_gone(spot):

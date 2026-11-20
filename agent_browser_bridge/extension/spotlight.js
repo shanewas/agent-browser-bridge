@@ -343,6 +343,9 @@
   // ---- Observers -------------------------------------------------------------------
   var targetMO = null;
   var targetRO = null;
+  // Attributes whose change can make a field sensitive in place: its
+  // type, or any attribute the sensitive-field hint reads.
+  var SENSITIVE_ATTRS = ["type", "name", "id", "aria-label", "placeholder"];
   function armObservers() {
     disarmObservers();
     if (!cur || !cur.el) return;
@@ -391,8 +394,11 @@
           // An input switched to type=password in place (a show-password
           // toggle on the bound element, or on an input inside it) is
           // an attribute-only swap the childList check never sees: run
-          // the same sensitive re-check (RV-6).
-          if (rec.attributeName === "type" && insideTarget(rec.target)) {
+          // the same sensitive re-check (RV-6). The hint-bearing
+          // attributes get the same treatment: a rename that makes a
+          // field sensitive by its name, id, aria-label or placeholder
+          // is the same swap in a different attribute.
+          if (SENSITIVE_ATTRS.indexOf(rec.attributeName) >= 0 && insideTarget(rec.target)) {
             if (sensitiveRecheck()) return;
             scheduleRender();
             continue;
@@ -416,9 +422,10 @@
       // One observe call for the target carries both option sets: a
       // second observe() on the same target would replace the first
       // call's options. childList+subtree is bounded to the target's
-      // own subtree, for the in-place swap check above. "type" is in
-      // the filter for the attribute-only swap check (RV-6).
-      targetMO.observe(cur.el, { attributes: true, attributeFilter: ["class", "style", "type"], childList: true, subtree: true });
+      // own subtree, for the in-place swap check above. The sensitive
+      // attributes are in the filter for the attribute-only swap check
+      // (RV-6 and the hint-attribute follow-up).
+      targetMO.observe(cur.el, { attributes: true, attributeFilter: ["class", "style"].concat(SENSITIVE_ATTRS), childList: true, subtree: true });
       if (cur.el.parentElement) targetMO.observe(cur.el.parentElement, { childList: true });
     } catch (e) {}
     if (typeof ResizeObserver !== "undefined") {
