@@ -90,6 +90,12 @@ out.spaced_dot_then = v("Press the button . Then continue");
 out.spaced_dot_dev = v("go to example . dev");
 out.ideographic_spaced = v("visit example \u3002 com");
 
+// Confirmation review: a domain typed with real dots is rejected on
+// the dotted pattern alone, whatever its TLD; the TLD list guards
+// only the spaced form, where prose false-positives live.
+out.plain_dotted_unlisted_tld = v("Mirror at evil.zip here");
+out.spaced_unlisted_tld = v("go to example . zip");
+
 // RV-8: a spaced shortener pair only counts as a domain when a path
 // signal follows it.
 out.shortener_prose_co = v("This isn't co-branded merch");
@@ -229,6 +235,14 @@ def test_rv7_spaced_dot_domains_still_rejected(lib):
                 "ideographic_spaced"):
         assert lib[key]["ok"] is False, key
         assert lib[key]["code"] == "label_rejected", key
+
+
+def test_plain_dotted_domain_rejected_on_any_tld(lib):
+    # Real dots: the pattern alone rejects, no TLD list involved.
+    assert lib["plain_dotted_unlisted_tld"]["ok"] is False
+    assert lib["plain_dotted_unlisted_tld"]["code"] == "label_rejected"
+    # The same TLD in spaced form stays prose-safe: the list guards it.
+    assert lib["spaced_unlisted_tld"]["ok"] is True
 
 
 def test_rv8_spaced_shortener_prose_passes(lib):

@@ -145,14 +145,25 @@ export function validateLabel(raw) {
   // NFKC-folds to its ASCII spelling, an IPv4 literal needs no TLD, and a
   // spelled-out "example dot com" is caught as a token pair. Spaces around
   // a dot carry no meaning in a read-aloud domain ("example . com"), so
-  // they are collapsed before the domain pattern runs - but the collapse
-  // only produces a domain candidate when the token after the final dot
-  // is a plausible TLD (SPELLED_TLDS). A sentence period followed by an
-  // ordinary word ("Results . Sorted by date") is prose, not a domain.
+  // they are collapsed before the domain pattern runs - but in the
+  // collapsed text a candidate only counts when the token after the
+  // final dot is a plausible TLD (SPELLED_TLDS). A sentence period
+  // followed by an ordinary word ("Results . Sorted by date") is prose,
+  // not a domain.
   const domainText = normalized.replace(/\s*\.\s*/g, ".");
   if (/https?:\/\/|www\.[^\s]+/.test(domainText)
       || /\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(domainText)) {
     return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+  }
+  // A domain typed with real dots is a domain whatever its final label:
+  // the dotted pattern alone rejects it, as it did before the spaced-dot
+  // gate existed. The TLD list below guards only the collapsed text,
+  // where a sentence period and a spaced domain look alike.
+  for (const m of normalized.matchAll(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/g)) {
+    const tld = m[0].slice(m[0].lastIndexOf(".") + 1);
+    if (/^[a-z]{2,}$/.test(tld)) {
+      return { ok: false, code: "label_rejected", error: LABEL_REJECT_URL };
+    }
   }
   for (const m of domainText.matchAll(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/g)) {
     const tld = m[0].slice(m[0].lastIndexOf(".") + 1);
