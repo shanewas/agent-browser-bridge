@@ -899,6 +899,7 @@ export async function execute(cmd) {
           tab = await chrome.tabs.create({ url, active });
         }
         let group = null;
+        let groupWarning;
         if (p.group) {
           const name = typeof p.group === "string" ? p.group : "Agent";
           try {
@@ -914,12 +915,16 @@ export async function execute(cmd) {
             group = { id: groupId, title: name };
           } catch (e) {
             group = { code: "group_unsupported", error: e.message };
+            // The tab opened fine; say loudly that the group part did not,
+            // instead of burying the failure inside the group field where a
+            // caller scanning for success never sees it.
+            groupWarning = `Tab opened, but it was not put in the "${name}" group: ${e.message}`;
           }
         }
         const loadTimeout = p.deadlineMs ? Math.min(15000, Math.max(100, p.deadlineMs - Date.now())) : 15000;
         if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, loadTimeout, true);
         const t = await chrome.tabs.get(tab.id);
-        return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
+        return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group, ...(groupWarning ? { warning: groupWarning } : {}) };
       }
 
       case "group_list": {

@@ -13,7 +13,9 @@ import http.server
 import json
 import logging
 import logging.handlers
+import math
 import os
+import re
 import secrets
 import socket
 import socketserver
@@ -87,6 +89,102 @@ def _clean_agent_label(value) -> str | None:
 
 def _is_tab_scoped(action: str) -> bool:
     return action not in LOCK_EXEMPT_ACTIONS and not action.startswith("desktop_")
+
+
+_JS_DECIMAL_RE = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
+_JS_RADIX_RES = (
+    (re.compile(r"0[xX][0-9a-fA-F]+"), 16),
+    (re.compile(r"0[bB][01]+"), 2),
+    (re.compile(r"0[oO][0-7]+"), 8),
+)
+
+
+def _js_number_from_string(text: str) -> float:
+    """JavaScript Number(string): the StringNumericLiteral grammar, not
+    Python's float() — float() rejects radix forms JS accepts ("0x7")
+    and accepts forms JS rejects ("1_0", non-ASCII digits)."""
+    s = text.strip(" \t\n\r\v\f             \u2028\u2029  　\ufeff")
+    if not s:
+        return 0.0
+    if s in ("Infinity", "+Infinity"):
+        return math.inf
+    if s == "-Infinity":
+        return -math.inf
+    for pattern, base in _JS_RADIX_RES:
+        if pattern.fullmatch(s):
+            return float(int(s, base))
+    if _JS_DECIMAL_RE.fullmatch(s):
+        return float(s)
+    return float("nan")
+
+
+def _js_array_to_string(values) -> str:
+    """JavaScript Array.prototype.toString: elements joined with commas,
+    null/undefined rendered empty, nested arrays flattened by recursion."""
+    parts = []
+    for item in values:
+        if item is None:
+            parts.append("")
+        elif isinstance(item, bool):
+            parts.append("true" if item else "false")
+        elif isinstance(item, (list, tuple)):
+            parts.append(_js_array_to_string(item))
+        elif isinstance(item, float) and item == int(item) and abs(item) < 1e21:
+            parts.append(str(int(item)))
+        elif isinstance(item, dict):
+            parts.append("[object Object]")
+        else:
+            parts.append(str(item))
+    return ",".join(parts)
+
+
+def _js_number(value) -> float:
+    """JavaScript Number(value) for JSON-shaped inputs; NaN when it has none.
+
+    Mirrors the coercion the worker applies to tabIds, including the
+    awkward corners: Number([7]) is 7 (an array stringifies first),
+    Number("0x7") is 7, Number(null) is 0, and a several-hundred-digit
+    integer is Infinity, not an exception.
+    """
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except OverflowError:
+            return math.inf if value > 0 else -math.inf
+    if isinstance(value, str):
+        return _js_number_from_string(value)
+    if isinstance(value, (list, tuple)):
+        return _js_number_from_string(_js_array_to_string(value))
+    return float("nan")
+
+
+def _param_tab_ids(params) -> list | None:
+    """The tab IDs a group op will act on, computed the way the worker does.
+
+    The worker coerces with Number() over the tabIds list (wrapping a
+    non-list value), so a string, a float or a boolean can all name a tab
+    by the time chrome.tabs.group sees them. The pause gate must read the
+    same set, or a caller walks a paused tab past it with "7" or true.
+    """
+    if not isinstance(params, dict):
+        return None
+    if "tabIds" in params:
+        raw = params["tabIds"]
+    elif params.get("tabId") is not None:
+        raw = [params["tabId"]]
+    else:
+        return None
+    values = raw if isinstance(raw, (list, tuple)) else [raw]
+    ids = []
+    for value in values:
+        number = _js_number(value)
+        if math.isfinite(number) and number == int(number):
+            ids.append(int(number))
+    return ids or None
 
 
 def _tab_id(tab_info) -> int | None:
@@ -310,7 +408,8 @@ class BridgeState:
                 blocked = None
                 if isinstance(p_action, str):
                     blocked = self.pause_blocked_locked(
-                        p_action, tab_id=p_tab if isinstance(p_tab, int) else None)
+                        p_action, tab_id=p_tab if isinstance(p_tab, int) else None,
+                        tab_ids=_param_tab_ids(p_params) if p_action in ("group_move", "group_ungroup") else None)
                 if blocked is not None:
                     self.results[item.id] = blocked
                     item.event.set()
@@ -319,7 +418,8 @@ class BridgeState:
                 self.ext.send_text(json.dumps(item.payload))
 
     def pause_blocked_locked(self, action: str, tab_id: int | None = None,
-                             session_token: str | None = None) -> dict | None:
+                             session_token: str | None = None,
+                             tab_ids: list | None = None) -> dict | None:
         """The takeover result when this call is paused, else None. Caller holds the lock."""
         if action in PAUSE_ALLOW_ACTIONS:
             return None
@@ -337,6 +437,20 @@ class BridgeState:
                     return _tab_paused_result() if action == "spotlight" else _takeover_result()
                 del self.paused_tabs[tab_id]
                 self.paused_by.pop(tab_id, None)
+        if tab_ids and action in ("group_move", "group_ungroup"):
+            # Group ops name their tabs in the plural, so the single-tab
+            # gate above never sees them. Moving a tab the user has taken
+            # over rearranges the strip under their hands; it waits like
+            # any other touch of that tab. group_list is read-only
+            # metadata and is not gated here.
+            for tid in tab_ids:
+                exp = self.paused_tabs.get(tid)
+                if exp is None:
+                    continue
+                if exp > now:
+                    return _takeover_result()
+                del self.paused_tabs[tid]
+                self.paused_by.pop(tid, None)
         return None
 
     def set_tab_pause_locked(self, tab_id: int, paused: bool, by: str | None = None) -> None:
@@ -1047,7 +1161,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     state.last_agent = agent_label
             with state.lock:
                 blocked = state.pause_blocked_locked(action, tab_id=forward_tab,
-                                                     session_token=session_token)
+                                                     session_token=session_token,
+                                                     tab_ids=_param_tab_ids(params) if action in ("group_move", "group_ungroup") else None)
             if blocked is not None:
                 self._respond(200, blocked)
                 return
@@ -1112,7 +1227,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 # about the moment the action actually runs.
                 with state.lock:
                     blocked = state.pause_blocked_locked(action, tab_id=forward_tab,
-                                                         session_token=session_token)
+                                                         session_token=session_token,
+                                                         tab_ids=_param_tab_ids(params) if action in ("group_move", "group_ungroup") else None)
                 if blocked is not None:
                     return (blocked, 200)
                 return self._dispatch_once(state, action, params, deadline, tab_scoped, agent=agent)
