@@ -232,3 +232,62 @@ def test_group_move_on_paused_tab_blocked_end_to_end(daemon):
         assert json.loads(out)["success"] is True, out
     finally:
         ext.close()
+
+
+def test_group_pause_gate_mirrors_worker_coercion(tmp_path):
+    from agent_browser_bridge.bridge import BridgeState, _param_tab_ids
+
+    state = BridgeState(port=0, home=tmp_path, token="test-token")
+    with state.lock:
+        state.set_tab_pause_locked(7, True)
+        # Shapes the worker's Number() coercion turns into tab 7, verified
+        # against Node: nested single-element arrays stringify first, and
+        # radix-prefixed strings parse.
+        for params in ({"tabIds": [[7]]}, {"tabIds": [6, [7]]},
+                       {"tabIds": ["0x7"]}, {"tabIds": ["0b111"]},
+                       {"tabIds": ["0o7"]}, {"tabIds": [" 7 "]}):
+            blocked = state.pause_blocked_locked(
+                "group_move", tab_ids=_param_tab_ids(params))
+            assert blocked is not None and blocked["code"] == "user_takeover", params
+        # Shapes JS rejects (signed radix, numeric underscores) name no
+        # tab in the worker either, so the gate must not invent one.
+        for params in ({"tabIds": ["-0x7"]}, {"tabIds": ["1_0"]},
+                       {"tabIds": [6, [8]]}):
+            assert state.pause_blocked_locked(
+                "group_move", tab_ids=_param_tab_ids(params)) is None, params
+        # A several-hundred-digit integer is Infinity in JS, not an
+        # exception: the gate answers, it does not throw.
+        assert _param_tab_ids({"tabIds": [10 ** 400]}) is None
+
+
+def test_group_move_in_batch_blocked_on_paused_tab(daemon):
+    import time as _time
+
+    def handler(action, params):
+        return {"success": True, "groupId": 7, "tabIds": params.get("tabIds")}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    try:
+        ext.send_text(json.dumps(
+            {"control": "takeover", "id": "tg2", "tabId": 7, "paused": True}))
+        # The pause lands asynchronously; poll a direct move until the
+        # gate answers, then exercise the batch path.
+        deadline = _time.time() + 10
+        result = {}
+        while _time.time() < deadline:
+            code, body = daemon.exec("group_move", {"tabIds": [7]})
+            result = body
+            if result.get("code") == "user_takeover":
+                break
+            _time.sleep(0.2)
+        assert result.get("code") == "user_takeover", result
+        code, body = daemon.exec(
+            "batch", {"steps": [{"action": "group_move", "tabIds": [7]}]})
+        assert body.get("success") is False, body
+        assert body.get("stoppedAt") == "group_move", body
+        assert body["results"][0].get("code") == "user_takeover", body
+        code, body = daemon.exec(
+            "batch", {"steps": [{"action": "group_move", "tabIds": [8]}]})
+        assert body.get("success") is True, body
+    finally:
+        ext.close()

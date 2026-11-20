@@ -15,6 +15,7 @@ import logging
 import logging.handlers
 import math
 import os
+import re
 import secrets
 import socket
 import socketserver
@@ -90,20 +91,74 @@ def _is_tab_scoped(action: str) -> bool:
     return action not in LOCK_EXEMPT_ACTIONS and not action.startswith("desktop_")
 
 
+_JS_DECIMAL_RE = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
+_JS_RADIX_RES = (
+    (re.compile(r"0[xX][0-9a-fA-F]+"), 16),
+    (re.compile(r"0[bB][01]+"), 2),
+    (re.compile(r"0[oO][0-7]+"), 8),
+)
+
+
+def _js_number_from_string(text: str) -> float:
+    """JavaScript Number(string): the StringNumericLiteral grammar, not
+    Python's float() — float() rejects radix forms JS accepts ("0x7")
+    and accepts forms JS rejects ("1_0", non-ASCII digits)."""
+    s = text.strip(" \t\n\r\v\f             \u2028\u2029  　\ufeff")
+    if not s:
+        return 0.0
+    if s in ("Infinity", "+Infinity"):
+        return math.inf
+    if s == "-Infinity":
+        return -math.inf
+    for pattern, base in _JS_RADIX_RES:
+        if pattern.fullmatch(s):
+            return float(int(s, base))
+    if _JS_DECIMAL_RE.fullmatch(s):
+        return float(s)
+    return float("nan")
+
+
+def _js_array_to_string(values) -> str:
+    """JavaScript Array.prototype.toString: elements joined with commas,
+    null/undefined rendered empty, nested arrays flattened by recursion."""
+    parts = []
+    for item in values:
+        if item is None:
+            parts.append("")
+        elif isinstance(item, bool):
+            parts.append("true" if item else "false")
+        elif isinstance(item, (list, tuple)):
+            parts.append(_js_array_to_string(item))
+        elif isinstance(item, float) and item == int(item) and abs(item) < 1e21:
+            parts.append(str(int(item)))
+        elif isinstance(item, dict):
+            parts.append("[object Object]")
+        else:
+            parts.append(str(item))
+    return ",".join(parts)
+
+
 def _js_number(value) -> float:
-    """JavaScript Number(value) for JSON-shaped inputs; NaN when it has none."""
+    """JavaScript Number(value) for JSON-shaped inputs; NaN when it has none.
+
+    Mirrors the coercion the worker applies to tabIds, including the
+    awkward corners: Number([7]) is 7 (an array stringifies first),
+    Number("0x7") is 7, Number(null) is 0, and a several-hundred-digit
+    integer is Infinity, not an exception.
+    """
     if isinstance(value, bool):
         return 1.0 if value else 0.0
+    if value is None:
+        return 0.0
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return 0.0
         try:
-            return float(text)
-        except ValueError:
-            return float("nan")
+            return float(value)
+        except OverflowError:
+            return math.inf if value > 0 else -math.inf
+    if isinstance(value, str):
+        return _js_number_from_string(value)
+    if isinstance(value, (list, tuple)):
+        return _js_number_from_string(_js_array_to_string(value))
     return float("nan")
 
 
