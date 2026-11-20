@@ -150,3 +150,85 @@ def test_cli_group_move_noninteger_tabs_json(daemon):
     assert body["success"] is False
     assert body["code"] == "bad_params"
     assert "integers" in body["error"]
+
+
+# ---- takeover isolation: group ops must not move a tab the user holds ----
+
+def test_group_move_blocked_when_a_target_tab_is_paused(tmp_path):
+    from agent_browser_bridge.bridge import BridgeState
+
+    state = BridgeState(port=0, home=tmp_path, token="test-token")
+    with state.lock:
+        state.set_tab_pause_locked(7, True)
+        blocked = state.pause_blocked_locked("group_move", tab_ids=[6, 7])
+        assert blocked is not None and blocked["code"] == "user_takeover"
+        blocked = state.pause_blocked_locked("group_ungroup", tab_ids=[7])
+        assert blocked is not None and blocked["code"] == "user_takeover"
+        # Untouched tabs group freely; listing groups is metadata and stays open.
+        assert state.pause_blocked_locked("group_move", tab_ids=[6]) is None
+        assert state.pause_blocked_locked("group_list", tab_ids=[7]) is None
+
+
+def test_group_move_allowed_after_pause_expires(tmp_path):
+    import time
+
+    from agent_browser_bridge.bridge import BridgeState
+
+    state = BridgeState(port=0, home=tmp_path, token="test-token")
+    with state.lock:
+        state.paused_tabs[7] = time.time() - 1
+        assert state.pause_blocked_locked("group_move", tab_ids=[7]) is None
+        assert 7 not in state.paused_tabs
+
+
+def test_group_pause_gate_sees_coerced_tab_ids(tmp_path):
+    from agent_browser_bridge.bridge import BridgeState, _param_tab_ids
+
+    state = BridgeState(port=0, home=tmp_path, token="test-token")
+    with state.lock:
+        state.set_tab_pause_locked(7, True)
+        state.set_tab_pause_locked(1, True)
+        # The worker coerces tabIds with Number(): each of these shapes
+        # names tab 7 by the time chrome.tabs.group runs, so the gate
+        # must see tab 7 in every one of them.
+        for params in ({"tabIds": ["7"]}, {"tabIds": [7.0]}, {"tabIds": 7},
+                       {"tabId": 7}, {"tabIds": [6, "7"]}):
+            blocked = state.pause_blocked_locked(
+                "group_move", tab_ids=_param_tab_ids(params))
+            assert blocked is not None and blocked["code"] == "user_takeover", params
+        # Number(true) is 1 in the worker.
+        blocked = state.pause_blocked_locked(
+            "group_move", tab_ids=_param_tab_ids({"tabIds": [True]}))
+        assert blocked is not None and blocked["code"] == "user_takeover"
+        # Shapes that name no paused tab pass.
+        for params in ({"tabIds": ["x"]}, {"tabIds": [8]}, {"tabIds": []}, {}):
+            assert state.pause_blocked_locked(
+                "group_move", tab_ids=_param_tab_ids(params)) is None, params
+
+
+def test_group_move_on_paused_tab_blocked_end_to_end(daemon):
+    import time as _time
+
+    def handler(action, params):
+        return {"success": True, "groupId": 7, "tabIds": params.get("tabIds")}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    try:
+        ext.send_text(json.dumps(
+            {"control": "takeover", "id": "tg1", "tabId": 7, "paused": True}))
+        # The pause lands asynchronously; poll until the gate answers.
+        result = {}
+        deadline = _time.time() + 10
+        while _time.time() < deadline:
+            code, out, err = run_cli(["--json", "group", "move", "7"], env=env)
+            result = json.loads(out) if out else {}
+            if result.get("code") == "user_takeover":
+                break
+            _time.sleep(0.2)
+        assert result.get("code") == "user_takeover", result
+        # A tab the user has not taken over still groups fine.
+        code, out, err = run_cli(["--json", "group", "move", "8"], env=env)
+        assert json.loads(out)["success"] is True, out
+    finally:
+        ext.close()
