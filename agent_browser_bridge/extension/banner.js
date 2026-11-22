@@ -206,7 +206,9 @@
 
   function show(nextState, msg) {
     if (msg && msg.agent) agentName = msg.agent;
-    if (msg && Object.prototype.hasOwnProperty.call(msg, "doing")) doing = msg.doing || null;
+    // Every working push carries the current label or nothing, so an
+    // absent one on a working message is a clear, not a stale keep.
+    if (nextState === "working") doing = (msg && msg.doing) || null;
     if (msg && typeof msg.tabTitle === "boolean") titleEnabled = msg.tabTitle;
     if (nextState === "working") clearLastpoint();
     verb = (msg && msg.verb) || null;

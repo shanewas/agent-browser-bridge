@@ -39,6 +39,26 @@ Tab groups: takeover isolation and honest failures.
   tests that drive the real worker code; only the daemon and CLI
   layers had tests before.
 
+Tab title: the tab says what the agent is doing.
+
+- While the presence pill shows on a tab, the tab's title reads
+  "Agent — activity" ("Sigil — Deploying the cache rule"), so the work
+  is visible from the tab strip without switching to the tab. A
+  takeover pause reads "Agent — Paused". The page's own title is
+  tracked underneath — a title the page sets for itself mid-work
+  becomes the one restored when the decoration ends — and the
+  decoration follows the pill's timing exactly, so the two always
+  tell the same story. A popup toggle ("Tab title shows what the
+  agent is doing") turns it off.
+- The activity text is a declared label first: a session-level
+  `doing` label set at `session_start` or changed mid-flight with the
+  new `set_doing` action (CLI `doing`, MCP `edge_set_doing`), which
+  the daemon stores on the session and forwards to the tab at once.
+  With no label it falls back to the per-action verb, then "Working".
+  Labels are plain text capped at 60 characters; links are rejected
+  with `label_rejected`. The daemon advertises the `tab_title`
+  feature.
+
 ## 4.3.0
 
 The working pill stays up while the agent works, and the extension channel is paired by default.
