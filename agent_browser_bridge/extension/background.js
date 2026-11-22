@@ -324,7 +324,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     chrome.tabs.query({}).then((tabs) => {
       for (const t of tabs || []) {
         if (pausedTabs.has(t.id)) bannerSend(t.id, { state: "paused", agent: (workingTabs.get(t.id) || {}).agent, tabTitle: tabTitleEnabled });
-        else if (workingTabs.has(t.id)) pushWorking(t.id);
+        else if (workingTabs.has(t.id) && workingTabs.get(t.id).shown) pushWorking(t.id);
       }
     }).catch(() => {});
   } catch (e) {}

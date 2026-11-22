@@ -121,8 +121,13 @@ msgs = await drive({ id: "3", action: "set_doing", params: { tabId: 7 }, doing: 
 working = msgs.filter((m) => m.msg.state === "working");
 out.cleared_banner_doing = working.length ? (working[working.length - 1].msg.doing ?? null) : "no-banner";
 
-// The popup toggle off: later pushes carry tabTitle false.
+// The popup toggle off: the flip alone re-pushes showing tabs with
+// tabTitle false, before any later command produces a push of its own.
+bannerSent.length = 0;
 for (const fn of storageChangedListeners) fn({ tabTitleEnabled: { newValue: false } }, "local");
+await sleep(200);
+const flipMsgs = bannerSent.filter((m) => m.msg && m.msg.type === "BANNER" && m.msg.state === "working");
+out.flip_repush_tab_title = flipMsgs.length ? flipMsgs[flipMsgs.length - 1].msg.tabTitle : "no-repush";
 msgs = await drive({ id: "4", action: "set_doing", params: { tabId: 7 }, doing: "One more thing" });
 working = msgs.filter((m) => m.msg.state === "working");
 out.toggle_off_tab_title = working.length ? working[working.length - 1].msg.tabTitle : null;
@@ -137,6 +142,17 @@ for (const fn of runtimeListeners) {
 }
 await sleep(150);
 out.idle_query_banner_count = bannerSent.filter((m) => m.tabId === 9).length;
+
+// A label set while the tab is paused is accepted (it is metadata
+// about the agent itself) and lands when work resumes.
+await drive({ control: "state", tabId: 7, paused: true });
+msgs = await drive({ id: "6", action: "set_doing", params: { tabId: 7 }, doing: "Set while paused" });
+const res6 = ws.sent.filter((m) => m.id === "6");
+out.paused_set_doing_success = res6.length ? res6[res6.length - 1].result.success : null;
+await drive({ control: "state", tabId: 7, paused: false });
+msgs = await drive({ id: "7", action: "click", params: { tabId: 7 }, agent: "Sigil" });
+working = msgs.filter((m) => m.msg.state === "working");
+out.resumed_banner_doing = working.length ? (working[working.length - 1].msg.doing ?? null) : "no-banner";
 
 console.log(JSON.stringify(out));
 process.exit(0);
@@ -179,3 +195,12 @@ def test_title_toggle_off_rides_presence(worker):
 def test_set_doing_on_idle_tab_leaves_no_phantom(worker):
     assert worker["idle_set_doing_banner_count"] == 0
     assert worker["idle_query_banner_count"] == 0
+
+
+def test_toggle_flip_repushes_showing_tabs(worker):
+    assert worker["flip_repush_tab_title"] is False
+
+
+def test_label_set_while_paused_lands_on_resume(worker):
+    assert worker["paused_set_doing_success"] is True
+    assert worker["resumed_banner_doing"] == "Set while paused"

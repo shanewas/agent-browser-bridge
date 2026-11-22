@@ -56,6 +56,9 @@ PAUSE_ALLOW_ACTIONS = frozenset({
     # Spotlight clear/status only report or remove the agent's own overlay;
     # they never read page content. Draws stay blocked while paused.
     "spotlight_clear", "spotlight_status",
+    # set_doing only renames the agent's own activity label; the title of a
+    # paused tab keeps reading Paused and the label lands on resume.
+    "set_doing",
 })
 USER_TAKEOVER_ERROR = ("The user took control of this tab. "
                        "Do not retry. Tell the user and wait for them to resume.")

@@ -1,5 +1,6 @@
 """Tab title activity label: daemon storage, cleaning, forwarding."""
 import json
+import time
 
 from agent_browser_bridge import config
 from agent_browser_bridge.bridge import _clean_doing_label, _doing_label_rejected
@@ -136,3 +137,36 @@ def test_set_doing_forward_failure_keeps_session(daemon, fake_ext):
     assert res["success"] is False, res
     res = _exec_raw(daemon, {"action": "session_status", "sessionToken": stok})
     assert res["doing"] == "Original label"
+
+
+def test_batch_set_doing_step_on_paused_tab(daemon, fake_ext):
+    # set_doing is pause-allowed like the other metadata actions: the
+    # label is the agent's own, and a paused tab's title keeps reading
+    # Paused until the user resumes.
+    fake_ext.handler = _ok_handler
+    fake_ext.send_text(json.dumps({"control": "takeover", "id": "tp1",
+                                   "tabId": 1, "paused": True}))
+    deadline = time.time() + 5
+    ack = None
+    while time.time() < deadline:
+        for m in fake_ext.received:
+            if m.get("control_ack") == "tp1":
+                ack = m
+                break
+        if ack:
+            break
+        time.sleep(0.05)
+    assert ack == {"control_ack": "tp1", "tabId": 1, "paused": True}
+    res = _exec_raw(daemon, {"action": "session_start",
+                             "params": {"name": "t5", "agent": "Sigil"}})
+    stok = res["sessionToken"]
+    res = _exec_raw(daemon, {"action": "get_active_tab", "sessionToken": stok})
+    assert res["success"], res
+    res = _exec_raw(daemon, {"action": "batch", "sessionToken": stok,
+                             "params": {"steps": [
+                                 {"action": "set_doing", "doing": "Set while paused"},
+                                 {"action": "ping"},
+                             ]}})
+    assert res["success"], res
+    res = _exec_raw(daemon, {"action": "session_status", "sessionToken": stok})
+    assert res["doing"] == "Set while paused"
