@@ -278,7 +278,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 // never hides a working pill on its own timer.
 // ---------------------------------------------------------------------------
 
-const BANNER_METADATA = new Set(["ping", "status", "tabs", "list_tabs", "tab", "get_active_tab"]);
+const BANNER_METADATA = new Set(["ping", "status", "tabs", "list_tabs", "tab", "get_active_tab", "set_doing"]);
 const BANNER_READONLY = new Set(["snapshot", "text", "elements", "interactive", "console", "wait", "wait_for", "history_search", "group_list", "spotlight", "spotlight_clear", "spotlight_status"]);
 const VERB_FOR = {
   click: "Clicking", dblclick: "Clicking", rightclick: "Clicking", drag: "Dragging",
@@ -311,6 +311,24 @@ chrome.storage.local.get("bannerTookOver").then((d) => { bannerTookOver = Boolea
 function persistPaused() {
   chrome.storage.session.set({ pausedTabs: [...pausedTabs], hiddenBannerTabs: [...hiddenBannerTabs] }).catch(() => {});
 }
+
+let tabTitleEnabled = true;
+chrome.storage.local.get("tabTitleEnabled").then((d) => { tabTitleEnabled = !(d && d.tabTitleEnabled === false); }).catch(() => {});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.tabTitleEnabled) return;
+  tabTitleEnabled = changes.tabTitleEnabled.newValue !== false;
+  // A flip reaches tabs that are already showing at once: off restores
+  // their titles now instead of at the next presence push, which a
+  // single long-running command may never produce.
+  try {
+    chrome.tabs.query({}).then((tabs) => {
+      for (const t of tabs || []) {
+        if (pausedTabs.has(t.id)) bannerSend(t.id, { state: "paused", agent: (workingTabs.get(t.id) || {}).agent, tabTitle: tabTitleEnabled });
+        else if (workingTabs.has(t.id) && workingTabs.get(t.id).shown) pushWorking(t.id);
+      }
+    }).catch(() => {});
+  } catch (e) {}
+});
 
 async function bannerEnabled() {
   try {
@@ -346,6 +364,7 @@ function pushWorking(tabId) {
   if (!w || pausedTabs.has(tabId) || hiddenBannerTabs.has(tabId)) return;
   bannerSend(tabId, {
     state: "working", agent: w.agent || undefined, verb: w.detail ? (w.verb || undefined) : undefined,
+    doing: w.doing || undefined, tabTitle: tabTitleEnabled,
     mutating: w.mutating, teachTooltip: !bannerTookOver,
   });
   iconFor(tabId);
@@ -356,8 +375,20 @@ function syncSpotlightFrame(tabId) {
   bannerSend(tabId, { state: "frame_dim", dim: spotlightModeOf(tabId) === "spotlight" });
 }
 
-function bannerActivity(tabId, action, phase, agent) {
+function bannerActivity(tabId, action, phase, agent, doing) {
   if (typeof tabId !== "number") return;
+  if (action === "set_doing") {
+    // A label change is not work: it touches no presence counters in
+    // either phase, so it cannot inflate or retire another command's
+    // presence, and on a tab with no live presence it leaves no entry
+    // behind - the label rides the next real command's frame instead.
+    if (phase !== "start") return;
+    const w = workingTabs.get(tabId);
+    if (!w) return;
+    if (doing !== undefined) w.doing = doing === null ? undefined : doing;
+    if (w.shown && !pausedTabs.has(tabId)) pushWorking(tabId);
+    return;
+  }
   let w = workingTabs.get(tabId);
   if (phase === "start") {
     if (!w) {
@@ -365,6 +396,7 @@ function bannerActivity(tabId, action, phase, agent) {
       workingTabs.set(tabId, w);
     }
     if (agent) w.agent = agent;
+    if (doing !== undefined) w.doing = doing === null ? undefined : doing;
     w.verb = VERB_FOR[action] || w.verb;
     w.inflight += 1;
     w.lastActivity = Date.now();
@@ -458,7 +490,7 @@ async function setPaused(tabId, paused, sendToDaemon = true, source = "takeover"
     bannerTookOver = true;
     try { chrome.storage.local.set({ bannerTookOver: true }); } catch (e) {}
     const w = workingTabs.get(tabId);
-    bannerSend(tabId, { state: "takenover", agent: w && w.agent });
+    bannerSend(tabId, { state: "takenover", agent: w && w.agent, tabTitle: tabTitleEnabled });
     // A takeover ends any Spotlight pointing on the tab; a labelled one leaves
     // its text in the pill as a re-showable "Last point".
     const label = await spotlightTakeover(tabId, source === "pill" ? "pill" : "takeover");
@@ -474,7 +506,7 @@ async function setPaused(tabId, paused, sendToDaemon = true, source = "takeover"
 function applyDaemonPauseState(tabId, paused) {
   if (paused) pausedTabs.add(tabId); else pausedTabs.delete(tabId);
   persistPaused();
-  bannerSend(tabId, paused ? { state: "paused", agent: (workingTabs.get(tabId) || {}).agent } : { state: "hidden" });
+  bannerSend(tabId, paused ? { state: "paused", agent: (workingTabs.get(tabId) || {}).agent, tabTitle: tabTitleEnabled } : { state: "hidden" });
   if (paused) {
     spotlightTakeover(tabId, "takeover").then((label) => {
       if (label && pausedTabs.has(tabId)) bannerSend(tabId, { state: "lastpoint", label });
@@ -545,7 +577,7 @@ function handleBannerMessage(msg, sender, sendResponse) {
       return true;
     case "BANNER_QUERY":
       if (tabId !== null) {
-        if (pausedTabs.has(tabId)) bannerSend(tabId, { state: "paused", agent: (workingTabs.get(tabId) || {}).agent });
+        if (pausedTabs.has(tabId)) bannerSend(tabId, { state: "paused", agent: (workingTabs.get(tabId) || {}).agent, tabTitle: tabTitleEnabled });
         else if (workingTabs.has(tabId)) pushWorking(tabId);
       }
       sendResponse({ ok: true });

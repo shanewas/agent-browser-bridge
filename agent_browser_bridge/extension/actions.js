@@ -857,6 +857,11 @@ export async function execute(cmd) {
       case "ping":
         return { success: true, message: "pong", version: chrome.runtime.getManifest().version, fileAccess: await checkFileAccess() };
 
+      case "set_doing":
+        // Worker-native: the activity hook already stored the label from
+        // the frame; there is nothing to do in the page.
+        return { success: true };
+
       case "reload_extension":
         setTimeout(() => { chrome.runtime.reload(); }, 100);
         return { success: true, message: "Extension reloading..." };
@@ -1794,7 +1799,11 @@ export async function executeTracked(cmd) {
   const p = cmd.params || {};
   const tabId = typeof p.tabId === "number" ? p.tabId : undefined;
   if (activityHook && tabId !== undefined) {
-    activityHook(tabId, cmd.action, "start", typeof cmd.agent === "string" ? cmd.agent : undefined);
+    // doing rides the frame like agent; the key's presence with a null
+    // value is an explicit clear (set_doing), absence means no change.
+    const doingArg = Object.prototype.hasOwnProperty.call(cmd, "doing")
+      ? (typeof cmd.doing === "string" ? cmd.doing : null) : undefined;
+    activityHook(tabId, cmd.action, "start", typeof cmd.agent === "string" ? cmd.agent : undefined, doingArg);
   }
   try {
     return await executeImpl(cmd);
@@ -1804,10 +1813,10 @@ export async function executeTracked(cmd) {
 }
 
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
-const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab", "spotlight_clear", "spotlight_status"]);
+const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab", "spotlight_clear", "spotlight_status", "set_doing"]);
 const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete", "group_list", "group_move", "group_ungroup"]);
 // These never inject into the page (wait polls until a page it can read arrives), so any URL is fine.
-const TAB_LEVEL = new Set(["nav", "back", "forward", "reload", "tab", "get_active_tab", "wait", "wait_for", "dialog", "console"]);
+const TAB_LEVEL = new Set(["nav", "back", "forward", "reload", "tab", "get_active_tab", "wait", "wait_for", "dialog", "console", "set_doing"]);
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};

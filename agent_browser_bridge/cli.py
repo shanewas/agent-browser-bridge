@@ -883,6 +883,11 @@ def main(argv=None) -> int:
     p_spot.add_argument("--media-time", type=float, default=None, help="show: media timestamp in seconds for a point on a video or audio element")
     p_spot.add_argument("--scale-factor", type=float, default=None, help="show: screenshot-to-CSS pixel ratio used to compute the point, echoed back in the result")
 
+    # doing
+    p_doing = add_cmd("doing", help="Set the activity label the tab title shows")
+    p_doing.add_argument("text", nargs="?", default=None, help='What the agent is doing, in a few words ("Deploying the cache rule")')
+    p_doing.add_argument("--clear", action="store_true", help="Clear the activity label")
+
     # group
     p_group = add_cmd("group", help="List or manage tab groups")
     p_group.add_argument("group_action", choices=["list", "move", "ungroup"])
@@ -1035,6 +1040,9 @@ def main(argv=None) -> int:
     _add_desktop_commands(add_cmd("desktop", help="Drive the Windows desktop: screenshot, mouse, keyboard"), common)
 
     args = parser.parse_args(argv)
+    if getattr(args, "cmd", None) == "doing" and getattr(args, "text", None) is None \
+            and not getattr(args, "clear", False):
+        parser.error("doing needs the activity text, or --clear to remove it")
     if not args.cmd:
         parser.print_help()
         return 3
@@ -1202,6 +1210,9 @@ def main(argv=None) -> int:
         else:
             action = "history_delete"
             params["url"] = args.query
+    elif action == "doing":
+        action = "set_doing"
+        params["doing"] = "" if args.clear else (args.text or "")
     elif action == "spotlight":
         if args.spot_action == "clear":
             action = "spotlight_clear"

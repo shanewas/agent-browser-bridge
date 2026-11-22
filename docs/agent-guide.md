@@ -157,6 +157,23 @@ is read-only and always answers. `edge_tab_new` with a `group` name joins the gr
 title in the tab's window, creating it when absent; when the group step itself fails the tab
 still opens and the result carries a top-level `warning` saying so.
 
+## The tab title: say what you are doing (v4.4.0+)
+
+While you work in a tab, its title reads "YourName — activity", so the user
+can see what you are doing from the tab strip without switching to the tab.
+Set the activity when a stretch of work starts and change it as the work
+moves: `edge_set_doing` (MCP), `agent-bridge doing "Deploying the cache
+rule"` (CLI), or the `doing` field at `session_start`. The label is stored
+on your session and rides along until you change it; an empty string clears
+it. Plain text, max 60 characters, no links (`label_rejected`). With no
+label set, the title falls back to the current action verb, then "Working";
+while the user holds the tab it reads "YourName — Paused". The page's own
+title is restored exactly when the work ends — but a visit can still be
+recorded in history under the decorated title if the user navigates
+mid-work, so keep labels free of anything sensitive. The user can turn the
+decoration off in the popup; `tabs` results show the decorated title while
+you work, which is the truth, not the page's title.
+
 ## Spotlight: pointing at things (v4.4.0+)
 
 `edge_spotlight` draws the user's eye to one thing in the page. Modes: `ring`

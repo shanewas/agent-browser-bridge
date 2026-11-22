@@ -143,6 +143,7 @@ class Edge:
         pin=True,
         auto_start=True,
         agent=None,
+        doing=None,
         token=None,
         session_token=None,
     ):
@@ -155,6 +156,9 @@ class Edge:
         # Presence-pill label: who is driving. Explicit argument wins, then the
         # environment; the daemon falls back per request when this is unset.
         self.agent = agent if agent is not None else (os.environ.get("AGENT_BRIDGE_AGENT_NAME") or None)
+        # Activity label for the tab title: what the agent is doing, in a
+        # few words ("Deploying the cache rule"). Set via set_doing().
+        self.doing = doing if doing is not None else (os.environ.get("AGENT_BRIDGE_DOING") or None)
         self.token = token
         self.session_token = session_token
         self._ref_texts = {}
@@ -217,6 +221,8 @@ class Edge:
             # Per-request stamp: most traffic never opens a session, so a label
             # that only rides session_start would almost never reach the pill.
             body["agent"] = self.agent
+        if self.doing:
+            body["doing"] = self.doing
         if self.session_token is not None:
             body["sessionToken"] = self.session_token
         payload = json.dumps(body).encode("utf-8")
@@ -299,7 +305,12 @@ class Edge:
         if data.get("code") == "unknown_session" and self.session_token and not self._reminting:
             self._reminting = True
             try:
-                mint = self._send_once("session_start", {"agent": self.agent} if self.agent else {})
+                mint_params = {}
+                if self.agent:
+                    mint_params["agent"] = self.agent
+                if self.doing:
+                    mint_params["doing"] = self.doing
+                mint = self._send_once("session_start", mint_params)
                 if mint.get("success") and mint.get("sessionToken"):
                     self.session_token = mint["sessionToken"]
                     if self._last_tab_id is not None:
@@ -838,6 +849,18 @@ class Edge:
         if tab_id is not None:
             p["tabId"] = tab_id
         return self.send("dialog", p)
+
+    def set_doing(self, doing: str | None, tab_id=None) -> dict:
+        """Set the activity label the tab title shows ("Deploying the cache
+        rule"); an empty string or None clears it. The daemon stores it on
+        the session and forwards it to the tab at once."""
+        params = {"doing": doing or ""}
+        if tab_id is not None:
+            params["tabId"] = tab_id
+        res = self.send("set_doing", params)
+        if res.get("success"):
+            self.doing = res.get("doing")
+        return res
 
     def batch(self, steps: list, tab_id=None) -> dict:
         p = {"steps": steps}

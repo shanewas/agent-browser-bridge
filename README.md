@@ -209,6 +209,12 @@ client's own name. The pill is how you take the tab back:
 - The toolbar icon mirrors the state (green dot working, amber bars paused), the popup shows
   the same status line, and the desktop layer pauses from the popup the same way.
 
+The tab itself says what the agent is doing: while the pill shows, the tab title reads
+"Agent — activity" ("Sigil — Deploying the cache rule"), with the activity set by the agent
+(`edge-bridge doing "..."`, MCP `edge_set_doing`) or falling back to the current verb. The
+page's own title is restored exactly when the work ends, and a popup toggle turns the
+decoration off.
+
 The pill never gets in the agent's way: snapshots skip it, screenshots hide it, and an action
 headed for the point under it fades it first.
 

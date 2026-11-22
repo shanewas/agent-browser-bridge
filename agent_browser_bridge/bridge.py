@@ -56,11 +56,14 @@ PAUSE_ALLOW_ACTIONS = frozenset({
     # Spotlight clear/status only report or remove the agent's own overlay;
     # they never read page content. Draws stay blocked while paused.
     "spotlight_clear", "spotlight_status",
+    # set_doing only renames the agent's own activity label; the title of a
+    # paused tab keeps reading Paused and the label lands on resume.
+    "set_doing",
 })
 USER_TAKEOVER_ERROR = ("The user took control of this tab. "
                        "Do not retry. Tell the user and wait for them to resume.")
 PAUSE_TTL_SEC = 1800.0
-FEATURES = ["banner", "takeover", "spotlight"]
+FEATURES = ["banner", "takeover", "spotlight", "tab_title"]
 
 
 def _takeover_result() -> dict:
@@ -77,14 +80,32 @@ def _tab_paused_result() -> dict:
 SPOTLIGHT_MIN_EXTENSION = "4.4.0"
 
 
-def _clean_agent_label(value) -> str | None:
-    """An agent display name from a client: short printable text, or None."""
+def _clean_label(value, cap: int) -> str | None:
+    """A display label from a client: short printable text, or None."""
     if not isinstance(value, str):
         return None
     cleaned = "".join(ch for ch in value if ch.isprintable()).strip()
     if not cleaned:
         return None
-    return cleaned[:40]
+    return cleaned[:cap]
+
+
+def _clean_agent_label(value) -> str | None:
+    """An agent display name from a client: short printable text, or None."""
+    return _clean_label(value, 40)
+
+
+def _clean_doing_label(value) -> str | None:
+    """An activity label from a client ("Deploying the cache rule"): what
+    the agent says it is doing, shown in the tab title next to its name."""
+    return _clean_label(value, 60)
+
+
+def _doing_label_rejected(cleaned: str) -> bool:
+    """A doing label never carries a link: the tab title is the user's own
+    chrome, and a URL there borrows its trust (the Spotlight label rule)."""
+    low = cleaned.lower()
+    return "://" in cleaned or "www." in low
 
 
 def _is_tab_scoped(action: str) -> bool:
@@ -481,14 +502,14 @@ class BridgeState:
                                             "error": "Edge extension disconnected while the command was in flight."}
                     event.set()
 
-    def session_create_locked(self, name: str | None = None, agent: str | None = None) -> str:
+    def session_create_locked(self, name: str | None = None, agent: str | None = None, doing: str | None = None) -> str:
         token = str(uuid.uuid4())
         if not name:
             name = "s-" + token[:8]
         now = time.time()
         self.sessions[token] = {"tabId": None, "tabClosed": False, "warned": set(),
                                 "name": name, "created": now, "lastActivity": now,
-                                "agent": agent}
+                                "agent": agent, "doing": doing}
         if agent:
             self.last_agent = agent
         return token
@@ -1034,6 +1055,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
             timeout = config.call_timeout(req.get("timeout", 20))
             req_agent = _clean_agent_label(req.get("agent"))
+            req_doing = _clean_doing_label(req.get("doing"))
             session_token = req.get("sessionToken")
             if session_token is not None and not isinstance(session_token, str):
                 self._respond(200, {"success": False, "code": "unknown_session",
@@ -1051,11 +1073,20 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._respond(200, {"success": False, "code": "bad_name",
                                         "error": "Invalid agent label: use 1-40 printable characters."})
                     return
+                doing = _clean_doing_label(params.get("doing")) or req_doing
+                if params.get("doing") and doing is None:
+                    self._respond(200, {"success": False, "code": "bad_doing",
+                                        "error": "Invalid doing label: use 1-60 printable characters."})
+                    return
+                if doing and _doing_label_rejected(doing):
+                    self._respond(200, {"success": False, "code": "label_rejected",
+                                        "error": "A doing label is plain text; links are not allowed."})
+                    return
                 with state.lock:
-                    token = state.session_create_locked(name, agent=agent)
+                    token = state.session_create_locked(name, agent=agent, doing=doing)
                     sess_name = state.sessions[token]["name"]
                 self._respond(200, {"success": True, "sessionToken": token, "name": sess_name,
-                                    "agent": agent})
+                                    "agent": agent, "doing": doing})
                 return
 
             if action in ("session_status", "session_stop"):
@@ -1085,7 +1116,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     now = time.time()
                     self._respond(200, {"success": True, "name": sess.get("name", "s-?"),
                                         "tabId": sess["tabId"], "tabClosed": sess["tabClosed"],
-                                        "agent": sess.get("agent"),
+                                        "agent": sess.get("agent"), "doing": sess.get("doing"),
                                         "paused": session_token in state.paused_sessions or (
                                             sess.get("tabId") is not None
                                             and sess.get("tabId") in state.paused_tabs),
@@ -1114,6 +1145,49 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._respond(200, {"success": False, "code": "unknown_session",
                                         "error": "Unknown or expired sessionToken. Mint one with session_start."})
                     return
+
+            if action == "set_doing":
+                # The activity label: stored on the session (it rides every
+                # later frame, like the agent label) and forwarded at once
+                # to the tab it describes, so a showing title updates live.
+                raw_doing = params.get("doing")
+                if raw_doing is not None and not isinstance(raw_doing, str):
+                    self._respond(200, {"success": False, "code": "bad_params",
+                                        "error": "set_doing needs doing as a string (an empty string clears it)."})
+                    return
+                cleaned_doing = _clean_doing_label(raw_doing)
+                if raw_doing and cleaned_doing is None:
+                    self._respond(200, {"success": False, "code": "bad_doing",
+                                        "error": "Invalid doing label: use 1-60 printable characters."})
+                    return
+                if cleaned_doing and _doing_label_rejected(cleaned_doing):
+                    self._respond(200, {"success": False, "code": "label_rejected",
+                                        "error": "A doing label is plain text; links are not allowed."})
+                    return
+                tab_hint = params.get("tabId")
+                target_tab = tab_hint if isinstance(tab_hint, int) and not isinstance(tab_hint, bool) \
+                    else (session.get("tabId") if session else None)
+                if target_tab is not None:
+                    doing_agent = (_clean_agent_label(session.get("agent")) if session else None) or req_agent
+                    res, _sc = self._dispatch_once(state, "set_doing", {"tabId": int(target_tab)},
+                                                   time.time() + timeout, True,
+                                                   agent=doing_agent, doing=cleaned_doing)
+                    if not (isinstance(res, dict) and res.get("success")):
+                        # The label did not land: the session keeps its old
+                        # one, so daemon, worker and client stay in step.
+                        self._respond(200, res)
+                        return
+                    res = {**res, "doing": cleaned_doing}
+                if session_token is not None:
+                    with state.lock:
+                        sess_now = state.sessions.get(session_token)
+                        if sess_now is not None:
+                            sess_now["doing"] = cleaned_doing
+                if target_tab is not None:
+                    self._respond(200, res)
+                    return
+                self._respond(200, {"success": True, "doing": cleaned_doing})
+                return
 
             tab_scoped = _is_tab_scoped(action)
             if session is not None and tab_scoped and action not in PIN_MUTATING_ACTIONS:
@@ -1146,7 +1220,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                         state.session_dispatch_begin_locked(session_token)
                 try:
                     self._exec_batch(state, session_token, session, params, timeout,
-                                     agent=_clean_agent_label(session.get("agent")) if session else req_agent)
+                                     agent=_clean_agent_label(session.get("agent")) if session else req_agent,
+                                     doing=(session.get("doing") if session else None) or req_doing)
                 finally:
                     if session_token is not None:
                         with state.lock:
@@ -1156,6 +1231,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             _strip_session_token(params)
             forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped, action)
             agent_label = (_clean_agent_label(session.get("agent")) if session else None) or req_agent
+            doing_label = (session.get("doing") if session else None) or req_doing
             if agent_label:
                 with state.lock:
                     state.last_agent = agent_label
@@ -1167,7 +1243,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(200, blocked)
                 return
             res, status_code = self._dispatch_guarded(state, action, params, time.time() + timeout,
-                                                      tab_scoped, forward_tab, session_token=session_token, agent=agent_label)
+                                                      tab_scoped, forward_tab, session_token=session_token, agent=agent_label, doing=doing_label)
             self._after_result(state, session_token, session, action, params, forward_tab, res)
             self._respond(status_code, res)
             return
@@ -1204,7 +1280,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         return None
 
     def _dispatch_guarded(self, state, action, params, deadline, tab_scoped, forward_tab,
-                          session_token=None, agent=None):
+                          session_token=None, agent=None, doing=None):
         # Narrowest activity hook: every real command for a session, single
         # or batch step, funnels through here, while session_start/status/
         # stop/list/prune and /status never do. Touching at dispatch also
@@ -1231,7 +1307,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                                                          tab_ids=_param_tab_ids(params) if action in ("group_move", "group_ungroup") else None)
                 if blocked is not None:
                     return (blocked, 200)
-                return self._dispatch_once(state, action, params, deadline, tab_scoped, agent=agent)
+                return self._dispatch_once(state, action, params, deadline, tab_scoped, agent=agent, doing=doing)
             finally:
                 if tab_lock is not None:
                     tab_lock.release()
@@ -1255,7 +1331,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         finally:
             state.desktop_lock.release()
 
-    def _dispatch_once(self, state, action, params, deadline, tab_scoped, agent=None):
+    def _dispatch_once(self, state, action, params, deadline, tab_scoped, agent=None, doing=None):
         if action.startswith("desktop_"):
             return BridgeRequestHandler._dispatch_desktop(state, action, params, deadline)
         fwd_params = dict(params)
@@ -1266,6 +1342,12 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         cmd_payload = {"id": cmd_id, "action": action, "params": fwd_params}
         if agent:
             cmd_payload["agent"] = agent
+        if doing:
+            cmd_payload["doing"] = doing
+        elif action == "set_doing":
+            # An explicit clear: the worker must see the key with a null
+            # value, or it cannot tell "cleared" from "not mentioned".
+            cmd_payload["doing"] = None
         with state.lock:
             live = bool(state.ext and not state.ext.closed and state.ext_accepted)
             if live:
@@ -1349,7 +1431,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                         logger.warning("Session tab %s closed; session is now sticky tab_closed", forward_tab)
 
 
-    def _exec_batch(self, state, session_token, session, params, timeout, agent=None):
+    def _exec_batch(self, state, session_token, session, params, timeout, agent=None, doing=None):
         steps = params.get("steps") or []
         if not isinstance(steps, list):
             self._respond(400, {"success": False, "code": "bad_body", "error": "steps must be a list"})
@@ -1412,10 +1494,46 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(200, {"success": False, "code": "bad_params", "error": err,
                                     "stoppedAt": s_action, "results": results})
                 return
+            step_doing = doing
+            is_doing_step = s_action == "set_doing"
+            if is_doing_step:
+                # A batch step gets the same treatment as the top-level
+                # action: validate the label, carry it on this step's own
+                # frame, and store it on the session once the step lands.
+                raw_step = s_params.get("doing")
+                if raw_step is not None and not isinstance(raw_step, str):
+                    err = "set_doing needs doing as a string (an empty string clears it)"
+                    results.append({"success": False, "code": "bad_params", "error": err})
+                    self._respond(200, {"success": False, "code": "bad_params", "error": err,
+                                        "stoppedAt": s_action, "results": results})
+                    return
+                cleaned_step = _clean_doing_label(raw_step)
+                if raw_step and cleaned_step is None:
+                    err = "Invalid doing label: use 1-60 printable characters."
+                    results.append({"success": False, "code": "bad_doing", "error": err})
+                    self._respond(200, {"success": False, "code": "bad_doing", "error": err,
+                                        "stoppedAt": s_action, "results": results})
+                    return
+                if cleaned_step and _doing_label_rejected(cleaned_step):
+                    err = "A doing label is plain text; links are not allowed."
+                    results.append({"success": False, "code": "label_rejected", "error": err})
+                    self._respond(200, {"success": False, "code": "label_rejected", "error": err,
+                                        "stoppedAt": s_action, "results": results})
+                    return
+                step_doing = cleaned_step
             forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped, s_action)
             res, _ = self._dispatch_guarded(state, s_action, s_params, deadline, s_tab_scoped, forward_tab,
-                                            session_token=session_token, agent=agent)
+                                            session_token=session_token, agent=agent, doing=step_doing)
             self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
+            if is_doing_step:
+                if res and res.get("success"):
+                    # Later steps in this batch carry the new label too.
+                    doing = step_doing
+                    if session_token is not None:
+                        with state.lock:
+                            sess_now = state.sessions.get(session_token)
+                            if sess_now is not None:
+                                sess_now["doing"] = step_doing
             results.append(res)
             if res and res.get("success") is False and step.get("stopOnError", True) is not False:
                 self._respond(200, {"success": False, "code": res.get("code") or "step_failed",
