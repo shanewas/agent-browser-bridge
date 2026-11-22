@@ -315,7 +315,19 @@ function persistPaused() {
 let tabTitleEnabled = true;
 chrome.storage.local.get("tabTitleEnabled").then((d) => { tabTitleEnabled = !(d && d.tabTitleEnabled === false); }).catch(() => {});
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.tabTitleEnabled) tabTitleEnabled = changes.tabTitleEnabled.newValue !== false;
+  if (area !== "local" || !changes.tabTitleEnabled) return;
+  tabTitleEnabled = changes.tabTitleEnabled.newValue !== false;
+  // A flip reaches tabs that are already showing at once: off restores
+  // their titles now instead of at the next presence push, which a
+  // single long-running command may never produce.
+  try {
+    chrome.tabs.query({}).then((tabs) => {
+      for (const t of tabs || []) {
+        if (pausedTabs.has(t.id)) bannerSend(t.id, { state: "paused", agent: (workingTabs.get(t.id) || {}).agent, tabTitle: tabTitleEnabled });
+        else if (workingTabs.has(t.id)) pushWorking(t.id);
+      }
+    }).catch(() => {});
+  } catch (e) {}
 });
 
 async function bannerEnabled() {
@@ -365,6 +377,18 @@ function syncSpotlightFrame(tabId) {
 
 function bannerActivity(tabId, action, phase, agent, doing) {
   if (typeof tabId !== "number") return;
+  if (action === "set_doing") {
+    // A label change is not work: it touches no presence counters in
+    // either phase, so it cannot inflate or retire another command's
+    // presence, and on a tab with no live presence it leaves no entry
+    // behind - the label rides the next real command's frame instead.
+    if (phase !== "start") return;
+    const w = workingTabs.get(tabId);
+    if (!w) return;
+    if (doing !== undefined) w.doing = doing === null ? undefined : doing;
+    if (w.shown && !pausedTabs.has(tabId)) pushWorking(tabId);
+    return;
+  }
   let w = workingTabs.get(tabId);
   if (phase === "start") {
     if (!w) {
@@ -373,12 +397,6 @@ function bannerActivity(tabId, action, phase, agent, doing) {
     }
     if (agent) w.agent = agent;
     if (doing !== undefined) w.doing = doing === null ? undefined : doing;
-    if (action === "set_doing") {
-      // A label change is not work: it never starts presence, but a tab
-      // already showing gets the new text at once.
-      if (w.shown && !pausedTabs.has(tabId)) pushWorking(tabId);
-      return;
-    }
     w.verb = VERB_FOR[action] || w.verb;
     w.inflight += 1;
     w.lastActivity = Date.now();

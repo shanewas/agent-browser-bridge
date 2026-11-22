@@ -850,11 +850,14 @@ class Edge:
             p["tabId"] = tab_id
         return self.send("dialog", p)
 
-    def set_doing(self, doing: str | None) -> dict:
+    def set_doing(self, doing: str | None, tab_id=None) -> dict:
         """Set the activity label the tab title shows ("Deploying the cache
         rule"); an empty string or None clears it. The daemon stores it on
         the session and forwards it to the tab at once."""
-        res = self.send("set_doing", {"doing": doing or ""})
+        params = {"doing": doing or ""}
+        if tab_id is not None:
+            params["tabId"] = tab_id
+        res = self.send("set_doing", params)
         if res.get("success"):
             self.doing = res.get("doing")
         return res

@@ -1040,6 +1040,9 @@ def main(argv=None) -> int:
     _add_desktop_commands(add_cmd("desktop", help="Drive the Windows desktop: screenshot, mouse, keyboard"), common)
 
     args = parser.parse_args(argv)
+    if getattr(args, "cmd", None) == "doing" and getattr(args, "text", None) is None \
+            and not getattr(args, "clear", False):
+        parser.error("doing needs the activity text, or --clear to remove it")
     if not args.cmd:
         parser.print_help()
         return 3

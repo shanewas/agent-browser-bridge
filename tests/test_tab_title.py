@@ -95,3 +95,44 @@ def test_set_doing_rejects_links_and_bad_types(daemon, fake_ext):
     res = _exec_raw(daemon, {"action": "set_doing",
                              "params": {"doing": "Reading mail"}})
     assert res["success"] and res["doing"] == "Reading mail"
+
+
+def test_batch_set_doing_step_updates_session(daemon, fake_ext):
+    fake_ext.handler = _ok_handler
+    res = _exec_raw(daemon, {"action": "session_start",
+                             "params": {"name": "t3", "agent": "Sigil"}})
+    stok = res["sessionToken"]
+    res = _exec_raw(daemon, {"action": "get_active_tab", "sessionToken": stok})
+    assert res["success"], res
+    fake_ext.received.clear()
+    res = _exec_raw(daemon, {"action": "batch", "sessionToken": stok,
+                             "params": {"steps": [
+                                 {"action": "set_doing", "doing": "Batch label"},
+                                 {"action": "ping"},
+                             ]}})
+    assert res["success"], res
+    frames = _frames_for(fake_ext, "set_doing")
+    assert frames and frames[-1].get("doing") == "Batch label", frames
+    frames = _frames_for(fake_ext, "ping")
+    assert frames and frames[-1].get("doing") == "Batch label", frames
+    res = _exec_raw(daemon, {"action": "session_status", "sessionToken": stok})
+    assert res["doing"] == "Batch label"
+
+
+def test_set_doing_forward_failure_keeps_session(daemon, fake_ext):
+    def failing(action, params):
+        if action == "set_doing":
+            return {"success": False, "code": "boom", "error": "nope"}
+        return _ok_handler(action, params)
+    fake_ext.handler = failing
+    res = _exec_raw(daemon, {"action": "session_start",
+                             "params": {"name": "t4", "agent": "Sigil",
+                                        "doing": "Original label"}})
+    stok = res["sessionToken"]
+    res = _exec_raw(daemon, {"action": "get_active_tab", "sessionToken": stok})
+    assert res["success"], res
+    res = _exec_raw(daemon, {"action": "set_doing", "sessionToken": stok,
+                             "params": {"doing": "New label"}})
+    assert res["success"] is False, res
+    res = _exec_raw(daemon, {"action": "session_status", "sessionToken": stok})
+    assert res["doing"] == "Original label"

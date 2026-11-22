@@ -1813,10 +1813,10 @@ export async function executeTracked(cmd) {
 }
 
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
-const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab", "spotlight_clear", "spotlight_status"]);
+const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab", "spotlight_clear", "spotlight_status", "set_doing"]);
 const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete", "group_list", "group_move", "group_ungroup"]);
 // These never inject into the page (wait polls until a page it can read arrives), so any URL is fine.
-const TAB_LEVEL = new Set(["nav", "back", "forward", "reload", "tab", "get_active_tab", "wait", "wait_for", "dialog", "console"]);
+const TAB_LEVEL = new Set(["nav", "back", "forward", "reload", "tab", "get_active_tab", "wait", "wait_for", "dialog", "console", "set_doing"]);
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};

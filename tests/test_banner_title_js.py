@@ -129,6 +129,17 @@ out.plain_title = document.title;
 msgListener({ type: "BANNER", state: "hidden" });
 out.final_title = document.title;
 
+// 8. Restore race: the page retitles and the hide lands before the
+// observer callback runs - the page's newer title must stand.
+msgListener({ type: "BANNER", state: "working", agent: "Sigil", doing: "Race test", tabTitle: true });
+out.race_decorated = document.title;
+document.title = "Fresh Title";
+msgListener({ type: "BANNER", state: "hidden" });
+out.race_after_hide = document.title;
+const stale = titleObserver();
+if (stale) stale.cb();
+out.race_after_stale_cb = document.title;
+
 console.log(JSON.stringify(out));
 process.exit(0);
 """
@@ -175,3 +186,9 @@ def test_toggle_off_never_decorates(banner):
 def test_plain_working_fallback(banner):
     assert banner["plain_title"] == "Sigil — Working"
     assert banner["final_title"] == "Inbox (2)"
+
+
+def test_restore_race_keeps_the_pages_newer_title(banner):
+    assert banner["race_decorated"] == "Sigil — Race test"
+    assert banner["race_after_hide"] == "Fresh Title"
+    assert banner["race_after_stale_cb"] == "Fresh Title"

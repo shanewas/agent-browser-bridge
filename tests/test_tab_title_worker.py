@@ -34,6 +34,7 @@ const area = (map) => ({
 });
 const listener = { addListener() {}, removeListener() {} };
 const storageChangedListeners = [];
+const runtimeListeners = [];
 const bannerSent = [];
 globalThis.chrome = {
   storage: {
@@ -50,7 +51,7 @@ globalThis.chrome = {
   scripting: { executeScript: async () => [{ result: undefined }] },
   runtime: {
     getManifest: () => ({ version: "4.4.0" }), id: "testext",
-    lastError: undefined, onMessage: listener, onConnect: listener, onInstalled: listener,
+    lastError: undefined, onMessage: { addListener: (fn) => runtimeListeners.push(fn) }, onConnect: listener, onInstalled: listener,
     sendMessage: async () => ({}), getURL: (p) => p,
   },
   debugger: {
@@ -126,6 +127,17 @@ msgs = await drive({ id: "4", action: "set_doing", params: { tabId: 7 }, doing: 
 working = msgs.filter((m) => m.msg.state === "working");
 out.toggle_off_tab_title = working.length ? working[working.length - 1].msg.tabTitle : null;
 
+// set_doing on a tab with no live presence: no banner, no entry left
+// behind - a later BANNER_QUERY from that tab must not invent a pill.
+msgs = await drive({ id: "5", action: "set_doing", params: { tabId: 9 }, doing: "Ghost work" });
+out.idle_set_doing_banner_count = msgs.length;
+bannerSent.length = 0;
+for (const fn of runtimeListeners) {
+  try { fn({ type: "BANNER_QUERY" }, { tab: { id: 9 } }, () => {}); } catch (e) {}
+}
+await sleep(150);
+out.idle_query_banner_count = bannerSent.filter((m) => m.tabId === 9).length;
+
 console.log(JSON.stringify(out));
 process.exit(0);
 """
@@ -162,3 +174,8 @@ def test_set_doing_null_clears(worker):
 
 def test_title_toggle_off_rides_presence(worker):
     assert worker["toggle_off_tab_title"] is False
+
+
+def test_set_doing_on_idle_tab_leaves_no_phantom(worker):
+    assert worker["idle_set_doing_banner_count"] == 0
+    assert worker["idle_query_banner_count"] == 0

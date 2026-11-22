@@ -292,10 +292,14 @@
 
   function restoreTitle() {
     if (!titleSaved) return;
-    var original = titleSaved.original;
+    var saved = titleSaved;
     titleSaved = null;
     if (titleObserver) { try { titleObserver.disconnect(); } catch (e) {} titleObserver = null; }
-    writeTitle(original);
+    // Write only when the title is still ours. If the page already
+    // replaced it - its observer callback may still be queued behind
+    // this hide - the page's newer title stands; writing the saved
+    // original over it would clobber the page's own retitle.
+    if (document.title === saved.ours) writeTitle(saved.original);
   }
 
   function armTitleObserver() {

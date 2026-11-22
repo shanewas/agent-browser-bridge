@@ -901,7 +901,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
         elif tool_name == "edge_spotlight_status":
             res = edge.spotlight_status(tab_id=args.get("tabId"))
         elif tool_name == "edge_set_doing":
-            res = edge.set_doing(args.get("doing"))
+            res = edge.set_doing(args.get("doing"), tab_id=args.get("tabId"))
         elif tool_name == "edge_group_list":
             res = edge.group_list(window_id=args.get("windowId"))
         elif tool_name == "edge_group_move":
