@@ -18,6 +18,8 @@
   var state = "hidden"; // hidden | working | paused
   var agentName = "Agent";
   var verb = null;
+  var doing = null;
+  var titleEnabled = true;
   var shownAt = 0;
   var minUntil = 0;
   var hideTimer = null;
@@ -204,6 +206,8 @@
 
   function show(nextState, msg) {
     if (msg && msg.agent) agentName = msg.agent;
+    if (msg && Object.prototype.hasOwnProperty.call(msg, "doing")) doing = msg.doing || null;
+    if (msg && typeof msg.tabTitle === "boolean") titleEnabled = msg.tabTitle;
     if (nextState === "working") clearLastpoint();
     verb = (msg && msg.verb) || null;
     var wasHidden = state === "hidden";
@@ -214,6 +218,7 @@
     // for as long as the worker keeps reporting state.
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     render();
+    syncTitle();
     if (state === "working" && msg && msg.teachTooltip) {
       showTip();
       setTimeout(function () { tip.classList.remove("on"); }, 2500);
@@ -229,6 +234,7 @@
       return;
     }
     state = "hidden";
+    restoreTitle();
     minUntil = 0;
     clearLastpoint();
     wrap.classList.remove("on");
@@ -242,6 +248,66 @@
   }
   function hideTipSoon() {
     setTimeout(function () { tip.classList.remove("on"); }, 60);
+  }
+
+  // ---- Tab title ---------------------------------------------------------------
+  // While the pill shows, the tab title says what the agent is doing
+  // ("Sigil \u2014 Deploying the cache rule"), so the work is visible from
+  // the tab strip without switching to the tab. The page's own title is
+  // tracked underneath: any title the page sets for itself becomes the
+  // one restored when the decoration ends.
+  var titleSaved = null; // {original, ours} while decorated
+  var titleObserver = null;
+  var titleWriting = false;
+
+  function cleanDoing(t) {
+    t = String(t == null ? "" : t).replace(/[\u0000-\u001f\u007f]/g, "").trim();
+    return t.slice(0, 60);
+  }
+
+  function composedTitle() {
+    if (state === "paused") return agentName + " \u2014 Paused";
+    return agentName + " \u2014 " + (cleanDoing(doing) || verb || "Working");
+  }
+
+  function writeTitle(t) {
+    if (document.title === t) return;
+    titleWriting = true;
+    try { document.title = t; } catch (e) {}
+    titleWriting = false;
+  }
+
+  function syncTitle() {
+    if (!titleEnabled || state === "hidden") { restoreTitle(); return; }
+    var t = composedTitle();
+    if (!titleSaved) {
+      titleSaved = { original: document.title, ours: t };
+      armTitleObserver();
+    }
+    titleSaved.ours = t;
+    writeTitle(t);
+  }
+
+  function restoreTitle() {
+    if (!titleSaved) return;
+    var original = titleSaved.original;
+    titleSaved = null;
+    if (titleObserver) { try { titleObserver.disconnect(); } catch (e) {} titleObserver = null; }
+    writeTitle(original);
+  }
+
+  function armTitleObserver() {
+    if (titleObserver || typeof MutationObserver === "undefined" || !document.head) return;
+    titleObserver = new MutationObserver(function () {
+      if (titleWriting || !titleSaved) return;
+      var cur = document.title;
+      if (cur === titleSaved.ours) return;
+      // The page set its own title under ours: it becomes the restore
+      // target, and ours goes back on top.
+      titleSaved.original = cur;
+      writeTitle(titleSaved.ours);
+    });
+    try { titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true }); } catch (e) {}
   }
 
   // ---- User actions --------------------------------------------------------------

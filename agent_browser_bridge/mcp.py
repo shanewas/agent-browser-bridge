@@ -418,6 +418,18 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "edge_set_doing",
+        "description": "Set the activity label the tab title shows while you work (\"Deploying the cache rule\"), so the user sees what you are doing from the tab strip. Plain text, max 60 chars, no links. Set it when a stretch of work starts and change it as the work moves; an empty string clears it. The label is stored on your session and rides along until you change it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "doing": {"type": "string", "description": "What you are doing, in a few words. Empty string clears the label."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+            "required": ["doing"],
+        },
+    },
+    {
         "name": "edge_spotlight_clear",
         "description": "Clear the Spotlight highlight on the tab. Idempotent; reports was_showing.",
         "inputSchema": {
@@ -888,6 +900,8 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             res = edge.spotlight_clear(tab_id=args.get("tabId"))
         elif tool_name == "edge_spotlight_status":
             res = edge.spotlight_status(tab_id=args.get("tabId"))
+        elif tool_name == "edge_set_doing":
+            res = edge.set_doing(args.get("doing"))
         elif tool_name == "edge_group_list":
             res = edge.group_list(window_id=args.get("windowId"))
         elif tool_name == "edge_group_move":
@@ -958,7 +972,7 @@ def serve(stdin=None, stdout=None) -> None:
     out_stream = stdout or sys.stdout.buffer
 
     edge = Edge(pin=True, auto_start=True)
-    mint = edge.send("session_start", {"name": "mcp", **({"agent": edge.agent} if getattr(edge, "agent", None) else {})})
+    mint = edge.send("session_start", {"name": "mcp", **({"agent": edge.agent} if getattr(edge, "agent", None) else {}), **({"doing": edge.doing} if getattr(edge, "doing", None) else {})})
     if mint.get("success") and mint.get("sessionToken"):
         edge.session_token = mint["sessionToken"]
     else:

@@ -857,6 +857,11 @@ export async function execute(cmd) {
       case "ping":
         return { success: true, message: "pong", version: chrome.runtime.getManifest().version, fileAccess: await checkFileAccess() };
 
+      case "set_doing":
+        // Worker-native: the activity hook already stored the label from
+        // the frame; there is nothing to do in the page.
+        return { success: true };
+
       case "reload_extension":
         setTimeout(() => { chrome.runtime.reload(); }, 100);
         return { success: true, message: "Extension reloading..." };
@@ -1794,7 +1799,11 @@ export async function executeTracked(cmd) {
   const p = cmd.params || {};
   const tabId = typeof p.tabId === "number" ? p.tabId : undefined;
   if (activityHook && tabId !== undefined) {
-    activityHook(tabId, cmd.action, "start", typeof cmd.agent === "string" ? cmd.agent : undefined);
+    // doing rides the frame like agent; the key's presence with a null
+    // value is an explicit clear (set_doing), absence means no change.
+    const doingArg = Object.prototype.hasOwnProperty.call(cmd, "doing")
+      ? (typeof cmd.doing === "string" ? cmd.doing : null) : undefined;
+    activityHook(tabId, cmd.action, "start", typeof cmd.agent === "string" ? cmd.agent : undefined, doingArg);
   }
   try {
     return await executeImpl(cmd);

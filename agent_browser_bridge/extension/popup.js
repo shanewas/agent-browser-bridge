@@ -133,6 +133,7 @@ const bannerEls = {
   forceRow: document.getElementById("forceClearRow"),
   forceBtn: document.getElementById("forceClearBtn"),
   toggle: document.getElementById("bannerToggle"),
+  titleToggle: document.getElementById("tabTitleToggle"),
 };
 let bannerState = { paused: false, working: false, agent: null, tabId: null, pausedCount: 0, desktopPaused: false };
 
@@ -172,6 +173,14 @@ if (bannerEls.toggle) {
   }).catch(() => {});
   bannerEls.toggle.addEventListener("change", () => {
     chrome.storage.local.set({ bannerEnabled: bannerEls.toggle.checked }).catch(() => {});
+  });
+}
+if (bannerEls.titleToggle) {
+  chrome.storage.local.get("tabTitleEnabled").then((d) => {
+    bannerEls.titleToggle.checked = !(d && d.tabTitleEnabled === false);
+  }).catch(() => {});
+  bannerEls.titleToggle.addEventListener("change", () => {
+    chrome.storage.local.set({ tabTitleEnabled: bannerEls.titleToggle.checked }).catch(() => {});
   });
 }
 
