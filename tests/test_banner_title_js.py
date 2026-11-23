@@ -152,7 +152,7 @@ def banner():
     try:
         proc = subprocess.run(
             ["node", str(harness_file), str(EXT / "banner.js")],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
     finally:
         harness_file.unlink(missing_ok=True)

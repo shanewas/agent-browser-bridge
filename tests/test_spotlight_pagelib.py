@@ -158,10 +158,10 @@ console.log(JSON.stringify(out));
 
 @pytest.fixture(scope="module")
 def lib():
-    harness = HARNESS.replace("__LIB__", str(EXT / "page-lib.js"))
+    harness = HARNESS.replace("__LIB__", (EXT / "page-lib.js").as_posix())
     proc = subprocess.run(
         ["node", "--input-type=module", "-e", harness],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)

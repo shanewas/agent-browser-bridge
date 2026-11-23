@@ -228,7 +228,7 @@ def run_scenario(tmp_path, scenario):
     harness.write_text(HARNESS, encoding="utf-8")
     proc = subprocess.run(
         ["node", str(harness), page_copy.as_uri(), scenario],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 

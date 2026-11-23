@@ -146,7 +146,7 @@ def _run(tmp_path, mode):
     harness.write_text(HARNESS, encoding="utf-8")
     proc = subprocess.run(
         ["node", str(harness), (EXT / "actions.js").as_uri(), mode],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
