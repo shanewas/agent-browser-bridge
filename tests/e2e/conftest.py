@@ -119,6 +119,21 @@ def staged_extension(tmp_path_factory, e2e_daemon):
     for name in ("background.js", "popup.js"):
         f = dst / name
         f.write_text(f.read_text(encoding="utf-8").replace("18999", str(e2e_daemon.port)), encoding="utf-8")
+    # The tab-title decoration rewrites document.title while the agent works,
+    # so any e2e assertion on a page title races it. The staged copy forces
+    # the decoration off (the pill still shows); the feature's own behaviour
+    # is covered by the hermetic banner and worker harnesses. Both the
+    # declaration and the storage read are patched: the read recomputes the
+    # value from storage, and an empty profile would flip a patched
+    # declaration back on. Fail loudly if either line moves, instead of
+    # silently racing titles again.
+    bg = dst / "background.js"
+    src = bg.read_text(encoding="utf-8")
+    decl = "let tabTitleEnabled = true;"
+    read = "tabTitleEnabled = !(d && d.tabTitleEnabled === false);"
+    assert decl in src and read in src, "tabTitleEnabled lines not found in background.js"
+    src = src.replace(decl, "let tabTitleEnabled = false;").replace(read, "tabTitleEnabled = false;")
+    bg.write_text(src, encoding="utf-8")
     return dst
 
 
